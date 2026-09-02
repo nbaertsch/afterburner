@@ -13,6 +13,10 @@ Uninstalling preserves configuration and recorded data. Black Box stores bounded
 under `AFTERBURNER_HOME\extension-data\black-box` and exposes `/black-box`, `/black-box-tail`,
 `/black-box-tail-stop`, `/black-box-export`, `/black-box-doctor`, and the `afterburner-black-box` canvas.
 
+Black Box is silent by default: it never writes automatic event or anomaly messages into the user
+timeline. Timeline output occurs only after the user explicitly runs `/black-box`, `/black-box-tail`,
+`/black-box-doctor`, or `/black-box-export`.
+
 Black Box never persists prompt, tool argument, tool result, assistant/system message, reasoning,
 working-directory, or task-summary bodies. Native `events.jsonl` entries are represented by hashed
 correlation references and durable byte ranges. Export bundles revalidate every record against the

@@ -154,19 +154,10 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
         ],
         canvases: [canvas]
     });
-    const unsubscribeSignals = typeof service.subscribeSignals === "function"
-        ? service.subscribeSignals(async record => {
-            if (record.kind === "anomaly") await session.log(`Black Box anomaly: ${tailLine(record)}`);
-            else if (record.kind === "milestone") await session.log(`Black Box milestone: ${tailLine(record)}`);
-        })
-        : () => {};
     return {
         session,
         canvas,
-        stopLiveTail() {
-            stopLiveTailTimer();
-            unsubscribeSignals();
-        }
+        stopLiveTail: stopLiveTailTimer
     };
 }
 

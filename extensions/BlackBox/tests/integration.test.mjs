@@ -48,6 +48,7 @@ test("session registration exposes all commands and the Black Box canvas", async
         "black-box", "black-box-tail", "black-box-tail-stop", "black-box-export", "black-box-doctor"
     ]);
     assert.deepEqual(canvasDefinition.actions.map(action => action.name), ["snapshot", "tail", "export", "doctor"]);
+    assert.equal(logs.length, 0, "Black Box must not write timeline entries before explicit user action.");
     await registration.commands[0].handler();
     assert.match(logs[0], /2 segment/);
 });
