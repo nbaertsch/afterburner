@@ -86,6 +86,9 @@ foreach ($task in @($result.externalTasks)) {
     if ($task.nativeId.Length -gt 63 -or $task.nativeId -notmatch '^ext_[A-Za-z0-9_-]+$') {
         throw "External task provider emitted an invalid native task ID."
     }
+    if (@($result.externalTasks).Count -gt 0 -and -not $result.externalTaskRead) {
+        throw "External task read routing did not return a result."
+    }
 }
 
 $expectedContexts = @("256K", "512K", "768K", "1.05M")

@@ -93,8 +93,23 @@ async function externalTaskSnapshot() {
                 remoteId: task.id
             });
         }
+
     }
     return projected;
+}
+
+async function invokeExternalTask(nativeId, operation, value) {
+    const task = (await externalTaskSnapshot()).find((candidate) => candidate.nativeId === nativeId);
+    if (!task) throw new Error(`Unknown external task '${nativeId}'.`);
+    const provider = externalTaskProviders.get(task.providerId);
+    if (operation === "read") return provider.read(task.remoteId);
+    if (operation === "write") {
+        if (typeof provider.write !== "function")
+            throw new Error(`External task provider '${task.providerId}' does not support write.`);
+        return provider.write(task.remoteId, value);
+    }
+    if (operation === "cancel") return provider.cancel(task.remoteId);
+    throw new Error(`Unsupported external task operation '${operation}'.`);
 }
 
 function adapterFor(selectionId) {
@@ -422,6 +437,7 @@ async function loadRuntimeExtensions() {
                 registerAppSourceTransform,
                 registerExternalTaskProvider,
                 externalTaskSnapshot,
+                invokeExternalTask,
                 getContextCapabilityOverride: (selectionId) =>
                     contextCapabilityOverride(null, selectionId)
             });
@@ -504,7 +520,10 @@ if (process.env.COPILOT_RUNTIME_EXTENSION_SELF_TEST === "1") {
         contextCycles,
         capabilityOverrides,
         nativeContextNavigation,
-        externalTasks: await externalTaskSnapshot()
+        externalTasks: await externalTaskSnapshot(),
+        externalTaskRead: externalTaskProviders.size > 0
+            ? await invokeExternalTask((await externalTaskSnapshot())[0].nativeId, "read")
+            : null
     }, null, 2)}\n`);
     process.exit(0);
 }globalThis.__copilotRuntimeAddon__ = { addon: runtime, processStateInitialized: false };
