@@ -54,15 +54,31 @@ created.
 exposed by `runtime.node`. Transforms receive the original bundled application source and run before
 the application is imported. They should fail closed when expected source anchors are absent.
 
-## Install
+## Install and upgrade from source
 
-Install the standalone command once:
+Clone or update the source checkout, bootstrap the standalone command, and let Afterburner install
+its built-in components:
 
 ```powershell
+git clone git@github.com:nbaertsch/afterburner.git
+Set-Location .\afterburner
 .\scripts\install-cli.ps1
 afterburn install
 afterburn
 ```
+
+For an existing checkout:
+
+```powershell
+git pull --ff-only
+.\scripts\install-cli.ps1
+afterburn install
+```
+
+`install-cli.ps1` refreshes the application files and PATH shim. `afterburn install` is the single
+Afterburner-specific package setup command: it installs and enables the built-in BYOModels extension
+without requiring a direct `copilot plugin install`. Existing files under `~\.afterburner\config`
+are preserved.
 
 Normal `copilot` invocations remain untouched and load no Afterburner runtime code. Use `afterburn`
 whenever you explicitly want an Afterburner-managed Copilot session. The launcher prepares the
@@ -110,28 +126,31 @@ under `~\.afterburner\extension-data` are never copied from or deleted with pack
 Installers may create missing example configuration, but never overwrite an existing user-owned
 file during installation or upgrade.
 
+## Built-in BYOModels setup
+
+`extensions/BYOModels` is the singular built-in Afterburner extension. After running
+`afterburn install`, configure it at:
+
+```text
+~\.afterburner\config\byomodels.json
+```
+
+The installer creates an example only when this file is absent and never overwrites user
+configuration. Provider endpoints, deployments, and authentication references belong in this
+user-owned file—not in the installed package or repository. Credentials must remain in Azure CLI or
+environment variables.
+
+See [`extensions/BYOModels/README.md`](extensions/BYOModels/README.md) for the complete schema,
+authentication options, model mapping, picker controls, upgrade procedure, and compatibility notes.
+
 ## Test
 
 ```powershell
 npm test
 ```
 
-`extensions/BYOModels` is the singular built-in Afterburner extension. It contains no provider,
-deployment, endpoint, subscription, or credential configuration. Set
-The normal user configuration path is `~\.afterburner\config\byomodels.json`. The
-`AFTERBURNER_BYOMODELS_CONFIG` environment variable is an optional override for automation or
-alternate profiles. BYOModels supports Azure CLI tokens, API keys from environment variables, and
-bearer tokens from environment variables.
-
-The model picker uses Tab to move focus between reasoning effort and context window; left/right
-arrows change the focused value. Providers can also declare
-`requestCompatibility.maxInputItemIdLength`. The extension then uses a loopback-only streaming proxy
-to deterministically shorten oversized Responses API input item IDs without altering message
-content.
-
-The current integration test expects the tracked BYOK plugin and checks its four context sizes.
-Interactive TUI testing guidance lives in
-`.github/skills/copilot-tui-validation/SKILL.md`.
+The integration test covers the tracked BYOModels package and its four context sizes. Interactive
+TUI testing guidance lives in `.github/skills/copilot-tui-validation/SKILL.md`.
 
 ## Compatibility
 
