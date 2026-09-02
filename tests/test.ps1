@@ -187,7 +187,8 @@ $transformedApp = Get-ChildItem (Join-Path $copilotHome "pkg\win32-*\*\.afterbur
     Select-Object -First 1
 if (-not $transformedApp -or -not (
     (Select-String -Path $transformedApp -SimpleMatch '[j,se,Ge,q,T,P,N,R,D,$e,Ne,a,Qe])' -Quiet) -or
-    (Select-String -Path $transformedApp -SimpleMatch '[j,se,$e,Q,T,P,N,R,O,Le,Ne,a,Ke])' -Quiet)
+    (Select-String -Path $transformedApp -SimpleMatch '[j,se,$e,Q,T,P,N,R,O,Le,Ne,a,Ke])' -Quiet) -or
+    (Select-String -Path $transformedApp -SimpleMatch '[V,ae,$e,Q,w,P,M,R,O,De,Be,a,$bbFocus])' -Quiet)
 )) {
     throw "Expected the picker row renderer to depend on the active context focus state."
 }

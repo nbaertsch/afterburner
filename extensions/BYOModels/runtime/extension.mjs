@@ -47,6 +47,42 @@ function installContextArrowControls(source) {
             'additionalHints:{"left-right":Ke?"context window":Le&&"reasoning effort",tab:Ne&&Le&&"switch control"'
         );
     }
+    if (source.includes('j=(0,Wn.useRef)(r[0]??null)')) {
+        source = replaceRequired(
+            source,
+            'j=(0,Wn.useRef)(r[0]??null),W=(0,Wn.useRef)(null),{rows:X,columns:ce}=Ti()',
+            'j=(0,Wn.useRef)(r[0]??null),W=(0,Wn.useRef)(null),[$bbFocus,setBbFocus]=(0,Wn.useState)(!1),{rows:X,columns:ce}=Ti()',
+            "context-control focus state"
+        );
+        source = replaceRequired(
+            source,
+            'dt=(0,Wn.useCallback)(Le=>{let tt=j.current;if(!tt||!d)return;let Ct=ae(tt),Ge=Le<0?Ct?.previousEffort:Ct?.nextEffort;Ge&&d(tt,Ge)},[d,ae]),ze=(0,Wn.useCallback)(()=>{let Le=j.current;if(!Le||!u)return;let tt=ae(Le);tt?.contextToggleable&&tt.nextContextTier&&u(Le,tt.nextContextTier)},[u,ae])',
+            'dt=(0,Wn.useCallback)(Le=>{let tt=j.current;if(!tt)return;let Ct=ae(tt);if($bbFocus){let Ge=Le<0?Ct?.previousContextTier:Ct?.nextContextTier;Ge&&u&&u(tt,Ge);return}if(!d)return;let Ge=Le<0?Ct?.previousEffort:Ct?.nextEffort;Ge&&d(tt,Ge)},[d,u,ae,$bbFocus]),ze=(0,Wn.useCallback)(()=>{Be&&De&&setBbFocus(Le=>!Le)},[Be,De])',
+            "context-control arrow routing"
+        );
+        source = replaceRequired(
+            source,
+            'jt=De?F6r(Tt,Ct,{primary:zt(R),muted:O,selected:zt(w)}):null,nn=Be?U6r(Tt,Ct,{primary:zt(R),muted:O}):null',
+            'jt=De?F6r(Tt,Ct&&!$bbFocus,{primary:zt(R),muted:O,selected:zt(w)}):null,nn=Be?U6r(Tt,Ct&&$bbFocus,{primary:zt(R),muted:O,selected:zt(w)}):null',
+            "focused picker control rendering"
+        );
+        source = replaceRequired(
+            source,
+            '[V,ae,$e,Q,w,P,M,R,O,De,Be,a])',
+            '[V,ae,$e,Q,w,P,M,R,O,De,Be,a,$bbFocus])',
+            "focused picker control render dependency"
+        );
+        source = replaceRequired(
+            source,
+            'function U6r(e,t,n){return t?Wn.default.createElement(Wn.default.Fragment,null,e.contextSegments.map(r=>Wn.default.createElement(Wn.default.Fragment,{key:r.key},Wn.default.createElement(b,{color:r.active?n.primary:n.muted},r.text)))):Wn.default.createElement(b,{color:n.muted},e.contextCellText)}',
+            'function U6r(e,t,n){return e.contextToggleable?t?Wn.default.createElement(Wn.default.Fragment,null,Wn.default.createElement(b,{color:e.contextCanLower?n.selected:n.muted},"← "),Wn.default.createElement(b,{color:n.primary},e.contextCellText),Wn.default.createElement(b,{color:e.contextCanRaise?n.selected:n.muted}," →")):Wn.default.createElement(b,{color:n.muted},e.contextCellText):Wn.default.createElement(b,{color:n.muted},e.contextCellText)}',
+            "context arrow renderer"
+        );
+        return source.replaceAll('onTab:Be?ze:void 0,', 'onTab:Be&&De?ze:void 0,').replaceAll(
+            'additionalHints:{"left-right":De&&"reasoning effort",tab:Be&&"context window"',
+            'additionalHints:{"left-right":$bbFocus?"context window":De&&"reasoning effort",tab:Be&&De&&"switch control"'
+        );
+    }
     source = replaceRequired(
         source,
         'W=(0,Kn.useRef)(r[0]??null),Y=(0,Kn.useRef)(null),{rows:Z,columns:de}=vi()',
