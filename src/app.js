@@ -442,7 +442,8 @@ async function loadRuntimeExtensions() {
             if (error?.code !== "ENOENT") throw error;
         }
         if (afterburnerManifest) continue;
-        const entrypoint = join(plugin.cache_path, "runtime", "extension.mjs");
+        const relativeEntrypoint = "runtime/extension.mjs";
+        const entrypoint = join(plugin.cache_path, relativeEntrypoint);
         try {
             await access(entrypoint, fsConstants.R_OK);
             const module = await import(pathToFileURL(entrypoint).href);

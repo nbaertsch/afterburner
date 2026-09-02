@@ -1,0 +1,10 @@
+{
+  "name": "afterburner-byomodels",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#copilot-sdk": "@github/copilot-sdk",
+    "#copilot-extension": "@github/copilot-sdk/extension"
+  }
+}

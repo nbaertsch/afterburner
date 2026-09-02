@@ -55,6 +55,45 @@ function Initialize-ManagedHome {
     }
 }
 
+function Register-ManagedSessionExtensions {
+    $registryPath = Join-Path ($env:AFTERBURNER_HOME ?? (Join-Path $env:USERPROFILE ".afterburner")) "registry.json"
+    if (!(Test-Path $registryPath)) { return }
+    $registry = Get-Content $registryPath -Raw | ConvertFrom-Json
+    foreach ($extension in $registry.extensions.PSObject.Properties.Value) {
+        if (!$extension.enabled -or !$extension.manifest.sessionExtension) { continue }
+        $configPath = Join-Path $env:COPILOT_HOME "config.json"
+        $config = if (Test-Path $configPath) {
+            Get-Content $configPath -Raw | ConvertFrom-Json
+        } else {
+            [pscustomobject]@{}
+        }
+        $name = "afterburner-$($extension.manifest.id)"
+        $sessionRoot = $extension.activePath
+        $shimRoot = Join-Path $env:COPILOT_HOME "extensions\afterburner\$($extension.manifest.id)"
+        New-Item -ItemType Directory -Force $shimRoot | Out-Null
+        $entrypoint = Join-Path $extension.activePath $extension.manifest.sessionExtension.entrypoint
+        $entrypointUrl = "file:///$($entrypoint.Replace('\', '/'))"
+        @"
+import '$entrypointUrl';
+"@ | Set-Content (Join-Path $shimRoot "extension.mjs") -Encoding utf8
+        $installed = @($config.installedPlugins | Where-Object { $_.name -ne $name })
+        $installed += [pscustomobject]@{
+            name = $name
+            marketplace = "afterburner"
+            version = "managed"
+            installed_at = [DateTime]::UtcNow.ToString("O")
+            cache_path = $shimRoot
+            enabled = $true
+            source = [pscustomobject]@{
+                source = "afterburner"
+                extension = $extension.manifest.id
+            }
+        }
+        $config | Add-Member -NotePropertyName installedPlugins -NotePropertyValue $installed -Force
+        $config | ConvertTo-Json -Depth 100 | Set-Content $configPath -Encoding utf8
+    }
+}
+
 if (!$Command) {
     $Command = "run"
 } elseif ($Command.StartsWith("-") -or $managementCommands -notcontains $Command) {
@@ -76,6 +115,7 @@ switch ($Command) {
         $env:COPILOT_HOME = $managedHome
         $exitCode = 1
         try {
+            Register-ManagedSessionExtensions
             & (Join-Path $root "scripts\prepare-runtime.ps1")
             & copilot --prefer-version 9999.0.0-afterburner @Arguments
             $exitCode = $LASTEXITCODE

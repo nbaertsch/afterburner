@@ -164,4 +164,12 @@ if (Test-Path (Join-Path $HOME ".copilot\pkg\win32-x64\9999.0.0-afterburner")) {
     throw "Afterburner runtime leaked into normal Copilot package cache."
 }
 
+$managedConfig = Get-Content (Join-Path $HOME ".afterburner\copilot-home\config.json") -Raw | ConvertFrom-Json
+$managedByoModels = @($managedConfig.installedPlugins | Where-Object { $_.name -eq "afterburner-byomodels" })
+if ($managedByoModels.Count -ne 1 -or
+    $managedByoModels[0].source.source -ne "afterburner" -or
+    $managedByoModels[0].cache_path -ne "$HOME\.afterburner\copilot-home\extensions\afterburner\byomodels") {
+    throw "BYOModels session entrypoint is not registered from the identity-addressed Afterburner package."
+}
+
 Write-Output "Afterburner tests passed."

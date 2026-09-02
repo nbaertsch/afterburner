@@ -28,12 +28,11 @@
       "additionalProperties": false
     },
     "capabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-    "companionPlugin": {
+    "sessionExtension": {
       "type": "object",
-      "required": ["manifest", "required"],
+      "required": ["entrypoint"],
       "properties": {
-        "manifest": { "type": "string" },
-        "required": { "type": "boolean" }
+        "entrypoint": { "type": "string" }
       },
       "additionalProperties": false
     }

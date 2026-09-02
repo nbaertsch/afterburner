@@ -45,6 +45,11 @@ export async function activate({
 Runtime contributions are intentionally separate from normal extension subprocesses. They execute
 inside the Copilot process and must be treated as trusted code.
 
+An Afterburner package may also declare a `sessionExtension.entrypoint`. Afterburn registers that
+entrypoint directly from the same identity-addressed package path for the managed Copilot session.
+This is one extension and one lifecycle: no second plugin package or Copilot direct-install cache is
+created.
+
 `registerAppSourceTransform(transform)` is the generic escape hatch for UI behavior that is not
 exposed by `runtime.node`. Transforms receive the original bundled application source and run before
 the application is imported. They should fail closed when expected source anchors are absent.
