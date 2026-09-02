@@ -8,9 +8,10 @@ $installRoot = if ($env:AFTERBURNER_HOME) {
 }
 $bin = Join-Path $installRoot "bin"
 $app = Join-Path $installRoot "app"
+$config = Join-Path $installRoot "config"
 
 $staging = Join-Path $installRoot ("app-staging-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Force $bin, $staging | Out-Null
+New-Item -ItemType Directory -Force $bin, $config, $staging | Out-Null
 if (Test-Path $app) { Remove-Item -LiteralPath $app -Recurse -Force }
 Move-Item $staging $app
 Copy-Item (Join-Path $projectRoot "afterburn.ps1") $app -Force

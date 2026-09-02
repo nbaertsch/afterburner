@@ -40,7 +40,8 @@ function Initialize-ManagedHome {
     foreach ($name in @(
         "session-state",
         "settings.json",
-        "permissions-config.json"
+        "permissions-config.json",
+        "mcp-config.json"
     )) {
         $source = Join-Path $normalHome $name
         $target = Join-Path $ManagedHome $name
@@ -65,6 +66,12 @@ switch ($Command) {
     "run" {
         $managedHome = Join-Path $env:USERPROFILE ".afterburner\copilot-home"
         Initialize-ManagedHome $managedHome
+        if (!$env:AFTERBURNER_BYOMODELS_CONFIG) {
+            $defaultModelsConfig = Join-Path $env:USERPROFILE ".afterburner\config\byomodels.json"
+            if (Test-Path $defaultModelsConfig) {
+                $env:AFTERBURNER_BYOMODELS_CONFIG = $defaultModelsConfig
+            }
+        }
         $previousCopilotHome = $env:COPILOT_HOME
         $env:COPILOT_HOME = $managedHome
         $exitCode = 1
