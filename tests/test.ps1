@@ -3,9 +3,21 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 
 $helpOutput = & (Join-Path $projectRoot "afterburn.ps1") help | Out-String
-if ($helpOutput -notmatch "afterburn extension install") {
+if ($helpOutput -notmatch "afterburn extension install" -or
+    $helpOutput -notmatch "afterburn install \[id\.\.\.\]" -or
+    $helpOutput -notmatch "afterburn enable <id\.\.\.>") {
     throw "Standalone Afterburner command help is incomplete."
 }
+
+$extensionListOutput = & (Join-Path $projectRoot "afterburn.ps1") extension list | Out-String
+if ($LASTEXITCODE -ne 0 -or $extensionListOutput -notmatch "byo-models") {
+    throw "afterburn extension argument forwarding failed."
+}
+
+& (Join-Path $projectRoot "tests\lifecycle.test.ps1")
+if ($LASTEXITCODE -ne 0) { throw "Built-in lifecycle tests failed." }
+& npm test --prefix (Join-Path $projectRoot "extensions\BlackBox")
+if ($LASTEXITCODE -ne 0) { throw "Black Box package tests failed." }
 
 $compatibilityTest = @'
 import { createServer } from "node:http";
@@ -86,15 +98,14 @@ $previousAfterburnerHome = $env:AFTERBURNER_HOME
 $env:AFTERBURNER_HOME = $testHome
 $env:COPILOT_RUNTIME_EXTENSION_SELF_TEST = "1"
 try {
-    & node (Join-Path $projectRoot "src\extension-manager.mjs") install `
-        (Join-Path $projectRoot "extensions\BYOModels") | Out-Null
-    & node (Join-Path $projectRoot "src\extension-manager.mjs") enable byomodels | Out-Null
+    & node (Join-Path $projectRoot "src\extension-manager.mjs") install-builtins `
+        (Join-Path $projectRoot "extensions") | Out-Null
     $result = & (Join-Path $projectRoot "afterburn.ps1") --version |
         Out-String |
         ConvertFrom-Json
     $testManagedConfig = Get-Content (Join-Path $testHome "copilot-home\config.json") -Raw | ConvertFrom-Json
     $testRegistry = Get-Content (Join-Path $testHome "registry.json") -Raw | ConvertFrom-Json
-    $activeByoModelsPath = $testRegistry.extensions.byomodels.activePath
+    $activeByoModelsPath = $testRegistry.extensions.'byo-models'.activePath
     $managedByoModels = @($testManagedConfig.installedPlugins | Where-Object { $_.name -eq "afterburner-byomodels" })
     if ($managedByoModels.Count -ne 1 -or
         $managedByoModels[0].source.source -ne "local" -or
@@ -102,11 +113,29 @@ try {
         $managedByoModels[0].cache_path -ne $activeByoModelsPath) {
         throw "BYOModels session entrypoint is not registered from the active immutable Afterburner package."
     }
+    $activeBlackBoxPath = $testRegistry.extensions.'black-box'.activePath
+    $managedBlackBox = @($testManagedConfig.installedPlugins | Where-Object { $_.name -eq "afterburner-black-box" })
+    if ($managedBlackBox.Count -ne 1 -or $managedBlackBox[0].cache_path -ne $activeBlackBoxPath) {
+        throw "Black Box session entrypoint is not registered from the active immutable Afterburner package."
+    }
 } finally {
     Remove-Item Env:COPILOT_RUNTIME_EXTENSION_SELF_TEST -ErrorAction SilentlyContinue
     if ($null -eq $previousAfterburnerHome) { Remove-Item Env:AFTERBURNER_HOME -ErrorAction SilentlyContinue }
     else { $env:AFTERBURNER_HOME = $previousAfterburnerHome }
     Remove-Item -LiteralPath $testHome -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+$observerProbe = $result.runtimeObservers.probe
+if (-not $observerProbe.immutable -or -not $observerProbe.independentCopies -or
+    -not $observerProbe.monotonic -or -not $observerProbe.sensitiveMetadataRemoved -or
+    $observerProbe.bootstrapReplayCount -le 0) {
+    throw "Runtime observer contract self-test failed: $($observerProbe | ConvertTo-Json -Compress)"
+}
+$observerDiagnostics = @($result.runtimeObservers.diagnostics.observers)
+if (@($observerDiagnostics | Where-Object { $_.id -eq "afterburner-self-test-backpressure" -and $_.dropped -gt 0 }).Count -ne 1 -or
+    @($observerDiagnostics | Where-Object { $_.id -eq "afterburner-self-test-failure" -and $_.failures -gt 0 }).Count -ne 1 -or
+    $result.runtimeObservers.disposedSelfTestObserver.active -ne $false) {
+    throw "Runtime observer backpressure, failure isolation, or disposal validation failed."
 }
 
 if (-not $result.projection.hasReasoningColumn) {
@@ -164,7 +193,7 @@ if (-not $transformedApp -or -not (
 }
 
 $normalConfig = Get-Content (Join-Path $HOME ".copilot\config.json") -Raw
-if ($normalConfig -match "afterburner-byomodels|steward-burn") {
+if ($normalConfig -match "afterburner-byomodels|afterburner-black-box|steward-burn") {
     throw "Afterburner-managed companions leaked into normal Copilot configuration."
 }
 if (Test-Path (Join-Path $HOME ".copilot\afterburner")) {
@@ -183,21 +212,21 @@ try {
     Set-Content $userConfig '{"userOwned":true}' -Encoding utf8
     $env:AFTERBURNER_HOME = $upgradeHome
     & node (Join-Path $projectRoot "src\extension-manager.mjs") install $source | Out-Null
-    & node (Join-Path $projectRoot "src\extension-manager.mjs") enable byomodels | Out-Null
+    & node (Join-Path $projectRoot "src\extension-manager.mjs") enable byo-models | Out-Null
     Add-Content (Join-Path $source "package.json") " "
-    & node (Join-Path $projectRoot "src\extension-manager.mjs") update byomodels | Out-Null
+    & node (Join-Path $projectRoot "src\extension-manager.mjs") update byo-models | Out-Null
     $upgradeRegistry = Get-Content (Join-Path $upgradeHome "registry.json") -Raw | ConvertFrom-Json
-    if (!$upgradeRegistry.extensions.byomodels.enabled -or
-        !$upgradeRegistry.extensions.byomodels.previousActivePath) {
+    if (!$upgradeRegistry.extensions.'byo-models'.enabled -or
+        !$upgradeRegistry.extensions.'byo-models'.previousActivePath) {
         throw "Extension update did not preserve enablement and rollback state."
     }
     if ((Get-Content $userConfig -Raw).Trim() -ne '{"userOwned":true}') {
         throw "Extension update overwrote user configuration."
     }
-    $updatedPath = $upgradeRegistry.extensions.byomodels.activePath
-    & node (Join-Path $projectRoot "src\extension-manager.mjs") rollback byomodels | Out-Null
+    $updatedPath = $upgradeRegistry.extensions.'byo-models'.activePath
+    & node (Join-Path $projectRoot "src\extension-manager.mjs") rollback byo-models | Out-Null
     $rolledBack = Get-Content (Join-Path $upgradeHome "registry.json") -Raw | ConvertFrom-Json
-    if ($rolledBack.extensions.byomodels.previousActivePath -ne $updatedPath) {
+    if ($rolledBack.extensions.'byo-models'.previousActivePath -ne $updatedPath) {
         throw "Extension rollback did not preserve the updated package."
     }
 } finally {

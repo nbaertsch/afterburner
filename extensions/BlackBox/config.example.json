@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "enabled": true,
+  "storage": {
+    "maxBytes": 524288000,
+    "segmentBytes": 8388608,
+    "maxRecordBytes": 65536
+  },
+  "queue": {
+    "maxRecords": 4096,
+    "maxBytes": 16777216
+  },
+  "native": {
+    "enabled": true,
+    "pollIntervalMs": 1000,
+    "maxReadBytes": 1048576,
+    "maxLineBytes": 16777216,
+    "maxEventsPerPoll": 2000,
+    "startPosition": "start"
+  },
+  "analytics": {
+    "aggregateEveryEvents": 250,
+    "longToolDurationMs": 120000,
+    "longTurnDurationMs": 300000,
+    "unmatchedAfterMs": 900000
+  },
+  "tail": {
+    "defaultRecords": 50,
+    "maxRecords": 500
+  },
+  "export": {
+    "maxRecords": 100000
+  }
+}

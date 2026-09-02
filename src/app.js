@@ -8,6 +8,259 @@ const require = createRequire(import.meta.url);
 const wrapperDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(wrapperDir, "..");
 const wrapperPackageName = wrapperDir.split(/[\\/]/).at(-1);
+const runtimeEventSchemaVersion = 1;
+const runtimeObserverQueueLimit = 64;
+const runtimeBootstrapLimit = 48;
+const runtimeBootstrapEvents = [];
+const runtimeObservers = new Map();
+const blockedMetadataWords = new Set([
+    "argument", "arguments", "authorization", "body", "code", "command", "commands",
+    "content", "contents", "credential", "credentials", "file", "files", "header", "headers",
+    "input", "inputs", "message", "messages", "output", "outputs", "password", "path", "paths",
+    "prompt", "prompts", "query", "response", "responses", "result", "results", "secret", "secrets",
+    "source", "sources", "summary", "summaries", "url", "urls"
+]);
+let runtimeEventSequence = 0;
+let runtimeBootstrapDropped = 0;
+let runtimeBootstrapSealed = false;
+
+function runtimeMetadataKeyAllowed(key) {
+    if (!/^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(key)) return false;
+    const words = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+        .toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    if (words.some((word) => blockedMetadataWords.has(word))) return false;
+    const joined = words.join("");
+    return !/(?:access|auth|bearer|refresh|session)token/.test(joined) && joined !== "token";
+}
+
+function sanitizeRuntimeMetadata(value, depth = 0) {
+    if (value === null || typeof value === "boolean") return value;
+    if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+    if (typeof value === "string") {
+        const printable = value.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+        return printable.length <= 192 ? printable : `${printable.slice(0, 191)}…`;
+    }
+    if (depth >= 4) return undefined;
+    if (Array.isArray(value)) {
+        return value.slice(0, 32)
+            .map((entry) => sanitizeRuntimeMetadata(entry, depth + 1))
+            .filter((entry) => entry !== undefined);
+    }
+    if (typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) return undefined;
+    const result = {};
+    for (const [key, entry] of Object.entries(value).slice(0, 32)) {
+        if (!runtimeMetadataKeyAllowed(key)) continue;
+        const sanitized = sanitizeRuntimeMetadata(entry, depth + 1);
+        if (sanitized !== undefined) result[key] = sanitized;
+    }
+    return result;
+}
+
+function freezeRuntimeValue(value) {
+    if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+    for (const entry of Object.values(value)) freezeRuntimeValue(entry);
+    return Object.freeze(value);
+}
+
+function immutableRuntimeCopy(value) {
+    return freezeRuntimeValue(sanitizeRuntimeMetadata(value));
+}
+
+function runtimeObserverAccepts(observer, event) {
+    return observer.eventTypes === null || observer.eventTypes.has(event.type);
+}
+
+function reportRuntimeObserverFailure(observer, phase, error) {
+    if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG !== "1") return;
+    const failureKind = sanitizeRuntimeMetadata(error?.name ?? "Error") || "Error";
+    process.stderr.write(`[runtime-extension-host] observer '${observer.id}' ${phase} failed (${failureKind})\n`);
+}
+
+async function drainRuntimeObserver(observer) {
+    if (observer.draining || !observer.active) return;
+    observer.draining = true;
+    try {
+        while (observer.active && observer.queue.length > 0) {
+            const event = observer.queue.shift();
+            try {
+                await observer.onEvent(immutableRuntimeCopy(event));
+                observer.delivered++;
+            } catch (error) {
+                observer.failures++;
+                reportRuntimeObserverFailure(observer, "delivery", error);
+            }
+        }
+    } finally {
+        observer.draining = false;
+        observer.drainPromise = null;
+        if (observer.active && observer.queue.length > 0) scheduleRuntimeObserver(observer);
+    }
+}
+
+function scheduleRuntimeObserver(observer) {
+    if (!observer.active || observer.scheduled || observer.draining) return;
+    observer.scheduled = true;
+    queueMicrotask(() => {
+        observer.scheduled = false;
+        if (!observer.active || observer.draining) return;
+        observer.drainPromise = drainRuntimeObserver(observer);
+    });
+}
+
+function enqueueRuntimeObserver(observer, event) {
+    if (!observer.active || !runtimeObserverAccepts(observer, event)) return;
+    if (observer.queue.length >= runtimeObserverQueueLimit) {
+        observer.dropped++;
+        return;
+    }
+    observer.queue.push(event);
+    scheduleRuntimeObserver(observer);
+}
+
+function normalizeRuntimeEventTypes(eventTypes) {
+    if (eventTypes === undefined) return null;
+    if (!Array.isArray(eventTypes) && !(eventTypes instanceof Set)) {
+        throw new Error("Runtime observer eventTypes must be an array or Set.");
+    }
+    const normalized = new Set();
+    for (const eventType of eventTypes) {
+        if (typeof eventType !== "string" || !/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(eventType)) {
+            throw new Error(`Invalid runtime observer event type '${String(eventType)}'.`);
+        }
+        normalized.add(eventType);
+    }
+    return normalized;
+}
+
+function runtimeObserverDiagnostics(observer) {
+    return immutableRuntimeCopy({
+        id: observer.id,
+        eventTypes: observer.eventTypes === null ? null : [...observer.eventTypes].sort(),
+        active: observer.active,
+        queueDepth: observer.queue.length,
+        delivered: observer.delivered,
+        dropped: observer.dropped,
+        failures: observer.failures,
+        disposeFailures: observer.disposeFailures
+    });
+}
+
+function disposeRuntimeObserver(observer) {
+    if (!observer?.active) return;
+    observer.active = false;
+    observer.queue.length = 0;
+    runtimeObservers.delete(observer.id);
+    if (typeof observer.dispose === "function") {
+        try {
+            const result = observer.dispose();
+            if (result && typeof result.then === "function") {
+                result.catch((error) => {
+                    observer.disposeFailures++;
+                    reportRuntimeObserverFailure(observer, "dispose", error);
+                });
+            }
+        } catch (error) {
+            observer.disposeFailures++;
+            reportRuntimeObserverFailure(observer, "dispose", error);
+        }
+    }
+    emitRuntimeEvent("runtime.observer.disposed", { observerId: observer.id });
+}
+
+function registerRuntimeObserver(definition) {
+    if (!definition || typeof definition !== "object") {
+        throw new Error("A runtime observer definition is required.");
+    }
+    const { id, onEvent, dispose } = definition;
+    if (typeof id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(id)) {
+        throw new Error("Runtime observers require a stable lowercase id.");
+    }
+    if (typeof onEvent !== "function") throw new Error(`Runtime observer '${id}' requires onEvent().`);
+    if (dispose !== undefined && typeof dispose !== "function") {
+        throw new Error(`Runtime observer '${id}' dispose must be a function.`);
+    }
+    if (runtimeObservers.has(id)) throw new Error(`Runtime observer '${id}' is already registered.`);
+    const observer = {
+        id,
+        eventTypes: normalizeRuntimeEventTypes(definition.eventTypes),
+        onEvent,
+        dispose,
+        active: true,
+        queue: [],
+        scheduled: false,
+        draining: false,
+        drainPromise: null,
+        delivered: 0,
+        dropped: 0,
+        failures: 0,
+        disposeFailures: 0
+    };
+    runtimeObservers.set(id, observer);
+    for (const event of runtimeBootstrapEvents) enqueueRuntimeObserver(observer, event);
+    emitRuntimeEvent("runtime.observer.registered", {
+        observerId: id,
+        filtered: observer.eventTypes !== null,
+        eventTypeCount: observer.eventTypes?.size ?? 0
+    });
+    const unregister = () => disposeRuntimeObserver(observer);
+    Object.defineProperty(unregister, "diagnostics", {
+        enumerable: true,
+        value: () => runtimeObserverDiagnostics(observer)
+    });
+    return unregister;
+}
+
+function emitRuntimeEvent(type, metadata = {}) {
+    if (typeof type !== "string" || !/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(type)) {
+        throw new Error(`Invalid runtime event type '${String(type)}'.`);
+    }
+    const event = freezeRuntimeValue({
+        schemaVersion: runtimeEventSchemaVersion,
+        sequence: ++runtimeEventSequence,
+        timestamp: new Date().toISOString(),
+        type,
+        metadata: immutableRuntimeCopy(metadata) ?? Object.freeze({})
+    });
+    if (!runtimeBootstrapSealed) {
+        if (runtimeBootstrapEvents.length >= runtimeBootstrapLimit) {
+            runtimeBootstrapEvents.shift();
+            runtimeBootstrapDropped++;
+        }
+        runtimeBootstrapEvents.push(event);
+    }
+    for (const observer of runtimeObservers.values()) enqueueRuntimeObserver(observer, event);
+    return event;
+}
+
+function getRuntimeObserverDiagnostics() {
+    return immutableRuntimeCopy({
+        schemaVersion: runtimeEventSchemaVersion,
+        lastSequence: runtimeEventSequence,
+        bootstrap: {
+            sealed: runtimeBootstrapSealed,
+            buffered: runtimeBootstrapEvents.length,
+            dropped: runtimeBootstrapDropped,
+            limit: runtimeBootstrapLimit
+        },
+        queueLimit: runtimeObserverQueueLimit,
+        observers: [...runtimeObservers.values()].map(runtimeObserverDiagnostics)
+    });
+}
+
+async function flushRuntimeObservers() {
+    for (;;) {
+        await Promise.resolve();
+        const pending = [...runtimeObservers.values()]
+            .map((observer) => observer.drainPromise).filter(Boolean);
+        if (pending.length > 0) await Promise.allSettled(pending);
+        if ([...runtimeObservers.values()].every((observer) =>
+            !observer.scheduled && !observer.draining && observer.queue.length === 0)) return;
+    }
+}
+
+function disposeRuntimeObservers() {
+    for (const observer of [...runtimeObservers.values()]) disposeRuntimeObserver(observer);
+}
 
 function compareVersions(left, right) {
     const parse = (value) => value.match(/^(\d+)\.(\d+)\.(\d+)-(\d+)$/)?.slice(1).map(Number);
@@ -55,6 +308,53 @@ const upstreamMetadata = new Map();
 const effortOverrides = new Map();
 const contextOverrides = new Map();
 const nativeContextTiers = ["default", "long_context"];
+const externalTaskLifecycle = new Map();
+const nativeTaskKinds = new Map();
+const copilotPackageVersion = copilotRoot.split(/[\\/]/).at(-1);
+
+function opaqueRuntimeId(prefix, value) {
+    if (value === undefined || value === null || value === "") return undefined;
+    const digest = createHash("sha256").update(String(value)).digest("base64url").slice(0, 20);
+    return `${prefix}_${digest}`;
+}
+
+function parseRuntimeJson(value) {
+    if (typeof value !== "string") return value && typeof value === "object" ? value : null;
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+function safeRuntimeEnum(value, allowed) {
+    return typeof value === "string" && allowed.includes(value) ? value : undefined;
+}
+
+function externalEntityKind(task) {
+    return task?.kind === "agent" || task?.type === "agent" ? "agent" : "task";
+}
+
+function externalLifecycleMetadata(providerId, taskOrChange) {
+    const remoteId = typeof taskOrChange?.id === "string" ? taskOrChange.id : undefined;
+    return {
+        providerId,
+        ...(remoteId ? { entityId: externalTaskId(providerId, remoteId) } : {}),
+        entityKind: externalEntityKind(taskOrChange),
+        state: safeRuntimeEnum(taskOrChange?.state ?? taskOrChange?.status,
+            ["queued", "pending", "running", "waiting", "idle", "completed", "failed", "cancelled", "recovery-required"]),
+        changeKind: safeRuntimeEnum(taskOrChange?.type,
+            ["added", "changed", "updated", "removed", "completed", "failed", "cancelled"])
+    };
+}
+
+emitRuntimeEvent("runtime.bootstrap", {
+    runtimeVersion: copilotPackageVersion,
+    platform: process.platform,
+    architecture: process.arch,
+    schemaVersion: runtimeEventSchemaVersion
+});
 
 function externalTaskId(providerId, remoteId) {
     const value = createHash("sha256")
@@ -76,8 +376,17 @@ function registerExternalTaskProvider(provider) {
     if (externalTaskProviders.has(provider.id))
         throw new Error(`External task provider '${provider.id}' is already registered.`);
     externalTaskProviders.set(provider.id, provider);
+    emitRuntimeEvent("external.provider.registered", {
+        providerId: provider.id,
+        supportsSubscription: typeof provider.subscribe === "function",
+        supportsWrite: typeof provider.write === "function"
+    });
     if (typeof provider.subscribe === "function") {
-        const unsubscribe = provider.subscribe(() => { externalTaskRevision++; });
+        const unsubscribe = provider.subscribe((change) => {
+            externalTaskRevision++;
+            const metadata = externalLifecycleMetadata(provider.id, change);
+            emitRuntimeEvent(`external.${metadata.entityKind}.changed`, metadata);
+        });
         if (typeof unsubscribe === "function") externalTaskSubscriptions.set(provider.id, unsubscribe);
     }
     if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1")
@@ -86,25 +395,68 @@ function registerExternalTaskProvider(provider) {
         externalTaskSubscriptions.get(provider.id)?.();
         externalTaskSubscriptions.delete(provider.id);
         externalTaskProviders.delete(provider.id);
+        for (const [nativeId, lifecycle] of externalTaskLifecycle) {
+            if (lifecycle.providerId === provider.id) externalTaskLifecycle.delete(nativeId);
+        }
+        emitRuntimeEvent("external.provider.unregistered", { providerId: provider.id });
     };
 }
 
 async function externalTaskSnapshot() {
     const projected = [];
+    const observedIds = new Set();
+    const observedProviders = new Set();
     for (const [providerId, provider] of externalTaskProviders) {
+        observedProviders.add(providerId);
         const tasks = await provider.snapshot();
         if (!Array.isArray(tasks)) throw new Error(`External task provider '${providerId}' returned a non-array snapshot.`);
         for (const task of tasks) {
             if (!task || typeof task.id !== "string" || typeof task.title !== "string") continue;
+            const nativeId = externalTaskId(providerId, task.id);
+            const metadata = externalLifecycleMetadata(providerId, task);
+            const previous = externalTaskLifecycle.get(nativeId);
+            observedIds.add(nativeId);
+            externalTaskLifecycle.set(nativeId, {
+                providerId,
+                entityKind: metadata.entityKind,
+                state: metadata.state
+            });
+            if (!previous) emitRuntimeEvent(`external.${metadata.entityKind}.discovered`, metadata);
+            else if (previous.state !== metadata.state) {
+                emitRuntimeEvent(`external.${metadata.entityKind}.state_changed`, {
+                    ...metadata,
+                    previousState: previous.state
+                });
+            }
             projected.push({
                 ...task,
-                nativeId: externalTaskId(providerId, task.id),
+                nativeId,
                 providerId,
                 remoteId: task.id
             });
         }
-
     }
+    for (const [nativeId, lifecycle] of externalTaskLifecycle) {
+        if (observedProviders.has(lifecycle.providerId) && !observedIds.has(nativeId)) {
+            externalTaskLifecycle.delete(nativeId);
+            emitRuntimeEvent(`external.${lifecycle.entityKind}.removed`, {
+                providerId: lifecycle.providerId,
+                entityId: nativeId,
+                previousState: lifecycle.state
+            });
+        }
+    }
+    const stateCounts = {};
+    for (const task of projected) {
+        const state = safeRuntimeEnum(task.state ?? task.status,
+            ["queued", "pending", "running", "waiting", "idle", "completed", "failed", "cancelled", "recovery-required"]);
+        if (state) stateCounts[state] = (stateCounts[state] ?? 0) + 1;
+    }
+    emitRuntimeEvent("external.task.snapshot", {
+        providerCount: observedProviders.size,
+        entityCount: projected.length,
+        stateCounts
+    });
     return projected;
 }
 
@@ -112,14 +464,37 @@ async function invokeExternalTask(nativeId, operation, value) {
     const task = (await externalTaskSnapshot()).find((candidate) => candidate.nativeId === nativeId);
     if (!task) throw new Error(`Unknown external task '${nativeId}'.`);
     const provider = externalTaskProviders.get(task.providerId);
-    if (operation === "read") return provider.read(task.remoteId);
-    if (operation === "write") {
-        if (typeof provider.write !== "function")
-            throw new Error(`External task provider '${task.providerId}' does not support write.`);
-        return provider.write(task.remoteId, value);
+    const entityKind = externalEntityKind(task);
+    const allowedOperation = safeRuntimeEnum(operation, ["read", "write", "cancel"]);
+    if (!allowedOperation) throw new Error(`Unsupported external task operation '${operation}'.`);
+    emitRuntimeEvent(`external.${entityKind}.operation_started`, {
+        providerId: task.providerId,
+        entityId: task.nativeId,
+        operation: allowedOperation
+    });
+    try {
+        let result;
+        if (operation === "read") result = await provider.read(task.remoteId);
+        else if (operation === "write") {
+            if (typeof provider.write !== "function")
+                throw new Error(`External task provider '${task.providerId}' does not support write.`);
+            result = await provider.write(task.remoteId, value);
+        } else result = await provider.cancel(task.remoteId);
+        emitRuntimeEvent(`external.${entityKind}.operation_completed`, {
+            providerId: task.providerId,
+            entityId: task.nativeId,
+            operation: allowedOperation
+        });
+        return result;
+    } catch (error) {
+        emitRuntimeEvent(`external.${entityKind}.operation_failed`, {
+            providerId: task.providerId,
+            entityId: task.nativeId,
+            operation: allowedOperation,
+            failureKind: error?.name ?? "Error"
+        });
+        throw error;
     }
-    if (operation === "cancel") return provider.cancel(task.remoteId);
-    throw new Error(`Unsupported external task operation '${operation}'.`);
 }
 
 function adapterFor(selectionId) {
@@ -210,6 +585,390 @@ function rememberUpstream(models) {
     }
 }
 
+function safeRuntimeIdentifier(value, prefix) {
+    if (typeof value !== "string" || value.length === 0) return undefined;
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)
+        ? value
+        : opaqueRuntimeId(prefix, value);
+}
+
+function reportInstrumentationFailure(seam, error) {
+    if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG !== "1") return;
+    const failureKind = sanitizeRuntimeMetadata(error?.name ?? "Error") || "Error";
+    process.stderr.write(`[runtime-extension-host] observer seam '${seam}' failed (${failureKind})\n`);
+}
+
+function finishObservedRuntimeCall(result, seam, onSuccess, onFailure) {
+    const succeed = (value) => {
+        try { onSuccess?.(value); } catch (error) { reportInstrumentationFailure(seam, error); }
+        return value;
+    };
+    const fail = (error) => {
+        try { onFailure?.(error); } catch (instrumentationError) {
+            reportInstrumentationFailure(seam, instrumentationError);
+        }
+        throw error;
+    };
+    return result && typeof result.then === "function" ? result.then(succeed, fail) : succeed(result);
+}
+
+function installObservedRuntimeMethod(name, handler, installedSeams) {
+    if (typeof runtime[name] !== "function") return;
+    const original = runtime[name].bind(runtime);
+    runtime[name] = (...args) => {
+        try {
+            return handler(original, args);
+        } catch (error) {
+            if (error?.__afterburnerOriginalFailure === true) throw error.cause;
+            reportInstrumentationFailure(name, error);
+            return original(...args);
+        }
+    };
+    installedSeams.push(name);
+}
+
+function callObservedOriginal(original, args, seam, onSuccess, onFailure) {
+    let result;
+    try {
+        result = original(...args);
+    } catch (error) {
+        try { onFailure?.(error); } catch (instrumentationError) {
+            reportInstrumentationFailure(seam, instrumentationError);
+        }
+        const wrapped = new Error("Observed runtime call failed", { cause: error });
+        wrapped.__afterburnerOriginalFailure = true;
+        throw wrapped;
+    }
+    return finishObservedRuntimeCall(result, seam, onSuccess, onFailure);
+}
+
+function extensionMetadata(entry) {
+    const extensionId = safeRuntimeIdentifier(
+        entry?.id ?? entry?.name ?? entry?.plugin?.name ?? entry?.manifest?.name,
+        "ext"
+    );
+    const version = typeof (entry?.version ?? entry?.plugin?.version ?? entry?.manifest?.version) === "string"
+        ? entry?.version ?? entry?.plugin?.version ?? entry?.manifest?.version
+        : undefined;
+    return { extensionId, version };
+}
+
+function nativeTaskKey(taskStoreId, taskId) {
+    return `${String(taskStoreId)}:${String(taskId)}`;
+}
+
+function nativeTaskMetadata(taskStoreId, taskId, task) {
+    const entityKind = task?.type === "agent" || task?.kind === "agent" ? "agent" :
+        nativeTaskKinds.get(nativeTaskKey(taskStoreId, taskId)) ?? "task";
+    const effectiveId = taskId ?? task?.id ?? task?.taskId ?? task?.agentId;
+    const parentId = task?.parentId ?? task?.parentTaskId;
+    const state = safeRuntimeEnum(task?.state ?? task?.status,
+        ["queued", "pending", "running", "waiting", "idle", "completed", "failed", "cancelled"]);
+    return {
+        entityKind,
+        entityId: effectiveId === undefined ? undefined :
+            opaqueRuntimeId(entityKind === "agent" ? "agt" : "tsk", `${taskStoreId}:${effectiveId}`),
+        taskStoreId: opaqueRuntimeId("store", taskStoreId),
+        parentId: parentId === undefined ? undefined : opaqueRuntimeId("tsk", `${taskStoreId}:${parentId}`),
+        state,
+        background: typeof task?.background === "boolean" ? task.background : undefined
+    };
+}
+
+function modelSelectionMetadata(sessionId, selection) {
+    return {
+        sessionId: opaqueRuntimeId("ses", sessionId),
+        modelId: typeof (selection?.modelId ?? selection?.model) === "string"
+            ? selection?.modelId ?? selection?.model
+            : undefined,
+        previousModelId: typeof selection?.previousModel === "string" ? selection.previousModel : undefined,
+        reasoningEffort: safeRuntimeEnum(selection?.reasoningEffort,
+            ["minimal", "low", "medium", "high", "xhigh", "max"]),
+        contextTier: safeRuntimeEnum(selection?.contextTier, ["default", "long_context"]),
+        targetKind: safeRuntimeEnum(selection?.targetKind,
+            ["session", "plan", "repo", "local", "subagent-agent"]),
+        reasoningExplicit: typeof selection?.reasoningEffortExplicit === "boolean"
+            ? selection.reasoningEffortExplicit : undefined,
+        contextExplicit: typeof selection?.contextTierExplicit === "boolean"
+            ? selection.contextTierExplicit : undefined
+    };
+}
+
+function installRuntimeObserverSeams() {
+    const installedSeams = [];
+
+    installObservedRuntimeMethod("pluginsLoadPluginExtensionDirs", (original, args) => {
+        const options = args[0] ?? {};
+        emitRuntimeEvent("extension.discovery.started", {
+            activeCount: Array.isArray(options.activePlugins) ? options.activePlugins.length : 0,
+            additionalCount: Array.isArray(options.additionalPlugins) ? options.additionalPlugins.length : 0
+        });
+        return callObservedOriginal(original, args, "pluginsLoadPluginExtensionDirs", (result) => {
+            const entries = Array.isArray(result?.entries) ? result.entries : [];
+            for (const entry of entries) emitRuntimeEvent("extension.discovered", {
+                ...extensionMetadata(entry),
+                extensionKind: "copilot-plugin"
+            });
+            emitRuntimeEvent("extension.discovery.completed", {
+                discoveredCount: entries.length,
+                warningCount: Array.isArray(result?.warnings) ? result.warnings.length : 0
+            });
+        }, (error) => emitRuntimeEvent("extension.discovery.failed", {
+            failureKind: error?.name ?? "Error"
+        }));
+    }, installedSeams);
+
+    installObservedRuntimeMethod("customAgentsDiscoverJson", (original, args) =>
+        callObservedOriginal(original, args, "customAgentsDiscoverJson", (result) => {
+            const agents = parseRuntimeJson(result)?.agents;
+            if (!Array.isArray(agents)) return;
+            for (const agent of agents) emitRuntimeEvent("agent.discovered", {
+                agentId: safeRuntimeIdentifier(agent?.id ?? agent?.name, "agt"),
+                agentKind: agent?.source === "builtin" ? "builtin" : "custom"
+            });
+            emitRuntimeEvent("agent.discovery.completed", { discoveredCount: agents.length });
+        }, (error) => emitRuntimeEvent("agent.discovery.failed", {
+            failureKind: error?.name ?? "Error"
+        })), installedSeams);
+
+    installObservedRuntimeMethod("sessionSetInstalledPluginsJson", (original, args) => {
+        const plugins = parseRuntimeJson(args[1]);
+        return callObservedOriginal(original, args, "sessionSetInstalledPluginsJson", () => {
+            const entries = Array.isArray(plugins) ? plugins : [];
+            for (const entry of entries) emitRuntimeEvent("extension.configured", {
+                ...extensionMetadata(entry),
+                extensionKind: "session-plugin",
+                enabled: typeof entry?.enabled === "boolean" ? entry.enabled : undefined
+            });
+        }, (error) => emitRuntimeEvent("extension.configuration.failed", {
+            failureKind: error?.name ?? "Error"
+        }));
+    }, installedSeams);
+
+    for (const name of ["hookSessionAddPlugins", "hookSessionReplacePlugins"]) {
+        installObservedRuntimeMethod(name, (original, args) => {
+            const plugins = parseRuntimeJson(args[1]);
+            return callObservedOriginal(original, args, name, () => {
+                for (const plugin of Array.isArray(plugins) ? plugins : []) {
+                    emitRuntimeEvent("extension.activated", {
+                        extensionId: safeRuntimeIdentifier(plugin?.pluginName, "ext"),
+                        extensionKind: "copilot-hook",
+                        sessionId: opaqueRuntimeId("ses", args[0]),
+                        activationMode: name === "hookSessionReplacePlugins" ? "replace" : "add"
+                    });
+                }
+            }, (error) => emitRuntimeEvent("extension.failed", {
+                extensionKind: "copilot-hook",
+                sessionId: opaqueRuntimeId("ses", args[0]),
+                failureKind: error?.name ?? "Error"
+            }));
+        }, installedSeams);
+    }
+
+    installObservedRuntimeMethod("sessionCustomAgentsSetLoadedJson", (original, args) => {
+        const agents = parseRuntimeJson(args[1]);
+        return callObservedOriginal(original, args, "sessionCustomAgentsSetLoadedJson", () => {
+            for (const agent of Array.isArray(agents) ? agents : []) {
+                emitRuntimeEvent("agent.loaded", {
+                    sessionId: opaqueRuntimeId("ses", args[0]),
+                    agentId: safeRuntimeIdentifier(agent?.id ?? agent?.name, "agt"),
+                    agentKind: agent?.source === "builtin" ? "builtin" : "custom"
+                });
+            }
+        }, (error) => emitRuntimeEvent("agent.load_failed", {
+            sessionId: opaqueRuntimeId("ses", args[0]),
+            failureKind: error?.name ?? "Error"
+        }));
+    }, installedSeams);
+
+    installObservedRuntimeMethod("sessionCustomAgentsSetSelectedJson", (original, args) => {
+        const agent = parseRuntimeJson(args[1]);
+        return callObservedOriginal(original, args, "sessionCustomAgentsSetSelectedJson", () => {
+            emitRuntimeEvent(agent ? "agent.selected" : "agent.selection_cleared", {
+                sessionId: opaqueRuntimeId("ses", args[0]),
+                agentId: safeRuntimeIdentifier(agent?.id ?? agent?.name, "agt"),
+                modelId: typeof agent?.model === "string" ? agent.model : undefined
+            });
+        });
+    }, installedSeams);
+
+    installObservedRuntimeMethod("sessionCustomAgentsDeselect", (original, args) =>
+        callObservedOriginal(original, args, "sessionCustomAgentsDeselect", () => {
+            emitRuntimeEvent("agent.selection_cleared", {
+                sessionId: opaqueRuntimeId("ses", args[0])
+            });
+        }), installedSeams);
+
+    for (const name of ["sessionExtensionsInvokeJson", "sessionPluginsInvokeJson"]) {
+        installObservedRuntimeMethod(name, (original, args) => {
+            const operation = args.find((value) => typeof value === "string" &&
+                ["list", "enable", "disable", "reload"].includes(value));
+            return callObservedOriginal(original, args, name, () => {
+                if (operation) emitRuntimeEvent("extension.management.completed", {
+                    operation,
+                    sessionId: opaqueRuntimeId("ses", args[0])
+                });
+            }, (error) => emitRuntimeEvent("extension.management.failed", {
+                operation,
+                sessionId: opaqueRuntimeId("ses", args[0]),
+                failureKind: error?.name ?? "Error"
+            }));
+        }, installedSeams);
+    }
+
+    installObservedRuntimeMethod("modelCliPersistPickerSelection", (original, args) => {
+        const selection = args[0] ?? {};
+        return callObservedOriginal(original, args, "modelCliPersistPickerSelection", () => {
+            emitRuntimeEvent("ui.model_picker.selection_persisted",
+                modelSelectionMetadata(selection.sessionId, selection));
+        }, (error) => emitRuntimeEvent("ui.model_picker.selection_failed", {
+            ...modelSelectionMetadata(selection.sessionId, selection),
+            failureKind: error?.name ?? "Error"
+        }));
+    }, installedSeams);
+
+    installObservedRuntimeMethod("sessionApplyModelChangeJson", (original, args) => {
+        const selection = parseRuntimeJson(args[1]) ?? {};
+        return callObservedOriginal(original, args, "sessionApplyModelChangeJson", () => {
+            emitRuntimeEvent("model.selection.applied", {
+                ...modelSelectionMetadata(args[0], selection),
+                changeCause: safeRuntimeEnum(selection.cause, ["host", "user", "resume", "startup"])
+            });
+        }, (error) => emitRuntimeEvent("model.selection.failed", {
+            ...modelSelectionMetadata(args[0], selection),
+            failureKind: error?.name ?? "Error"
+        }));
+    }, installedSeams);
+
+    installObservedRuntimeMethod("sessionModelSwitchToJson", (original, args) => {
+        const selection = parseRuntimeJson(args[1]) ?? {};
+        return callObservedOriginal(original, args, "sessionModelSwitchToJson", () => {
+            emitRuntimeEvent("model.selection.switched", modelSelectionMetadata(args[0], selection));
+        }, (error) => emitRuntimeEvent("model.selection.failed", {
+            ...modelSelectionMetadata(args[0], selection),
+            failureKind: error?.name ?? "Error"
+        }));
+    }, installedSeams);
+
+    installObservedRuntimeMethod("sessionModelSelectionSetSelectedModel", (original, args) =>
+        callObservedOriginal(original, args, "sessionModelSelectionSetSelectedModel", () => {
+            emitRuntimeEvent("model.selection.state_changed", modelSelectionMetadata(args[0], { modelId: args[1] }));
+        }), installedSeams);
+
+    installObservedRuntimeMethod("sessionModelSelectionSetReasoningEffort", (original, args) =>
+        callObservedOriginal(original, args, "sessionModelSelectionSetReasoningEffort", () => {
+            emitRuntimeEvent("model.reasoning.state_changed",
+                modelSelectionMetadata(args[0], { reasoningEffort: args[1] }));
+        }), installedSeams);
+
+    installObservedRuntimeMethod("sessionModelSelectionSetAutoTier", (original, args) =>
+        callObservedOriginal(original, args, "sessionModelSelectionSetAutoTier", () => {
+            emitRuntimeEvent("model.auto_tier.state_changed", {
+                sessionId: opaqueRuntimeId("ses", args[0]),
+                autoTier: typeof args[1] === "string" ? args[1] : undefined
+            });
+        }), installedSeams);
+
+    installObservedRuntimeMethod("sessionTaskRegisterJson", (original, args) => {
+        const task = parseRuntimeJson(args[1]) ?? {};
+        const taskId = task.id ?? task.taskId ?? task.agentId;
+        const metadata = nativeTaskMetadata(args[0], taskId, task);
+        if (taskId !== undefined) nativeTaskKinds.set(nativeTaskKey(args[0], taskId), metadata.entityKind);
+        return callObservedOriginal(original, args, "sessionTaskRegisterJson", () => {
+            emitRuntimeEvent(`${metadata.entityKind}.registered`, metadata);
+        }, (error) => emitRuntimeEvent(`${metadata.entityKind}.registration_failed`, {
+            ...metadata,
+            failureKind: error?.name ?? "Error"
+        }));
+    }, installedSeams);
+
+    installObservedRuntimeMethod("sessionTaskStartAgent", (original, args) => {
+        const metadata = nativeTaskMetadata(args[0], args[1], { type: "agent", state: "running" });
+        nativeTaskKinds.set(nativeTaskKey(args[0], args[1]), "agent");
+        emitRuntimeEvent("agent.starting", metadata);
+        return callObservedOriginal(original, args, "sessionTaskStartAgent", () => {
+            emitRuntimeEvent("agent.started", metadata);
+        }, (error) => emitRuntimeEvent("agent.failed", {
+            ...metadata,
+            failureKind: error?.name ?? "Error"
+        }));
+    }, installedSeams);
+
+    for (const [name, action, state] of [
+        ["sessionTaskCompleteJson", "completed", "completed"],
+        ["sessionTaskFailJson", "failed", "failed"],
+        ["sessionTaskCancelJson", "cancelled", "cancelled"],
+        ["sessionTaskRemoveJson", "removed", undefined]
+    ]) {
+        installObservedRuntimeMethod(name, (original, args) => {
+            const metadata = nativeTaskMetadata(args[0], args[1], { state });
+            return callObservedOriginal(original, args, name, (result) => {
+                const outcome = parseRuntimeJson(result);
+                const applied = action === "completed" || action === "failed" ||
+                    (action === "cancelled" && outcome?.cancelled === true) ||
+                    (action === "removed" && outcome?.removed === true);
+                emitRuntimeEvent(`${metadata.entityKind}.${applied ? action : `${action}_not_applied`}`, metadata);
+                if (action === "removed" && applied) nativeTaskKinds.delete(nativeTaskKey(args[0], args[1]));
+            }, (error) => emitRuntimeEvent(`${metadata.entityKind}.${action}_failed`, {
+                ...metadata,
+                failureKind: error?.name ?? "Error"
+            }));
+        }, installedSeams);
+    }
+
+    installObservedRuntimeMethod("sessionDispatchTaskTransitionFlow", (original, args) =>
+        callObservedOriginal(original, args, "sessionDispatchTaskTransitionFlow", () => {
+            emitRuntimeEvent("task.transition", {
+                sessionId: opaqueRuntimeId("ses", args[0]),
+                transitionKind: typeof args[1] === "string" && /^[a-z0-9._-]{1,64}$/i.test(args[1])
+                    ? args[1] : undefined
+            });
+        }), installedSeams);
+
+    installObservedRuntimeMethod("sessionStartSubagentWithHost", (original, args) => {
+        const details = parseRuntimeJson(args[1]) ?? {};
+        const metadata = {
+            sessionId: opaqueRuntimeId("ses", args[0]),
+            agentId: opaqueRuntimeId("agt", details.agentId ?? details.taskRegistryAgentId)
+        };
+        emitRuntimeEvent("agent.starting", metadata);
+        return callObservedOriginal(original, args, "sessionStartSubagentWithHost", () => {
+            emitRuntimeEvent("agent.started", metadata);
+        }, (error) => emitRuntimeEvent("agent.failed", {
+            ...metadata,
+            failureKind: error?.name ?? "Error"
+        }));
+    }, installedSeams);
+
+    installObservedRuntimeMethod("sessionPlanSubagentCompletionJson", (original, args) => {
+        const details = parseRuntimeJson(args[2]) ?? {};
+        const metadata = {
+            sessionId: opaqueRuntimeId("ses", args[0]),
+            agentId: opaqueRuntimeId("agt", details.agentId),
+            cancelled: details.cancelled === true,
+            modelId: typeof details.modelOverride === "string" ? details.modelOverride : undefined
+        };
+        return callObservedOriginal(original, args, "sessionPlanSubagentCompletionJson", (result) => {
+            const completion = parseRuntimeJson(result);
+            emitRuntimeEvent(completion?.failed === true ? "agent.failed" : "agent.completed", metadata);
+        }, (error) => emitRuntimeEvent("agent.failed", {
+            ...metadata,
+            failureKind: error?.name ?? "Error"
+        }));
+    }, installedSeams);
+
+    installObservedRuntimeMethod("sessionMarkSubagentFailed", (original, args) =>
+        callObservedOriginal(original, args, "sessionMarkSubagentFailed", () => {
+            emitRuntimeEvent("agent.failed", { sessionId: opaqueRuntimeId("ses", args[0]) });
+        }), installedSeams);
+
+    emitRuntimeEvent("runtime.seams.installed", {
+        runtimeVersion: copilotPackageVersion,
+        seamCount: installedSeams.length,
+        seams: installedSeams
+    });
+}
+
 function installPickerBridge() {
     const originalMergeModelMetadata = runtime.sessionByokMergeModelMetadataEntries.bind(runtime);
     runtime.sessionByokMergeModelMetadataEntries = (sessionId, models) => {
@@ -226,9 +985,15 @@ function installPickerBridge() {
         constructor(options) {
             const inner = new OriginalPickerHandle(options);
             const sessionId = options.sessionId;
+            let opened = false;
+            const pickerMetadata = {
+                sessionId: opaqueRuntimeId("ses", sessionId),
+                targetKind: safeRuntimeEnum(options.targetKind,
+                    ["session", "plan", "repo", "local", "subagent-agent"])
+            };
             const snapshot = () => {
                 const projection = inner.snapshot();
-                return {
+                const augmented = {
                     ...projection,
                     rows: projection.rows.map((row) => {
                         const metadata = metadataFor(row.value);
@@ -243,28 +1008,69 @@ function installPickerBridge() {
                         };
                     })
                 };
+                if (!opened) {
+                    opened = true;
+                    emitRuntimeEvent("ui.model_picker.opened", {
+                        ...pickerMetadata,
+                        rowCount: augmented.rows.length
+                    });
+                }
+                return augmented;
             };
             return new Proxy(inner, {
                 get(target, property, receiver) {
                     if (property === "snapshot") return snapshot;
                     if (property === "setReasoningEffort") {
                         return (selectionId, effort) => {
-                            if (!adapterFor(selectionId)) return target.setReasoningEffort(selectionId, effort);
+                            const metadata = {
+                                ...pickerMetadata,
+                                modelId: selectionId,
+                                reasoningEffort: safeRuntimeEnum(effort,
+                                    ["minimal", "low", "medium", "high", "xhigh", "max"]),
+                                customModel: Boolean(adapterFor(selectionId))
+                            };
+                            if (!adapterFor(selectionId)) {
+                                const result = target.setReasoningEffort(selectionId, effort);
+                                return finishObservedRuntimeCall(result, "CliModelPickerHandle.setReasoningEffort", () => {
+                                    emitRuntimeEvent("ui.model_picker.reasoning_changed", metadata);
+                                });
+                            }
                             effortOverrides.set(selectionId, effort);
+                            emitRuntimeEvent("ui.model_picker.reasoning_changed", metadata);
                             return snapshot();
                         };
                     }
                     if (property === "setContextTier") {
                         return (selectionId, contextWindowTokens) => {
-                            if (!adapterFor(selectionId)) {
-                                return target.setContextTier(selectionId, contextWindowTokens);
+                            const customModel = Boolean(adapterFor(selectionId));
+                            const metadata = {
+                                ...pickerMetadata,
+                                modelId: selectionId,
+                                customModel,
+                                ...(customModel
+                                    ? { contextWindowTokens: Number(contextWindowTokens) }
+                                    : { contextTier: typeof contextWindowTokens === "string" ? contextWindowTokens : undefined })
+                            };
+                            if (!customModel) {
+                                const result = target.setContextTier(selectionId, contextWindowTokens);
+                                return finishObservedRuntimeCall(result, "CliModelPickerHandle.setContextTier", () => {
+                                    emitRuntimeEvent("ui.model_picker.context_changed", metadata);
+                                });
                             }
                             contextOverrides.set(
                                 contextOverrideKey(sessionId, selectionId),
                                 Number(contextWindowTokens)
                             );
+                            emitRuntimeEvent("ui.model_picker.context_changed", metadata);
                             return snapshot();
                         };
+                    }
+                    if (property === "dispose" && typeof target.dispose === "function") {
+                        return (...args) => finishObservedRuntimeCall(
+                            target.dispose(...args),
+                            "CliModelPickerHandle.dispose",
+                            () => emitRuntimeEvent("ui.model_picker.closed", pickerMetadata)
+                        );
                     }
                     const value = Reflect.get(target, property, receiver);
                     return typeof value === "function" ? value.bind(target) : value;
@@ -355,7 +1161,18 @@ function installPickerBridge() {
                 }
             }
         };
-        return originalModelSwitchTo(sessionId, typeof request === "string" ? JSON.stringify(enriched) : enriched);
+        const result = originalModelSwitchTo(
+            sessionId,
+            typeof request === "string" ? JSON.stringify(enriched) : enriched
+        );
+        return finishObservedRuntimeCall(result, "contextCapabilityOverride", () => {
+            emitRuntimeEvent("model.context.capability_override", {
+                sessionId: opaqueRuntimeId("ses", sessionId),
+                modelId: parsed?.modelId,
+                contextWindowTokens: override.maxContextWindowTokens,
+                maxGenerationTokens: override.maxOutputTokens
+            });
+        });
     };
 }
 
@@ -364,6 +1181,14 @@ function registerModelPickerAdapter(adapter) {
         throw new Error("A model picker adapter must define matches() and upstreamModelId().");
     }
     pickerAdapters.push(adapter);
+    let selectionIds = [];
+    try { selectionIds = adapter.selectionIds?.() ?? []; }
+    catch (error) { reportInstrumentationFailure("registerModelPickerAdapter", error); }
+    emitRuntimeEvent("model.adapter.registered", {
+        adapterIndex: pickerAdapters.length,
+        selectionCount: Array.isArray(selectionIds) ? selectionIds.length : 0,
+        modelIds: Array.isArray(selectionIds) ? selectionIds : []
+    });
     if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
         process.stderr.write(`[runtime-extension-host] registered picker adapter ${pickerAdapters.length}\n`);
     }
@@ -422,12 +1247,28 @@ function parseJsonc(text) {
     return JSON.parse(output.replace(/,\s*([}\]])/g, "$1"));
 }
 
+function runtimeExtensionApi(pluginRoot) {
+    return {
+        runtime,
+        pluginRoot,
+        registerModelPickerAdapter,
+        registerAppSourceTransform,
+        registerExternalTaskProvider,
+        registerRuntimeObserver,
+        getRuntimeObserverDiagnostics,
+        externalTaskSnapshot,
+        invokeExternalTask,
+        getContextCapabilityOverride: (selectionId) => contextCapabilityOverride(null, selectionId)
+    };
+}
+
 async function loadRuntimeExtensions() {
     const configPath = join(process.env.COPILOT_HOME ?? join(process.env.USERPROFILE ?? "", ".copilot"), "config.json");
     let config;
     try {
         config = parseJsonc(await readFile(configPath, "utf8"));
     } catch (error) {
+        emitRuntimeEvent("extension.configuration.failed", { failureKind: error?.name ?? "Error" });
         if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
             process.stderr.write(`[runtime-extension-host] config load failed: ${error?.message ?? String(error)}\n`);
         }
@@ -435,66 +1276,90 @@ async function loadRuntimeExtensions() {
     }
     for (const plugin of config.installedPlugins ?? []) {
         if (plugin.enabled !== true || typeof plugin.cache_path !== "string") continue;
+        const metadata = {
+            extensionId: safeRuntimeIdentifier(plugin.name, "ext"),
+            version: typeof plugin.version === "string" ? plugin.version : undefined,
+            extensionKind: "copilot-runtime"
+        };
         let afterburnerManifest;
         try {
             afterburnerManifest = JSON.parse(await readFile(join(plugin.cache_path, "afterburner.json"), "utf8"));
         } catch (error) {
-            if (error?.code !== "ENOENT") throw error;
+            if (error?.code !== "ENOENT") {
+                emitRuntimeEvent("extension.discovery.failed", {
+                    ...metadata,
+                    failureKind: error?.name ?? "Error"
+                });
+                throw error;
+            }
         }
         if (afterburnerManifest) continue;
-        const relativeEntrypoint = "runtime/extension.mjs";
-        const entrypoint = join(plugin.cache_path, relativeEntrypoint);
+        const entrypoint = join(plugin.cache_path, "runtime/extension.mjs");
         try {
             await access(entrypoint, fsConstants.R_OK);
+            emitRuntimeEvent("extension.discovered", metadata);
+            emitRuntimeEvent("extension.activation.started", metadata);
             const module = await import(pathToFileURL(entrypoint).href);
             if (typeof module.activate !== "function") throw new Error("runtime/extension.mjs must export activate().");
-            await module.activate({
-                runtime,
-                pluginRoot: plugin.cache_path,
-                registerModelPickerAdapter,
-                registerAppSourceTransform,
-                registerExternalTaskProvider,
-                externalTaskSnapshot,
-                invokeExternalTask,
-                getContextCapabilityOverride: (selectionId) =>
-                    contextCapabilityOverride(null, selectionId)
-            });
+            await module.activate(runtimeExtensionApi(plugin.cache_path));
+            emitRuntimeEvent("extension.activated", metadata);
             if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
                 process.stderr.write(`[runtime-extension-host] activated '${plugin.name}'\n`);
             }
         } catch (error) {
             if (error?.code !== "ENOENT") {
+                emitRuntimeEvent("extension.failed", {
+                    ...metadata,
+                    failureKind: error?.name ?? "Error"
+                });
                 process.stderr.write(`Warning: runtime extension '${plugin.name}' failed: ${error?.message ?? String(error)}\n`);
             }
         }
     }
     const registryPath = join(process.env.AFTERBURNER_HOME ?? join(process.env.USERPROFILE ?? "", ".afterburner"),
         "registry.json");
+    let registry;
     try {
-        const registry = JSON.parse(await readFile(registryPath, "utf8"));
-        for (const [id, entry] of Object.entries(registry.extensions ?? {})) {
-            if (entry?.enabled !== true || typeof entry.activePath !== "string") continue;
+        registry = JSON.parse(await readFile(registryPath, "utf8"));
+    } catch (error) {
+        if (error?.code !== "ENOENT") {
+            emitRuntimeEvent("extension.failed", {
+                extensionKind: "afterburner-registry",
+                failureKind: error?.name ?? "Error"
+            });
+            process.stderr.write(`Warning: Afterburner extension registry failed: ${error?.message ?? String(error)}\n`);
+        }
+        registry = { extensions: {} };
+    }
+    for (const [id, entry] of Object.entries(registry.extensions ?? {})) {
+        if (entry?.enabled !== true || typeof entry.activePath !== "string") continue;
+        let metadata = {
+            extensionId: safeRuntimeIdentifier(id, "ext"),
+            extensionKind: "afterburner"
+        };
+        try {
             const manifest = JSON.parse(await readFile(join(entry.activePath, "afterburner.json"), "utf8"));
+            metadata = {
+                ...metadata,
+                version: typeof manifest.version === "string" ? manifest.version : undefined
+            };
+            emitRuntimeEvent("extension.discovered", metadata);
+            emitRuntimeEvent("extension.activation.started", metadata);
             const entrypoint = join(entry.activePath, manifest.runtime.entrypoint);
             const module = await import(pathToFileURL(entrypoint).href);
             if (typeof module.activate !== "function")
                 throw new Error(`Afterburner extension '${id}' must export activate().`);
-            await module.activate({
-                runtime,
-                pluginRoot: entry.activePath,
-                registerModelPickerAdapter,
-                registerAppSourceTransform,
-                registerExternalTaskProvider,
-                externalTaskSnapshot,
-                invokeExternalTask,
-                getContextCapabilityOverride: selectionId => contextCapabilityOverride(null, selectionId)
-            });
+            await module.activate(runtimeExtensionApi(entry.activePath));
+            emitRuntimeEvent("extension.activated", metadata);
             if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1")
                 process.stderr.write(`[runtime-extension-host] activated Afterburner extension '${id}'\n`);
+        } catch (error) {
+            emitRuntimeEvent("extension.failed", {
+                ...metadata,
+                failureKind: error?.name ?? "Error"
+            });
+            process.stderr.write(`Warning: Afterburner extension '${id}' failed: ${error?.message ?? String(error)}\n`);
         }
-    } catch (error) {
-        if (error?.code !== "ENOENT")
-            process.stderr.write(`Warning: Afterburner extension registry failed: ${error?.message ?? String(error)}\n`);
     }
 }
 
@@ -512,9 +1377,36 @@ async function transformedAppPath() {
     return outputPath;
 }
 
+installRuntimeObserverSeams();
 installPickerBridge();
 await loadRuntimeExtensions();
+runtimeBootstrapSealed = true;
+const runtimeBootstrapLastSequence = runtimeEventSequence;
+process.once("exit", disposeRuntimeObservers);
 if (process.env.COPILOT_RUNTIME_EXTENSION_SELF_TEST === "1") {
+    const observerEvents = [];
+    let observerDisposeCount = 0;
+    const unregisterSelfTestObserver = registerRuntimeObserver({
+        id: "afterburner-self-test",
+        onEvent: (event) => {
+            observerEvents.push(event);
+            if (!Object.isFrozen(event) || !Object.isFrozen(event.metadata)) {
+                throw new Error("Runtime observer received a mutable event.");
+            }
+        },
+        dispose: () => { observerDisposeCount++; }
+    });
+    const unregisterFailingObserver = registerRuntimeObserver({
+        id: "afterburner-self-test-failure",
+        eventTypes: ["runtime.self_test.probe"],
+        onEvent: () => { throw new Error("Expected observer isolation probe."); }
+    });
+    let copiedProbeEvent;
+    const unregisterCopyObserver = registerRuntimeObserver({
+        id: "afterburner-self-test-copy",
+        eventTypes: ["runtime.self_test.probe"],
+        onEvent: (event) => { copiedProbeEvent = event; }
+    });
     const rows = pickerAdapters.flatMap((adapter) =>
         (adapter.selectionIds?.() ?? []).map((selectionId) => ({
             value: selectionId,
@@ -561,17 +1453,68 @@ if (process.env.COPILOT_RUNTIME_EXTENSION_SELF_TEST === "1") {
             { value: "native/model", contextTier }
         )
     );
+    const externalTasks = await externalTaskSnapshot();
+    const externalTaskRead = externalTasks.length > 0
+        ? await invokeExternalTask(externalTasks[0].nativeId, "read")
+        : null;
+    await flushRuntimeObservers();
+    let releaseBackpressure;
+    const backpressure = new Promise((resolve) => { releaseBackpressure = resolve; });
+    const unregisterBackpressureObserver = registerRuntimeObserver({
+        id: "afterburner-self-test-backpressure",
+        eventTypes: ["runtime.self_test.backpressure"],
+        onEvent: () => backpressure
+    });
+    for (let index = 0; index < runtimeObserverQueueLimit + 16; index++) {
+        emitRuntimeEvent("runtime.self_test.backpressure", { index });
+    }
+    releaseBackpressure();
+    await flushRuntimeObservers();
+    emitRuntimeEvent("runtime.self_test.probe", {
+        modelId: "self-test/model",
+        state: "ready",
+        prompt: "must-not-be-observed"
+    });
+    await flushRuntimeObservers();
+    const observerDiagnostics = getRuntimeObserverDiagnostics();
+    const observerProbeEvent = observerEvents.find((event) => event.type === "runtime.self_test.probe");
+    const observerProbe = {
+        immutable: observerEvents.every((event) => Object.isFrozen(event) && Object.isFrozen(event.metadata)),
+        independentCopies: observerProbeEvent !== undefined && copiedProbeEvent !== undefined &&
+            observerProbeEvent !== copiedProbeEvent && observerProbeEvent.metadata !== copiedProbeEvent.metadata,
+        monotonic: observerEvents.every((event, index) => index === 0 || event.sequence > observerEvents[index - 1].sequence),
+        sensitiveMetadataRemoved: observerProbeEvent !== undefined && !("prompt" in observerProbeEvent.metadata),
+        bootstrapReplayCount: observerEvents.filter((event) =>
+            event.sequence <= runtimeBootstrapLastSequence).length
+    };
+    unregisterBackpressureObserver();
+    unregisterCopyObserver();
+    unregisterFailingObserver();
+    unregisterSelfTestObserver();
+    const disposedSelfTestObserver = unregisterSelfTestObserver.diagnostics();
     process.stdout.write(`${JSON.stringify({
         projection,
         contextCycles,
         capabilityOverrides,
         nativeContextNavigation,
-        externalTasks: await externalTaskSnapshot(),
+        externalTasks,
         externalTaskRevision,
-        externalTaskRead: externalTaskProviders.size > 0
-            ? await invokeExternalTask((await externalTaskSnapshot())[0].nativeId, "read")
-            : null
+        externalTaskRead,
+        runtimeObservers: {
+            events: observerEvents
+                .filter((event) => event.type !== "runtime.self_test.backpressure")
+                .slice(-32),
+            diagnostics: observerDiagnostics,
+            probe: observerProbe,
+            disposedSelfTestObserver,
+            disposeCount: observerDisposeCount
+        }
     }, null, 2)}\n`);
     process.exit(0);
-}globalThis.__copilotRuntimeAddon__ = { addon: runtime, processStateInitialized: false };
+}globalThis.__copilotRuntimeAddon__ = {
+    addon: runtime,
+    processStateInitialized: false,
+    registerRuntimeObserver,
+    getRuntimeObserverDiagnostics
+};
 await import(pathToFileURL(await transformedAppPath()).href);

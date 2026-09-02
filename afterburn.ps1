@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rawArguments = @($args)
-$managementCommands = @("install", "extension", "version", "help", "doctor")
+$managementCommands = @("install", "enable", "disable", "uninstall", "extension", "version", "help", "doctor")
 $command = if ($rawArguments.Count -eq 0) { "run" } else { $rawArguments[0] }
 $arguments = if ($rawArguments.Count -gt 1) { @($rawArguments[1..($rawArguments.Count - 1)]) } else { @() }
 
@@ -12,7 +12,10 @@ Afterburn - GitHub Copilot CLI with trusted Afterburner extensions
 Usage:
   afterburn
   afterburn [copilot arguments]
-  afterburn install
+  afterburn install [id...]
+  afterburn enable <id...>
+  afterburn disable <id...>
+  afterburn uninstall <id...>
   afterburn extension install <source>
   afterburn extension update <id>
   afterburn extension update --all
@@ -39,41 +42,19 @@ function Initialize-ManagedHome([string]$managedHome) {
 }
 
 function Register-ManagedSessionExtensions {
-    $registryPath = Join-Path ($env:AFTERBURNER_HOME ?? (Join-Path $env:USERPROFILE ".afterburner")) "registry.json"
-    if (!(Test-Path $registryPath)) { return }
-    $registry = Get-Content $registryPath -Raw | ConvertFrom-Json
-    foreach ($extension in $registry.extensions.PSObject.Properties.Value) {
-        if (!$extension.enabled -or !$extension.manifest.sessionExtension) { continue }
-        $pluginManifestPath = Join-Path $extension.activePath "plugin.json"
-        if (!(Test-Path $pluginManifestPath)) {
-            throw "Session component for '$($extension.manifest.id)' is missing plugin.json."
-        }
-        $pluginManifest = Get-Content $pluginManifestPath -Raw | ConvertFrom-Json
-        $managedConfigPath = Join-Path $env:COPILOT_HOME "config.json"
-        $managedConfig = if (Test-Path $managedConfigPath) {
-            Get-Content $managedConfigPath -Raw | ConvertFrom-Json
-        } else {
-            [pscustomobject]@{}
-        }
-        if (!$managedConfig.PSObject.Properties["installedPlugins"]) {
-            $managedConfig | Add-Member -NotePropertyName installedPlugins -NotePropertyValue @()
-        }
-        $managedConfig.installedPlugins = @(
-            $managedConfig.installedPlugins | Where-Object { $_.name -ne $pluginManifest.name }
-        ) + [pscustomobject]@{
-            name = $pluginManifest.name
-            marketplace = ""
-            version = $pluginManifest.version
-            installed_at = (Get-Date).ToUniversalTime().ToString("o")
-            cache_path = $extension.activePath
-            enabled = $true
-            source = [pscustomobject]@{
-                source = "local"
-                path = $extension.activePath
-            }
-        }
-        $managedConfig | ConvertTo-Json -Depth 20 | Set-Content $managedConfigPath
-    }
+    $managedConfigPath = Join-Path $env:COPILOT_HOME "config.json"
+    & node (Join-Path $root "src\extension-manager.mjs") reconcile-session $managedConfigPath
+    if ($LASTEXITCODE -ne 0) { throw "Failed to reconcile Afterburner-managed session extensions." }
+}
+
+function Invoke-BuiltInLifecycle([string]$action, [string[]]$ids) {
+    $managerArguments = @(
+        (Join-Path $root "src\extension-manager.mjs"),
+        "$action-builtins",
+        (Join-Path $root "extensions")
+    ) + $ids
+    & node @managerArguments
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 if ($command.StartsWith("-") -or $managementCommands -notcontains $command) {
@@ -83,7 +64,7 @@ if ($command.StartsWith("-") -or $managementCommands -notcontains $command) {
 
 switch ($command) {
     "run" {
-        $afterburnerHome = $env:AFTERBURNER_HOME ?? (Join-Path $env:USERPROFILE ".afterburner")
+        $afterburnerHome = if ($env:AFTERBURNER_HOME) { $env:AFTERBURNER_HOME } else { Join-Path $env:USERPROFILE ".afterburner" }
         $managedHome = Join-Path $afterburnerHome "copilot-home"
         Initialize-ManagedHome $managedHome
         if (!$env:AFTERBURNER_BYOMODELS_CONFIG) {
@@ -103,17 +84,33 @@ switch ($command) {
         }
         exit $exitCode
     }
-    "install" { & (Join-Path $root "scripts\install.ps1") -InstallRuntime:$false; exit $LASTEXITCODE }
-    "extension" { & node (Join-Path $root "src\extension-manager.mjs") @arguments; exit $LASTEXITCODE }
+    "install" {
+        & (Join-Path $root "scripts\install.ps1") -InstallRuntime:$false -BuiltInIds $arguments
+        exit $LASTEXITCODE
+    }
+    "enable" { Invoke-BuiltInLifecycle "enable" $arguments; exit 0 }
+    "disable" { Invoke-BuiltInLifecycle "disable" $arguments; exit 0 }
+    "uninstall" { Invoke-BuiltInLifecycle "uninstall" $arguments; exit 0 }
+    "extension" { & node (Join-Path $root "src\extension-manager.mjs") $arguments; exit $LASTEXITCODE }
     "doctor" {
         $failed = $false
         foreach ($tool in @("copilot", "node")) {
             if (Get-Command $tool -ErrorAction SilentlyContinue) { Write-Output "OK  $tool found." }
             else { Write-Error "$tool is unavailable."; $failed = $true }
         }
-        $config = $env:AFTERBURNER_BYOMODELS_CONFIG ?? (Join-Path $env:USERPROFILE ".afterburner\config\byomodels.json")
-        if (Test-Path $config) { Write-Output "OK  BYOModels config: $config" }
-        else { Write-Error "BYOModels config is missing: $config"; $failed = $true }
+        $afterburnerHome = if ($env:AFTERBURNER_HOME) { $env:AFTERBURNER_HOME } else { Join-Path $env:USERPROFILE ".afterburner" }
+        $registryPath = Join-Path $afterburnerHome "registry.json"
+        $byoModelsInstalled = $false
+        if (Test-Path $registryPath) {
+            $registry = Get-Content $registryPath -Raw | ConvertFrom-Json
+            $byoModelsInstalled = $null -ne $registry.extensions.PSObject.Properties["byo-models"] -or
+                $null -ne $registry.extensions.PSObject.Properties["byomodels"]
+        }
+        if ($byoModelsInstalled) {
+            $config = if ($env:AFTERBURNER_BYOMODELS_CONFIG) { $env:AFTERBURNER_BYOMODELS_CONFIG } else { Join-Path $afterburnerHome "config\byomodels.json" }
+            if (Test-Path $config) { Write-Output "OK  BYOModels config: $config" }
+            else { Write-Error "BYOModels config is missing: $config"; $failed = $true }
+        }
         & node (Join-Path $root "src\extension-manager.mjs") list
         if ($failed) { exit 1 }
     }

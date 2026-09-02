@@ -54,6 +54,23 @@ created.
 exposed by `runtime.node`. Transforms receive the original bundled application source and run before
 the application is imported. They should fail closed when expected source anchors are absent.
 
+Runtime extensions can also register bounded metadata observers:
+
+```js
+const unregister = registerRuntimeObserver({
+  id: "example-observer",
+  eventTypes: ["model.selection.applied", "task.transition"],
+  onEvent: async event => {
+    // schemaVersion, sequence, timestamp, type, and sanitized metadata only
+  }
+});
+```
+
+The host removes body-bearing fields such as prompts, messages, source, tool arguments/results,
+credentials, and summaries before delivery. Each observer has an isolated bounded queue, bootstrap
+replay, drop counters, and failure containment. `getRuntimeObserverDiagnostics()` returns aggregate
+observer health without exposing captured content.
+
 ## Install and upgrade from source
 
 Clone or update the source checkout, bootstrap the standalone command, and let Afterburner install
@@ -75,10 +92,19 @@ git pull --ff-only
 afterburn install
 ```
 
-`install-cli.ps1` refreshes the application files and PATH shim. `afterburn install` is the single
-Afterburner-specific package setup command: it installs and enables the built-in BYOModels extension
-without requiring a direct `copilot plugin install`. Existing files under `~\.afterburner\config`
-are preserved.
+`install-cli.ps1` refreshes the core application files and PATH shim. `afterburn install` installs
+and enables every built-in extension. Built-ins can also be managed selectively:
+
+```powershell
+afterburn install byo-models
+afterburn install black-box
+afterburn enable black-box
+afterburn disable black-box
+afterburn uninstall black-box
+```
+
+`uninstall` removes package registration and immutable package caches, but preserves user-owned
+configuration and extension data. No built-in requires a direct `copilot plugin install`.
 
 Normal `copilot` invocations remain untouched and load no Afterburner runtime code. Use `afterburn`
 whenever you explicitly want an Afterburner-managed Copilot session. The launcher prepares the
@@ -116,7 +142,8 @@ under `~\.afterburner\extension-data` are never copied from or deleted with pack
 ├── app\                 Installed application files
 ├── bin\                 The afterburn launcher
 ├── config\              User-owned configuration
-│   └── byomodels.json   Default BYOModels configuration
+│   ├── byomodels.json   BYOModels configuration (name retained across ID migration)
+│   └── black-box.json   Black Box recording and byte-retention settings
 ├── extensions\          Installed extension packages
 ├── extension-data\      Extension-owned durable state
 ├── copilot-home\        Isolated managed Copilot state
@@ -126,10 +153,12 @@ under `~\.afterburner\extension-data` are never copied from or deleted with pack
 Installers may create missing example configuration, but never overwrite an existing user-owned
 file during installation or upgrade.
 
-## Built-in BYOModels setup
+## Built-in extensions
 
-`extensions/BYOModels` is the singular built-in Afterburner extension. After running
-`afterburn install`, configure it at:
+### BYOModels
+
+`extensions/BYOModels` provides first-class custom model registration and picker controls. Its public
+built-in ID is `byo-models`. After installing it, configure:
 
 ```text
 ~\.afterburner\config\byomodels.json
@@ -142,6 +171,16 @@ environment variables.
 
 See [`extensions/BYOModels/README.md`](extensions/BYOModels/README.md) for the complete schema,
 authentication options, model mapping, picker controls, upgrade procedure, and compatibility notes.
+
+### Black Box
+
+`extensions/BlackBox` records bounded operational metadata for extension, model, context, tool,
+agent/task, and UI activity. It enriches Copilot's native session event storage rather than copying
+prompt, response, source, tool argument/result, or summary bodies. Data is stored under
+`~\.afterburner\extension-data\black-box` and rotated strictly by configurable byte volume.
+
+Commands include `/black-box`, `/black-box-tail`, `/black-box-tail-stop`, `/black-box-export`, and `/black-box-doctor`.
+See [`extensions/BlackBox/README.md`](extensions/BlackBox/README.md) for storage and export details.
 
 ## Test
 

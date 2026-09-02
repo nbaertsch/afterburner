@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nbaertsch/afterburner/extensions/BlackBox/schemas/metadata-record.schema.json",
+  "title": "Afterburner Black Box metadata record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "recordId", "kind", "timestamp", "observedAt", "eventType", "severity", "source", "correlation", "attributes", "bodyReferences"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "recordId": { "type": "string", "pattern": "^rec_[a-f0-9]{24}$" },
+    "kind": { "enum": ["event", "milestone", "anomaly", "aggregate", "drop"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "observedAt": { "type": "string", "format": "date-time" },
+    "eventType": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,95}$" },
+    "severity": { "enum": ["info", "warning", "error"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["runtime-observer", "native-events", "black-box"] },
+        "processRef": { "type": "string", "pattern": "^ref_[a-f0-9]{24}$" },
+        "sessionRef": { "type": "string", "pattern": "^ref_[a-f0-9]{24}$" },
+        "pathRef": { "type": "string", "pattern": "^ref_[a-f0-9]{24}$" },
+        "byteStart": { "type": "integer", "minimum": 0 },
+        "byteEnd": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "correlation": {
+      "type": "object",
+      "propertyNames": {
+        "enum": ["eventRef", "parentRef", "turnRef", "interactionRef", "toolCallRef", "modelCallRef", "requestRef"]
+      },
+      "additionalProperties": { "type": "string", "pattern": "^ref_[a-f0-9]{24}$" }
+    },
+    "attributes": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(model|previousModel|newModel|toolName|phase|success|rte|delivery|hookType|mode|previousMode|cause|changeSource|contextTier|reasoningEffort|previousReasoningEffort|shutdownType|errorType|warningType|infoType|statusCode|turn|toolCount|eventCount|eventsFileSizeBytes|version|alreadyInUse|remoteSteerable|totalNanoAiu|totalPremiumRequests|conversationTokens|currentTokens|systemTokens|toolDefinitionsTokens|totalApiDurationMs|modelCallDurationMs|ttftMs|outputTtftMs|interTokenLatencyMs|durationMs|averageToolDurationMs|maxToolDurationMs|totalRecords|toolStartCount|toolCompleteCount|toolFailureCount|assistantTurnCount|modelCallCount|anomalyCount|milestoneCount|dropCount|droppedBytes|segmentCount|segmentBytes|queueRecords|queueBytes|anomalyCode|milestoneCode|relatedEventType|detailCode|fileCount|linesAdded|linesRemoved|initiator|transport|(usage|quota|metrics|codeChanges)\\.[A-Za-z0-9_.-]{1,80})$"
+      },
+      "additionalProperties": {
+        "type": ["string", "number", "boolean", "null"]
+      },
+      "maxProperties": 96
+    },
+    "bodyReferences": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["field"],
+        "properties": {
+          "field": { "type": "string", "maxLength": 160 },
+          "byteLength": { "type": "integer", "minimum": 0 },
+          "itemCount": { "type": "integer", "minimum": 0 },
+          "fieldCount": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

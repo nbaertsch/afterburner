@@ -1,7 +1,7 @@
 {
   "$schema": "../../schemas/extension-v1.schema.json",
   "schemaVersion": 1,
-  "id": "byomodels",
+  "id": "byo-models",
   "displayName": "BYOModels",
   "description": "Adds first-class picker metadata, context controls, and request compatibility for user-configured models.",
   "visibility": "builtin",

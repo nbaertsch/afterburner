@@ -1,37 +1,41 @@
-param([switch]$InstallRuntime = $true)
+param(
+    [switch]$InstallRuntime = $true,
+    [string[]]$BuiltInIds = @()
+)
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$platform = "win32-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())"
-if ($platform -eq "win32-x64") {
-    $platform = "win32-x64"
-} elseif ($platform -eq "win32-arm64") {
-    $platform = "win32-arm64"
-} else {
-    throw "Afterburner currently supports Windows x64 and arm64."
-}
-
-$copilotHome = if ($env:COPILOT_HOME) { $env:COPILOT_HOME } else { Join-Path $HOME ".copilot" }
-$packageRoot = Join-Path $copilotHome "pkg\$platform"
-$target = Join-Path $packageRoot "9999.0.0-afterburner"
 
 if ($InstallRuntime) {
     & (Join-Path $PSScriptRoot "prepare-runtime.ps1")
 }
 
-& node (Join-Path $projectRoot "src\extension-manager.mjs") install (Join-Path $projectRoot "extensions\BYOModels")
-if ($LASTEXITCODE -ne 0) { throw "Failed to install the built-in BYOModels extension." }
-& node (Join-Path $projectRoot "src\extension-manager.mjs") enable byomodels
-if ($LASTEXITCODE -ne 0) { throw "Failed to enable the built-in BYOModels extension." }
+$managerArguments = @(
+    (Join-Path $projectRoot "src\extension-manager.mjs"),
+    "install-builtins",
+    (Join-Path $projectRoot "extensions")
+) + $BuiltInIds
+& node @managerArguments
+if ($LASTEXITCODE -ne 0) { throw "Failed to install the requested built-in Afterburner extensions." }
 
+$installByoModels = $BuiltInIds.Count -eq 0 -or @($BuiltInIds | Where-Object { $_ -in @("byo-models", "byomodels") }).Count -gt 0
 $afterburnerHome = if ($env:AFTERBURNER_HOME) { $env:AFTERBURNER_HOME } else { Join-Path $HOME ".afterburner" }
 $configDirectory = Join-Path $afterburnerHome "config"
-$configPath = Join-Path $configDirectory "byomodels.json"
 New-Item -ItemType Directory -Force $configDirectory | Out-Null
-if (!(Test-Path $configPath)) {
-    Copy-Item (Join-Path $projectRoot "extensions\BYOModels\extensions\BYOModels\models.example.json") $configPath
-    Write-Warning "Created example BYOModels configuration at $configPath. Customize it before launching Afterburn."
+if ($installByoModels) {
+    $configPath = Join-Path $configDirectory "byomodels.json"
+    if (!(Test-Path $configPath)) {
+        Copy-Item (Join-Path $projectRoot "extensions\BYOModels\extensions\BYOModels\models.example.json") $configPath
+        Write-Warning "Created example BYOModels configuration at $configPath. Customize it before launching Afterburn."
+    }
+}
+$installBlackBox = $BuiltInIds.Count -eq 0 -or @($BuiltInIds | Where-Object { $_ -eq "black-box" }).Count -gt 0
+if ($installBlackBox) {
+    $blackBoxConfigPath = Join-Path $configDirectory "black-box.json"
+    if (!(Test-Path $blackBoxConfigPath)) {
+        Copy-Item (Join-Path $projectRoot "extensions\BlackBox\config.example.json") $blackBoxConfigPath
+        Write-Output "Created Black Box configuration at $blackBoxConfigPath."
+    }
 }
 
-Write-Output "Installed built-in Afterburner extension: BYOModels"
 Write-Output "Run 'afterburn' to start an Afterburner-managed Copilot session."

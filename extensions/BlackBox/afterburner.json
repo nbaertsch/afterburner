@@ -1,0 +1,25 @@
+{
+  "$schema": "../../schemas/extension-v1.schema.json",
+  "schemaVersion": 1,
+  "id": "black-box",
+  "displayName": "Black Box",
+  "description": "Records a bounded, metadata-only operational timeline for Afterburner-managed Copilot sessions.",
+  "visibility": "builtin",
+  "requires": {
+    "afterburner": ">=0.1.0 <1.0.0",
+    "copilotCli": [">=1.0.83-1 <1.0.84"]
+  },
+  "runtime": {
+    "entrypoint": "runtime/extension.mjs",
+    "execution": "in-process"
+  },
+  "capabilities": [
+    "runtime-observer",
+    "metadata-timeline",
+    "sanitized-export",
+    "canvas"
+  ],
+  "sessionExtension": {
+    "entrypoint": "com.github.copilot/extensions/BlackBox/extension.mjs"
+  }
+}

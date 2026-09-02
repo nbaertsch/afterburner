@@ -7,12 +7,14 @@ reasoning controls. It is installed and upgraded as part of Afterburner; do not 
 
 ## Setup
 
-From an Afterburner source checkout, install or refresh the CLI, then install the built-in package:
+From an Afterburner source checkout, install or refresh the CLI, then install this built-in package:
 
 ```powershell
 .\scripts\install-cli.ps1
-afterburn install
+afterburn install byo-models
 ```
+
+Running `afterburn install` without IDs installs every built-in, including BYOModels and Black Box.
 
 `afterburn install` creates an example configuration only when no user configuration exists. It does
 not overwrite an existing file. Start the managed session with:
@@ -87,11 +89,11 @@ Never put credentials directly in the configuration file.
 Use the normal Afterburner upgrade path:
 
 ```powershell
-afterburn extension update byomodels
-afterburn extension rollback byomodels
+afterburn extension update byo-models
+afterburn extension rollback byo-models
 ```
 
-Package versions are immutable and stored under `~\.afterburner\extensions\byomodels`. User
+Package versions are immutable and stored under `~\.afterburner\extensions\byo-models`. User
 configuration remains under `~\.afterburner\config` and is not copied into, overwritten by, or
 deleted with package versions. Normal `copilot` sessions do not load BYOModels.
 
