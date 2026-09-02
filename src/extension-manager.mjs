@@ -2,8 +2,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
-const home = process.env.COPILOT_HOME ?? join(process.env.USERPROFILE ?? "", ".copilot");
-const root = join(home, "afterburner");
+const root = process.env.AFTERBURNER_HOME ?? join(process.env.USERPROFILE ?? "", ".afterburner");
 const installedRoot = join(root, "extensions");
 const registryPath = join(root, "registry.json");
 

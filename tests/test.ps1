@@ -70,20 +70,22 @@ if ($LASTEXITCODE -ne 0) {
     throw "BYOK request compatibility proxy test failed."
 }
 
-& (Join-Path $projectRoot "scripts\install.ps1") -InstallRuntime
+& (Join-Path $projectRoot "scripts\install.ps1") -InstallRuntime:$false
 
-$directVersion = copilot version | Out-String
+$directVersion = copilot version 2>&1 | Out-String
 if ($directVersion -match "runtime-extension-host") {
     throw "Normal copilot invocation unexpectedly loaded Afterburner."
 }
 
+$env:AFTERBURNER_BYOMODELS_CONFIG = Join-Path $projectRoot "extensions\BYOModels\extensions\BYOModels\models.example.json"
 $env:COPILOT_RUNTIME_EXTENSION_SELF_TEST = "1"
 try {
-    $result = copilot --prefer-version 9999.0.0-afterburner version |
+    $result = & (Join-Path $projectRoot "afterburn.ps1") --version |
         Out-String |
         ConvertFrom-Json
 } finally {
     Remove-Item Env:COPILOT_RUNTIME_EXTENSION_SELF_TEST -ErrorAction SilentlyContinue
+    Remove-Item Env:AFTERBURNER_BYOMODELS_CONFIG -ErrorAction SilentlyContinue
 }
 
 if (-not $result.projection.hasReasoningColumn) {
@@ -124,12 +126,12 @@ if (-not $nativeLong.contextCanLower -or
     throw "Native long context tier does not expose a proper left-arrow target."
 }
 
-$versionOutput = copilot version | Out-String
+$versionOutput = copilot version 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch "GitHub Copilot CLI") {
-    throw "Copilot failed to start through Afterburner."
+    throw "Normal Copilot failed to start after Afterburner."
 }
 
-$copilotHome = if ($env:COPILOT_HOME) { $env:COPILOT_HOME } else { Join-Path $HOME ".copilot" }
+$copilotHome = Join-Path $HOME ".afterburner\copilot-home"
 $transformedApp = Get-ChildItem (Join-Path $copilotHome "pkg\win32-*\*\.afterburner-app.mjs") -File |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
@@ -138,6 +140,17 @@ if (-not $transformedApp -or -not (
     (Select-String -Path $transformedApp -SimpleMatch '[j,se,$e,Q,T,P,N,R,O,Le,Ne,a,Ke])' -Quiet)
 )) {
     throw "Expected the picker row renderer to depend on the active context focus state."
+}
+
+$normalConfig = Get-Content (Join-Path $HOME ".copilot\config.json") -Raw
+if ($normalConfig -match "afterburner-byomodels|steward-burn") {
+    throw "Afterburner-managed companions leaked into normal Copilot configuration."
+}
+if (Test-Path (Join-Path $HOME ".copilot\afterburner")) {
+    throw "Afterburner registry leaked into normal Copilot home."
+}
+if (Test-Path (Join-Path $HOME ".copilot\pkg\win32-x64\9999.0.0-afterburner")) {
+    throw "Afterburner runtime leaked into normal Copilot package cache."
 }
 
 Write-Output "Afterburner tests passed."

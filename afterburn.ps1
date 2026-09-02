@@ -41,9 +41,20 @@ if (!$Command) {
 
 switch ($Command) {
     "run" {
-        & (Join-Path $root "scripts\prepare-runtime.ps1")
-        & copilot --prefer-version 9999.0.0-afterburner @Arguments
-        exit $LASTEXITCODE
+        $managedHome = Join-Path $env:USERPROFILE ".afterburner\copilot-home"
+        New-Item -ItemType Directory -Force $managedHome | Out-Null
+        $previousCopilotHome = $env:COPILOT_HOME
+        $env:COPILOT_HOME = $managedHome
+        $exitCode = 1
+        try {
+            & (Join-Path $root "scripts\prepare-runtime.ps1")
+            & copilot --prefer-version 9999.0.0-afterburner @Arguments
+            $exitCode = $LASTEXITCODE
+        } finally {
+            if ($null -eq $previousCopilotHome) { Remove-Item Env:COPILOT_HOME -ErrorAction SilentlyContinue }
+            else { $env:COPILOT_HOME = $previousCopilotHome }
+        }
+        exit $exitCode
     }
     "install" {
         & (Join-Path $root "scripts\install.ps1") -InstallRuntime:$false

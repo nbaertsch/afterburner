@@ -19,11 +19,10 @@ if ($InstallRuntime) {
     & (Join-Path $PSScriptRoot "prepare-runtime.ps1")
 }
 
-$trackedByokPlugin = Join-Path $projectRoot "extensions\BYOModels"
-& copilot plugin install $trackedByokPlugin
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to install the built-in BYOModels companion plugin."
-}
+& node (Join-Path $projectRoot "src\extension-manager.mjs") install (Join-Path $projectRoot "extensions\BYOModels")
+if ($LASTEXITCODE -ne 0) { throw "Failed to install the built-in BYOModels extension." }
+& node (Join-Path $projectRoot "src\extension-manager.mjs") enable byomodels
+if ($LASTEXITCODE -ne 0) { throw "Failed to enable the built-in BYOModels extension." }
 
-Write-Output "Installed built-in extension companion: BYOModels"
+Write-Output "Installed built-in Afterburner extension: BYOModels"
 Write-Output "Run 'afterburn' to start an Afterburner-managed Copilot session."
