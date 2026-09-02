@@ -435,6 +435,13 @@ async function loadRuntimeExtensions() {
     }
     for (const plugin of config.installedPlugins ?? []) {
         if (plugin.enabled !== true || typeof plugin.cache_path !== "string") continue;
+        let afterburnerManifest;
+        try {
+            afterburnerManifest = JSON.parse(await readFile(join(plugin.cache_path, "afterburner.json"), "utf8"));
+        } catch (error) {
+            if (error?.code !== "ENOENT") throw error;
+        }
+        if (afterburnerManifest) continue;
         const entrypoint = join(plugin.cache_path, "runtime", "extension.mjs");
         try {
             await access(entrypoint, fsConstants.R_OK);
