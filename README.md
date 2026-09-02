@@ -55,10 +55,12 @@ Install the standalone command once:
 ```powershell
 .\scripts\install-cli.ps1
 afterburner install
+afterburn
 ```
 
-Restart Copilot after installing. `copilot version` should continue to report the original CLI
-version because Afterburner delegates to the installed package.
+Normal `copilot` invocations remain untouched and load no Afterburner runtime code. Use `afterburn`
+whenever you explicitly want an Afterburner-managed Copilot session. The launcher prepares the
+side-by-side runtime package and invokes Copilot with `--prefer-version 9999.0.0-afterburner`.
 
 ## Afterburner extensions
 

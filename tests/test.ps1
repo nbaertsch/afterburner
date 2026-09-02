@@ -70,7 +70,12 @@ if ($LASTEXITCODE -ne 0) {
     throw "BYOK request compatibility proxy test failed."
 }
 
-& (Join-Path $projectRoot "scripts\install.ps1")
+& (Join-Path $projectRoot "scripts\install.ps1") -InstallRuntime
+
+$directVersion = copilot version | Out-String
+if ($directVersion -match "runtime-extension-host") {
+    throw "Normal copilot invocation unexpectedly loaded Afterburner."
+}
 
 $env:COPILOT_RUNTIME_EXTENSION_SELF_TEST = "1"
 try {

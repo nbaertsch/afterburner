@@ -1,3 +1,4 @@
+param([switch]$InstallRuntime = $true)
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -14,16 +15,9 @@ $copilotHome = if ($env:COPILOT_HOME) { $env:COPILOT_HOME } else { Join-Path $HO
 $packageRoot = Join-Path $copilotHome "pkg\$platform"
 $target = Join-Path $packageRoot "9999.0.0-afterburner"
 
-New-Item -ItemType Directory -Force $target | Out-Null
-Copy-Item (Join-Path $projectRoot "src\app.js") (Join-Path $target "app.js") -Force
-@'
-{
-  "name": "copilot-afterburner-runtime-host",
-  "version": "9999.0.0-afterburner",
-  "private": true,
-  "type": "module"
+if ($InstallRuntime) {
+    & (Join-Path $PSScriptRoot "prepare-runtime.ps1")
 }
-'@ | Set-Content -Encoding UTF8 (Join-Path $target "package.json")
 
 $trackedByokPlugin = Join-Path $projectRoot "extensions\BYOModels"
 & copilot plugin install $trackedByokPlugin
@@ -31,6 +25,5 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to install the built-in BYOModels companion plugin."
 }
 
-Write-Output "Installed Afterburner at $target"
 Write-Output "Installed built-in extension companion: BYOModels"
-Write-Output "Restart Copilot so its loader selects the Afterburner package."
+Write-Output "Run 'afterburn' to start an Afterburner-managed Copilot session."
