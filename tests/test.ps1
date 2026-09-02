@@ -172,4 +172,35 @@ if ($managedByoModels.Count -ne 1 -or
     throw "BYOModels session entrypoint is not registered from the identity-addressed Afterburner package."
 }
 
+$upgradeHome = Join-Path ([System.IO.Path]::GetTempPath()) ("afterburner-upgrade-" + [guid]::NewGuid().ToString("N"))
+$source = Join-Path $upgradeHome "source"
+$userConfig = Join-Path $upgradeHome "config\byomodels.json"
+try {
+    New-Item -ItemType Directory -Force $source, (Split-Path $userConfig -Parent) | Out-Null
+    Copy-Item (Join-Path $projectRoot "extensions\BYOModels\*") $source -Recurse
+    Set-Content $userConfig '{"userOwned":true}' -Encoding utf8
+    $env:AFTERBURNER_HOME = $upgradeHome
+    & node (Join-Path $projectRoot "src\extension-manager.mjs") install $source | Out-Null
+    & node (Join-Path $projectRoot "src\extension-manager.mjs") enable byomodels | Out-Null
+    Add-Content (Join-Path $source "package.json") " "
+    & node (Join-Path $projectRoot "src\extension-manager.mjs") update byomodels | Out-Null
+    $upgradeRegistry = Get-Content (Join-Path $upgradeHome "registry.json") -Raw | ConvertFrom-Json
+    if (!$upgradeRegistry.extensions.byomodels.enabled -or
+        !$upgradeRegistry.extensions.byomodels.previousActivePath) {
+        throw "Extension update did not preserve enablement and rollback state."
+    }
+    if ((Get-Content $userConfig -Raw).Trim() -ne '{"userOwned":true}') {
+        throw "Extension update overwrote user configuration."
+    }
+    $updatedPath = $upgradeRegistry.extensions.byomodels.activePath
+    & node (Join-Path $projectRoot "src\extension-manager.mjs") rollback byomodels | Out-Null
+    $rolledBack = Get-Content (Join-Path $upgradeHome "registry.json") -Raw | ConvertFrom-Json
+    if ($rolledBack.extensions.byomodels.previousActivePath -ne $updatedPath) {
+        throw "Extension rollback did not preserve the updated package."
+    }
+} finally {
+    Remove-Item Env:AFTERBURNER_HOME -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $upgradeHome -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Output "Afterburner tests passed."

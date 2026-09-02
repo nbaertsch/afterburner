@@ -77,6 +77,9 @@ JavaScript inside the Copilot process and are not normal isolated Copilot extens
 afterburn extension install nbaertsch/steward-burn@main
 afterburn extension inspect steward-burn
 afterburn extension enable steward-burn
+afterburn extension update steward-burn
+afterburn extension update --all
+afterburn extension rollback steward-burn
 afterburn extension list
 ```
 
@@ -84,6 +87,11 @@ Git is the package transport. Public repositories, private repositories accessib
 user's existing Git credentials, SSH URLs, HTTPS URLs, and local paths are supported. Installation
 does not enable an extension automatically. The resolved commit and source are recorded under `~\.afterburner`, and activation happens only
 after an explicit enable command.
+
+Updates resolve the configured source/ref into a new immutable commit- or content-addressed package,
+validate it before activation, preserve enablement, atomically switch the registry, and retain the
+previous package for rollback. User configuration under `~\.afterburner\config` and durable state
+under `~\.afterburner\extension-data` are never copied from or deleted with package versions.
 
 ## Installation layout
 

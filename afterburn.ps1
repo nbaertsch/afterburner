@@ -20,6 +20,9 @@ Usage:
   afterburn [copilot arguments]     Pass arguments directly to Copilot
   afterburn install                 Install the built-in companion components
   afterburn extension install <path|git-url|owner/repo@ref>
+  afterburn extension update <id>
+  afterburn extension update --all
+  afterburn extension rollback <id>
   afterburn extension inspect <id>
   afterburn extension enable <id>
   afterburn extension disable <id>
