@@ -58,6 +58,23 @@ npm run install
 Restart Copilot after installing. `copilot version` should continue to report the original CLI
 version because Afterburner delegates to the installed package.
 
+## Afterburner extensions
+
+Afterburner extensions are explicitly identified by `afterburner.json`. They execute trusted
+JavaScript inside the Copilot process and are not normal isolated Copilot extensions.
+
+```powershell
+npm run extension -- install nbaertsch/steward-burn@main
+npm run extension -- inspect steward-burn
+npm run extension -- enable steward-burn
+npm run extension -- list
+```
+
+Git is the package transport. Public repositories, private repositories accessible through the
+user's existing Git credentials, SSH URLs, HTTPS URLs, and local paths are supported. Installation
+does not enable an extension automatically. The resolved commit and source are recorded under
+`~\.copilot\afterburner`, and activation happens only after an explicit enable command.
+
 ## Test
 
 ```powershell
