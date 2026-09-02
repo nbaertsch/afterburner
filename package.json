@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1",
+    "install:cli": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-cli.ps1",
     "test": "powershell -NoProfile -ExecutionPolicy Bypass -File tests/test.ps1",
     "extension": "node src/extension-manager.mjs"
   },

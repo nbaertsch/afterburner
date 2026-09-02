@@ -2,6 +2,11 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 
+$helpOutput = & (Join-Path $projectRoot "afterburner.ps1") help | Out-String
+if ($helpOutput -notmatch "afterburner extension install") {
+    throw "Standalone Afterburner command help is incomplete."
+}
+
 $compatibilityTest = @'
 import { createServer } from "node:http";
 import { startRequestCompatibilityProxy } from "./extensions/BYOModels/extensions/BYOModels/request-compatibility.mjs";

@@ -50,9 +50,11 @@ the application is imported. They should fail closed when expected source anchor
 
 ## Install
 
+Install the standalone command once:
+
 ```powershell
-npm install
-npm run install
+.\scripts\install-cli.ps1
+afterburner install
 ```
 
 Restart Copilot after installing. `copilot version` should continue to report the original CLI
@@ -64,10 +66,10 @@ Afterburner extensions are explicitly identified by `afterburner.json`. They exe
 JavaScript inside the Copilot process and are not normal isolated Copilot extensions.
 
 ```powershell
-npm run extension -- install nbaertsch/steward-burn@main
-npm run extension -- inspect steward-burn
-npm run extension -- enable steward-burn
-npm run extension -- list
+afterburner extension install nbaertsch/steward-burn@main
+afterburner extension inspect steward-burn
+afterburner extension enable steward-burn
+afterburner extension list
 ```
 
 Git is the package transport. Public repositories, private repositories accessible through the
