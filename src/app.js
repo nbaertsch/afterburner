@@ -42,15 +42,60 @@ const copilotRoot = await findOriginalPackage();
 const runtimePath = join(copilotRoot, "prebuilds", `${process.platform}-${process.arch}`, "runtime.node");
 const originalAppPath = join(copilotRoot, "app.js");
 const runtime = require(runtimePath);
+const { createHash } = require("node:crypto");
 if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
     process.stderr.write(`[runtime-extension-host] loaded from ${wrapperDir}; base ${copilotRoot}\n`);
 }
 const pickerAdapters = [];
 const appSourceTransforms = [];
+const externalTaskProviders = new Map();
 const upstreamMetadata = new Map();
 const effortOverrides = new Map();
 const contextOverrides = new Map();
 const nativeContextTiers = ["default", "long_context"];
+
+function externalTaskId(providerId, remoteId) {
+    const value = createHash("sha256")
+        .update(`${providerId}:${remoteId}`).digest("base64url").slice(0, 48);
+    return `ext_${value}`;
+}
+
+function validateExternalTaskProvider(provider) {
+    if (!provider || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(provider.id ?? ""))
+        throw new Error("External task providers require a stable lowercase id.");
+    for (const operation of ["snapshot", "read", "cancel"]) {
+        if (typeof provider[operation] !== "function")
+            throw new Error(`External task provider '${provider.id}' is missing ${operation}().`);
+    }
+}
+
+function registerExternalTaskProvider(provider) {
+    validateExternalTaskProvider(provider);
+    if (externalTaskProviders.has(provider.id))
+        throw new Error(`External task provider '${provider.id}' is already registered.`);
+    externalTaskProviders.set(provider.id, provider);
+    if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1")
+        process.stderr.write(`[runtime-extension-host] registered external task provider ${provider.id}\n`);
+    return () => externalTaskProviders.delete(provider.id);
+}
+
+async function externalTaskSnapshot() {
+    const projected = [];
+    for (const [providerId, provider] of externalTaskProviders) {
+        const tasks = await provider.snapshot();
+        if (!Array.isArray(tasks)) throw new Error(`External task provider '${providerId}' returned a non-array snapshot.`);
+        for (const task of tasks) {
+            if (!task || typeof task.id !== "string" || typeof task.title !== "string") continue;
+            projected.push({
+                ...task,
+                nativeId: externalTaskId(providerId, task.id),
+                providerId,
+                remoteId: task.id
+            });
+        }
+    }
+    return projected;
+}
 
 function adapterFor(selectionId) {
     return pickerAdapters.find((adapter) => adapter.matches(selectionId));
@@ -375,6 +420,8 @@ async function loadRuntimeExtensions() {
                 pluginRoot: plugin.cache_path,
                 registerModelPickerAdapter,
                 registerAppSourceTransform,
+                registerExternalTaskProvider,
+                externalTaskSnapshot,
                 getContextCapabilityOverride: (selectionId) =>
                     contextCapabilityOverride(null, selectionId)
             });
@@ -456,7 +503,8 @@ if (process.env.COPILOT_RUNTIME_EXTENSION_SELF_TEST === "1") {
         projection,
         contextCycles,
         capabilityOverrides,
-        nativeContextNavigation
+        nativeContextNavigation,
+        externalTasks: await externalTaskSnapshot()
     }, null, 2)}\n`);
     process.exit(0);
 }globalThis.__copilotRuntimeAddon__ = { addon: runtime, processStateInitialized: false };

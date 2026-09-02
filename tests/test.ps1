@@ -82,6 +82,11 @@ if (-not $result.projection.hasReasoningColumn) {
 if (-not $result.projection.hasContextColumn) {
     throw "Expected a context column from the installed BYOK adapter."
 }
+foreach ($task in @($result.externalTasks)) {
+    if ($task.nativeId.Length -gt 63 -or $task.nativeId -notmatch '^ext_[A-Za-z0-9_-]+$') {
+        throw "External task provider emitted an invalid native task ID."
+    }
+}
 
 $expectedContexts = @("256K", "512K", "768K", "1.05M")
 foreach ($entry in $result.contextCycles.PSObject.Properties) {
