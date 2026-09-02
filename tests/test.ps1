@@ -2,8 +2,8 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 
-$helpOutput = & (Join-Path $projectRoot "afterburner.ps1") help | Out-String
-if ($helpOutput -notmatch "afterburner extension install") {
+$helpOutput = & (Join-Path $projectRoot "afterburn.ps1") help | Out-String
+if ($helpOutput -notmatch "afterburn extension install") {
     throw "Standalone Afterburner command help is incomplete."
 }
 

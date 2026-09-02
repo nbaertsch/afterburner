@@ -1,4 +1,80 @@
 #!/usr/bin/env pwsh
+param(
+    [Parameter(Position = 0)]
+    [string]$Command,
+
+    [Parameter(Position = 1, ValueFromRemainingArguments)]
+    [string[]]$Arguments
+)
+
+$ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-& (Join-Path $root "afterburner.ps1") run @args
-exit $LASTEXITCODE
+$managementCommands = @("install", "extension", "version", "help", "doctor")
+
+function Show-Help {
+@"
+Afterburn - GitHub Copilot CLI with trusted Afterburner extensions
+
+Usage:
+  afterburn                         Start an Afterburner-managed Copilot session
+  afterburn [copilot arguments]     Pass arguments directly to Copilot
+  afterburn install                 Install the built-in companion components
+  afterburn extension install <path|git-url|owner/repo@ref>
+  afterburn extension inspect <id>
+  afterburn extension enable <id>
+  afterburn extension disable <id>
+  afterburn extension list
+  afterburn doctor                  Check the installation and configured extensions
+  afterburn version
+  afterburn help
+
+Normal 'copilot' invocations do not load Afterburner.
+"@
+}
+
+if (!$Command) {
+    $Command = "run"
+} elseif ($Command.StartsWith("-") -or $managementCommands -notcontains $Command) {
+    $Arguments = @($Command) + $Arguments
+    $Command = "run"
+}
+
+switch ($Command) {
+    "run" {
+        & (Join-Path $root "scripts\prepare-runtime.ps1")
+        & copilot --prefer-version 9999.0.0-afterburner @Arguments
+        exit $LASTEXITCODE
+    }
+    "install" {
+        & (Join-Path $root "scripts\install.ps1") -InstallRuntime:$false
+        exit $LASTEXITCODE
+    }
+    "extension" {
+        & node (Join-Path $root "src\extension-manager.mjs") @Arguments
+        exit $LASTEXITCODE
+    }
+    "doctor" {
+        $failed = $false
+        if (!(Get-Command copilot -ErrorAction SilentlyContinue)) {
+            Write-Error "Copilot CLI is not available on PATH."
+            $failed = $true
+        } else {
+            Write-Output "OK  Copilot CLI found."
+        }
+        if (!(Get-Command node -ErrorAction SilentlyContinue)) {
+            Write-Error "Node.js is required for extension management."
+            $failed = $true
+        } else {
+            Write-Output "OK  Node.js found."
+        }
+        $config = if ($env:AFTERBURNER_BYOMODELS_CONFIG) { $env:AFTERBURNER_BYOMODELS_CONFIG } else { "<not configured>" }
+        Write-Output "INFO BYOModels config: $config"
+        & node (Join-Path $root "src\extension-manager.mjs") list
+        if ($failed) { exit 1 }
+    }
+    "version" {
+        $package = Get-Content (Join-Path $root "package.json") -Raw | ConvertFrom-Json
+        Write-Output "Afterburn $($package.version)"
+    }
+    "help" { Show-Help }
+}

@@ -54,7 +54,7 @@ Install the standalone command once:
 
 ```powershell
 .\scripts\install-cli.ps1
-afterburner install
+afterburn install
 afterburn
 ```
 
@@ -68,10 +68,10 @@ Afterburner extensions are explicitly identified by `afterburner.json`. They exe
 JavaScript inside the Copilot process and are not normal isolated Copilot extensions.
 
 ```powershell
-afterburner extension install nbaertsch/steward-burn@main
-afterburner extension inspect steward-burn
-afterburner extension enable steward-burn
-afterburner extension list
+afterburn extension install nbaertsch/steward-burn@main
+afterburn extension inspect steward-burn
+afterburn extension enable steward-burn
+afterburn extension list
 ```
 
 Git is the package transport. Public repositories, private repositories accessible through the

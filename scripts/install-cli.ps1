@@ -10,8 +10,6 @@ $bin = Join-Path $installRoot "bin"
 $app = Join-Path $installRoot "app"
 
 New-Item -ItemType Directory -Force $bin, $app | Out-Null
-Copy-Item (Join-Path $projectRoot "afterburner.ps1") $app -Force
-Copy-Item (Join-Path $projectRoot "afterburner.cmd") $app -Force
 Copy-Item (Join-Path $projectRoot "afterburn.ps1") $app -Force
 Copy-Item (Join-Path $projectRoot "afterburn.cmd") $app -Force
 Copy-Item (Join-Path $projectRoot "package.json") $app -Force
@@ -22,12 +20,9 @@ Copy-Item (Join-Path $projectRoot "schemas") $app -Recurse -Force
 
 @"
 @echo off
-pwsh -NoProfile -ExecutionPolicy Bypass -File "$app\afterburner.ps1" %*
-"@ | Set-Content (Join-Path $bin "afterburner.cmd") -Encoding ASCII
-@"
-@echo off
 pwsh -NoProfile -ExecutionPolicy Bypass -File "$app\afterburn.ps1" %*
 "@ | Set-Content (Join-Path $bin "afterburn.cmd") -Encoding ASCII
+Remove-Item (Join-Path $bin "afterburner.cmd") -Force -ErrorAction SilentlyContinue
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $parts = @($userPath -split ";" | Where-Object { $_ })
@@ -36,5 +31,5 @@ if ($parts -notcontains $bin) {
 }
 $env:Path = "$bin;$env:Path"
 
-Write-Output "Installed the afterburner command at $bin\afterburner.cmd"
-Write-Output "Open a new terminal, run 'afterburner install', then use 'afterburn' instead of 'copilot'."
+Write-Output "Installed the afterburn CLI at $bin\afterburn.cmd"
+Write-Output "Open a new terminal and run: afterburn help"
