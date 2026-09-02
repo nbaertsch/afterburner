@@ -77,15 +77,26 @@ if ($directVersion -match "runtime-extension-host") {
     throw "Normal copilot invocation unexpectedly loaded Afterburner."
 }
 
-$env:AFTERBURNER_BYOMODELS_CONFIG = Join-Path $projectRoot "extensions\BYOModels\extensions\BYOModels\models.example.json"
+$testHome = Join-Path ([System.IO.Path]::GetTempPath()) ("afterburner-test-" + [guid]::NewGuid().ToString("N"))
+$testConfigDirectory = Join-Path $testHome "config"
+New-Item -ItemType Directory -Force $testConfigDirectory | Out-Null
+Copy-Item (Join-Path $projectRoot "extensions\BYOModels\extensions\BYOModels\models.example.json") `
+    (Join-Path $testConfigDirectory "byomodels.json")
+$previousAfterburnerHome = $env:AFTERBURNER_HOME
+$env:AFTERBURNER_HOME = $testHome
 $env:COPILOT_RUNTIME_EXTENSION_SELF_TEST = "1"
 try {
+    & node (Join-Path $projectRoot "src\extension-manager.mjs") install `
+        (Join-Path $projectRoot "extensions\BYOModels") | Out-Null
+    & node (Join-Path $projectRoot "src\extension-manager.mjs") enable byomodels | Out-Null
     $result = & (Join-Path $projectRoot "afterburn.ps1") --version |
         Out-String |
         ConvertFrom-Json
 } finally {
     Remove-Item Env:COPILOT_RUNTIME_EXTENSION_SELF_TEST -ErrorAction SilentlyContinue
-    Remove-Item Env:AFTERBURNER_BYOMODELS_CONFIG -ErrorAction SilentlyContinue
+    if ($null -eq $previousAfterburnerHome) { Remove-Item Env:AFTERBURNER_HOME -ErrorAction SilentlyContinue }
+    else { $env:AFTERBURNER_HOME = $previousAfterburnerHome }
+    Remove-Item -LiteralPath $testHome -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 if (-not $result.projection.hasReasoningColumn) {

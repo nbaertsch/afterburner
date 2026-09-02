@@ -7,11 +7,17 @@ import { joinSession } from "@github/copilot-sdk/extension";
 import { startRequestCompatibilityProxy } from "./request-compatibility.mjs";
 
 const execFileAsync = promisify(execFile);
-const configuredPath = process.env.AFTERBURNER_BYOMODELS_CONFIG?.trim();
-if (!configuredPath) {
+const afterburnerHome = process.env.AFTERBURNER_HOME ??
+    join(process.env.USERPROFILE ?? "", ".afterburner");
+const configuredPath = process.env.AFTERBURNER_BYOMODELS_CONFIG?.trim() ||
+    join(afterburnerHome, "config", "byomodels.json");
+try {
+    await readFile(configuredPath, "utf8");
+} catch (error) {
+    if (error?.code !== "ENOENT") throw error;
     throw new Error(
-        "BYOModels requires AFTERBURNER_BYOMODELS_CONFIG to point to a private models.json file. " +
-        "Copy models.example.json outside the extension package and customize it."
+        `BYOModels configuration was not found at '${configuredPath}'. ` +
+        "Create ~/.afterburner/config/byomodels.json or set AFTERBURNER_BYOMODELS_CONFIG."
     );
 }
 const configPath = new URL(`file:///${configuredPath.replace(/\\/g, "/")}`);

@@ -107,8 +107,16 @@ switch ($Command) {
         } else {
             Write-Output "OK  Node.js found."
         }
-        $config = if ($env:AFTERBURNER_BYOMODELS_CONFIG) { $env:AFTERBURNER_BYOMODELS_CONFIG } else { "<not configured>" }
-        Write-Output "INFO BYOModels config: $config"
+        $config = if ($env:AFTERBURNER_BYOMODELS_CONFIG) {
+            $env:AFTERBURNER_BYOMODELS_CONFIG
+        } else {
+            Join-Path $env:USERPROFILE ".afterburner\config\byomodels.json"
+        }
+        if (Test-Path $config) { Write-Output "OK  BYOModels config: $config" }
+        else {
+            Write-Error "BYOModels config is missing: $config"
+            $failed = $true
+        }
         & node (Join-Path $root "src\extension-manager.mjs") list
         if ($failed) { exit 1 }
     }

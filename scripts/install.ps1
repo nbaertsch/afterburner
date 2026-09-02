@@ -24,5 +24,14 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to install the built-in BYOModels exten
 & node (Join-Path $projectRoot "src\extension-manager.mjs") enable byomodels
 if ($LASTEXITCODE -ne 0) { throw "Failed to enable the built-in BYOModels extension." }
 
+$afterburnerHome = if ($env:AFTERBURNER_HOME) { $env:AFTERBURNER_HOME } else { Join-Path $HOME ".afterburner" }
+$configDirectory = Join-Path $afterburnerHome "config"
+$configPath = Join-Path $configDirectory "byomodels.json"
+New-Item -ItemType Directory -Force $configDirectory | Out-Null
+if (!(Test-Path $configPath)) {
+    Copy-Item (Join-Path $projectRoot "extensions\BYOModels\extensions\BYOModels\models.example.json") $configPath
+    Write-Warning "Created example BYOModels configuration at $configPath. Customize it before launching Afterburn."
+}
+
 Write-Output "Installed built-in Afterburner extension: BYOModels"
 Write-Output "Run 'afterburn' to start an Afterburner-managed Copilot session."

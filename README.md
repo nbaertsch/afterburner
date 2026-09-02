@@ -19,7 +19,8 @@ copilot.exe
   -> the transformed app is imported beside the original versioned app.js
 ```
 
-Afterburner discovers enabled plugins from `~/.copilot/config.json`. A plugin opts in by exporting:
+Afterburner discovers enabled trusted extensions from `~/.afterburner/registry.json`. An extension
+opts in through `afterburner.json` and exports:
 
 ```js
 export async function activate({
@@ -76,8 +77,25 @@ afterburn extension list
 
 Git is the package transport. Public repositories, private repositories accessible through the
 user's existing Git credentials, SSH URLs, HTTPS URLs, and local paths are supported. Installation
-does not enable an extension automatically. The resolved commit and source are recorded under
-`~\.copilot\afterburner`, and activation happens only after an explicit enable command.
+does not enable an extension automatically. The resolved commit and source are recorded under `~\.afterburner`, and activation happens only
+after an explicit enable command.
+
+## Installation layout
+
+```text
+~\.afterburner\
+├── app\                 Installed application files
+├── bin\                 The afterburn launcher
+├── config\              User-owned configuration
+│   └── byomodels.json   Default BYOModels configuration
+├── extensions\          Installed extension packages
+├── extension-data\      Extension-owned durable state
+├── copilot-home\        Isolated managed Copilot state
+└── registry.json        Extension source and enablement registry
+```
+
+Installers may create missing example configuration, but never overwrite an existing user-owned
+file during installation or upgrade.
 
 ## Test
 
@@ -87,9 +105,10 @@ npm test
 
 `extensions/BYOModels` is the singular built-in Afterburner extension. It contains no provider,
 deployment, endpoint, subscription, or credential configuration. Set
-`AFTERBURNER_BYOMODELS_CONFIG` to a private file based on `models.example.json`. It supports Azure CLI tokens,
-API keys from environment variables, and bearer tokens from environment variables. Machine-private
-extensions can be placed under the gitignored `extensions/local/` directory.
+The normal user configuration path is `~\.afterburner\config\byomodels.json`. The
+`AFTERBURNER_BYOMODELS_CONFIG` environment variable is an optional override for automation or
+alternate profiles. BYOModels supports Azure CLI tokens, API keys from environment variables, and
+bearer tokens from environment variables.
 
 The model picker uses Tab to move focus between reasoning effort and context window; left/right
 arrows change the focused value. Providers can also declare

@@ -88,11 +88,11 @@ function installContextArrowControls(source) {
 }
 
 export async function activate({ pluginRoot, registerModelPickerAdapter, registerAppSourceTransform }) {
-    if (!process.env.AFTERBURNER_BYOMODELS_CONFIG) {
-        throw new Error("BYOModels requires AFTERBURNER_BYOMODELS_CONFIG.");
-    }
+    const configPath = process.env.AFTERBURNER_BYOMODELS_CONFIG ??
+        join(process.env.AFTERBURNER_HOME ?? join(process.env.USERPROFILE ?? "", ".afterburner"),
+            "config", "byomodels.json");
     const config = JSON.parse(
-        await readFile(process.env.AFTERBURNER_BYOMODELS_CONFIG, "utf8")
+        await readFile(configPath, "utf8")
     );
     const contextWindowOptions = config.contextWindowOptions ?? [];
     const metadataPath = join(
