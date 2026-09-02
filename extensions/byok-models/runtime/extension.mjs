@@ -31,6 +31,12 @@ function installContextArrowControls(source) {
     );
     source = replaceRequired(
         source,
+        '[j,se,Ge,q,T,P,N,R,D,$e,Ne,a])',
+        '[j,se,Ge,q,T,P,N,R,D,$e,Ne,a,Qe])',
+        "focused picker control render dependency"
+    );
+    source = replaceRequired(
+        source,
         'function vzr(e,t,n){return t?Kn.default.createElement(Kn.default.Fragment,null,e.contextSegments.map(r=>Kn.default.createElement(Kn.default.Fragment,{key:r.key},Kn.default.createElement(b,{color:r.active?n.primary:n.muted},r.text)))):Kn.default.createElement(b,{color:n.muted},e.contextCellText)}',
         'function vzr(e,t,n){return e.contextToggleable?t?Kn.default.createElement(Kn.default.Fragment,null,Kn.default.createElement(b,{color:e.contextCanLower?n.selected:n.muted},"← "),Kn.default.createElement(b,{color:n.primary},e.contextCellText),Kn.default.createElement(b,{color:e.contextCanRaise?n.selected:n.muted}," →")):Kn.default.createElement(b,{color:n.muted},e.contextCellText):Kn.default.createElement(b,{color:n.muted},e.contextCellText)}',
         "context arrow renderer"

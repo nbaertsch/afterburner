@@ -89,4 +89,13 @@ if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch "GitHub Copilot CLI") {
     throw "Copilot failed to start through Afterburner."
 }
 
+$copilotHome = if ($env:COPILOT_HOME) { $env:COPILOT_HOME } else { Join-Path $HOME ".copilot" }
+$transformedApp = Get-ChildItem (Join-Path $copilotHome "pkg\win32-*\*\.afterburner-app.mjs") -File |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+if (-not $transformedApp -or
+    -not (Select-String -Path $transformedApp -SimpleMatch '[j,se,Ge,q,T,P,N,R,D,$e,Ne,a,Qe])' -Quiet)) {
+    throw "Expected the picker row renderer to depend on the active context focus state."
+}
+
 Write-Output "Afterburner tests passed."
