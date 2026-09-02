@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, readFile, readdir, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -46,6 +46,7 @@ if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
     process.stderr.write(`[runtime-extension-host] loaded from ${wrapperDir}; base ${copilotRoot}\n`);
 }
 const pickerAdapters = [];
+const appSourceTransforms = [];
 const upstreamMetadata = new Map();
 const effortOverrides = new Map();
 const contextOverrides = new Map();
@@ -200,8 +201,11 @@ function installPickerBridge() {
             const contextWindowTokens = source.contextWindowTokens ?? metadata.maxContextWindowTokens;
             const contextOptions = metadata.contextWindowOptions;
             const contextIndex = contextOptions.indexOf(contextWindowTokens);
+            const previousContextWindow = contextIndex > 0
+                ? contextOptions[contextIndex - 1]
+                : undefined;
             const nextContextWindow = contextOptions.length > 1
-                ? contextOptions[(contextIndex + 1) % contextOptions.length]
+                ? contextOptions[contextIndex + 1]
                 : undefined;
             const contextText = formatTokenCount(contextWindowTokens);
             const contextSegments = contextOptions.length > 1
@@ -223,6 +227,9 @@ function installPickerBridge() {
                 previousEffort: effortIndex > 0 ? efforts[effortIndex - 1] : undefined,
                 nextEffort: effortIndex >= 0 && effortIndex < efforts.length - 1 ? efforts[effortIndex + 1] : undefined,
                 contextToggleable: contextOptions.length > 1,
+                contextCanLower: previousContextWindow !== undefined,
+                contextCanRaise: nextContextWindow !== undefined,
+                previousContextTier: previousContextWindow === undefined ? undefined : String(previousContextWindow),
                 nextContextTier: nextContextWindow === undefined ? undefined : String(nextContextWindow),
                 contextCellText: contextText,
                 contextSegments
@@ -261,6 +268,13 @@ function registerModelPickerAdapter(adapter) {
     if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
         process.stderr.write(`[runtime-extension-host] registered picker adapter ${pickerAdapters.length}\n`);
     }
+}
+
+function registerAppSourceTransform(transform) {
+    if (typeof transform !== "function") {
+        throw new Error("An app source transform must be a function.");
+    }
+    appSourceTransforms.push(transform);
 }
 
 function parseJsonc(text) {
@@ -331,6 +345,7 @@ async function loadRuntimeExtensions() {
                 runtime,
                 pluginRoot: plugin.cache_path,
                 registerModelPickerAdapter,
+                registerAppSourceTransform,
                 getContextCapabilityOverride: (selectionId) =>
                     contextCapabilityOverride(null, selectionId)
             });
@@ -343,6 +358,20 @@ async function loadRuntimeExtensions() {
             }
         }
     }
+}
+
+async function transformedAppPath() {
+    if (appSourceTransforms.length === 0) return originalAppPath;
+    let source = await readFile(originalAppPath, "utf8");
+    for (const transform of appSourceTransforms) {
+        source = await transform(source, { copilotRoot, originalAppPath });
+        if (typeof source !== "string") {
+            throw new Error("An app source transform returned a non-string value.");
+        }
+    }
+    const outputPath = join(copilotRoot, ".afterburner-app.mjs");
+    await writeFile(outputPath, source, "utf8");
+    return outputPath;
 }
 
 installPickerBridge();
@@ -387,4 +416,4 @@ if (process.env.COPILOT_RUNTIME_EXTENSION_SELF_TEST === "1") {
     process.stdout.write(`${JSON.stringify({ projection, contextCycles, capabilityOverrides }, null, 2)}\n`);
     process.exit(0);
 }globalThis.__copilotRuntimeAddon__ = { addon: runtime, processStateInitialized: false };
-await import(pathToFileURL(originalAppPath).href);
+await import(pathToFileURL(await transformedAppPath()).href);

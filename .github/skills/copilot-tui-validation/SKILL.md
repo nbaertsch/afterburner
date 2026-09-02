@@ -58,6 +58,16 @@ For model picker changes, verify all three layers:
 For Afterburner context adapters, a complete assertion covers `256K`, `512K`, `768K`, and `1.05M`,
 plus the corresponding runtime capability override.
 
+When both reasoning and context use arrows, verify focus as well as values:
+
+1. Left/right initially changes reasoning.
+2. Tab changes the hint from `reasoning effort` to `context window`.
+3. Left/right then changes context without changing reasoning.
+4. Tab returns focus to reasoning.
+
+ConPTY output is an incremental terminal diff. An unchanged arrow may not be emitted when only the
+value changes, so reconstruct screen state or assert the focus hint plus successive value updates.
+
 ## Cleanup
 
 Delete the disposable npm project and captured logs after validation. Do not leave interrupted test

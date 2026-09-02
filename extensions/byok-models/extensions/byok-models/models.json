@@ -18,6 +18,9 @@
       "type": "azure",
       "baseUrl": "https://adapt-prod-oai-colosseum-eus2-001.openai.azure.com",
       "wireApi": "responses",
+      "requestCompatibility": {
+        "maxInputItemIdLength": 64
+      },
       "auth": {
         "type": "azure-cli",
         "resource": "https://cognitiveservices.azure.com/"

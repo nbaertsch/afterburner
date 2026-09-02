@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { createCanvas } from "@github/copilot-sdk";
 import { joinSession } from "@github/copilot-sdk/extension";
+import { startRequestCompatibilityProxy } from "./request-compatibility.mjs";
 
 const execFileAsync = promisify(execFile);
 const configPath = new URL("./models.json", import.meta.url);
@@ -58,6 +59,7 @@ let cachedAzureToken;
 let refreshAzureTokenAfter = 0;
 let cachedAzureTokenExpiresAt = 0;
 let pendingAzureToken;
+const compatibilityProxyRewrites = new Map();
 
 function requiredEnvironmentValue(provider, auth, field) {
     const variable = auth.environmentVariable;
@@ -157,8 +159,15 @@ async function acquireAzureCliToken(resource) {
     }
 }
 
-function hydrateProvider(provider) {
-    const { auth, ...sdkProvider } = provider;
+async function hydrateProvider(provider) {
+    const { auth, requestCompatibility, ...sdkProvider } = provider;
+    const compatibilityProxy = await startRequestCompatibilityProxy(provider, (rewritten) => {
+        compatibilityProxyRewrites.set(
+            provider.name,
+            (compatibilityProxyRewrites.get(provider.name) ?? 0) + rewritten
+        );
+    });
+    if (compatibilityProxy) sdkProvider.baseUrl = compatibilityProxy.baseUrl;
 
     if (!auth) {
         return sdkProvider;
@@ -292,6 +301,7 @@ function getStatus() {
             ? new Date(cachedAzureTokenExpiresAt).toISOString()
             : null,
         pluginDataAvailable: Boolean(process.env.COPILOT_PLUGIN_DATA),
+        compatibilityProxyRewrites: Object.fromEntries(compatibilityProxyRewrites),
         sources: {
             configured: config.sources ?? null
         },
@@ -332,8 +342,9 @@ const modelsCanvas = createCanvas({
 });
 
 let session;
+const hydratedProviders = await Promise.all(config.providers.map(hydrateProvider));
 session = await joinSession({
-    providers: config.providers.map(hydrateProvider),
+    providers: hydratedProviders,
     tools: [
         {
             name: "byok_models_status",
