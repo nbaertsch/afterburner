@@ -161,11 +161,20 @@ async function acquireAzureCliToken(resource) {
 
 async function hydrateProvider(provider) {
     const { auth, requestCompatibility, ...sdkProvider } = provider;
-    const compatibilityProxy = await startRequestCompatibilityProxy(provider, (rewritten) => {
-        compatibilityProxyRewrites.set(
-            provider.name,
-            (compatibilityProxyRewrites.get(provider.name) ?? 0) + rewritten
-        );
+    if (auth?.type === "azure-cli" && !auth.resource) {
+        throw new Error(`Provider '${provider.name}' must define auth.resource.`);
+    }
+    const getBearerToken = auth?.type === "azure-cli"
+        ? () => acquireAzureCliToken(auth.resource)
+        : undefined;
+    const compatibilityProxy = await startRequestCompatibilityProxy(provider, {
+        getBearerToken,
+        onRewrite: (rewritten) => {
+            compatibilityProxyRewrites.set(
+                provider.name,
+                (compatibilityProxyRewrites.get(provider.name) ?? 0) + rewritten
+            );
+        }
     });
     if (compatibilityProxy) sdkProvider.baseUrl = compatibilityProxy.baseUrl;
 
@@ -175,12 +184,14 @@ async function hydrateProvider(provider) {
 
     switch (auth.type) {
         case "azure-cli":
-            if (!auth.resource) {
-                throw new Error(`Provider '${provider.name}' must define auth.resource.`);
+            if (!compatibilityProxy) {
+                throw new Error(
+                    `Provider '${provider.name}' requires a loopback compatibility proxy for Azure CLI authentication.`
+                );
             }
             return {
                 ...sdkProvider,
-                bearerTokenProvider: () => acquireAzureCliToken(auth.resource)
+                bearerToken: "afterburner-loopback-auth"
             };
         case "api-key-env":
             return {

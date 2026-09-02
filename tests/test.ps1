@@ -7,10 +7,13 @@ import { createServer } from "node:http";
 import { startRequestCompatibilityProxy } from "./extensions/byok-models/extensions/byok-models/request-compatibility.mjs";
 
 let received;
+let receivedAuthorization;
+let tokenRequestCount = 0;
 const upstream = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     received = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    receivedAuthorization = request.headers.authorization;
     response.writeHead(200, { "content-type": "application/json" });
     response.end('{"ok":true}');
 });
@@ -20,11 +23,19 @@ const proxy = await startRequestCompatibilityProxy({
     name: "test",
     baseUrl: `http://127.0.0.1:${upstreamAddress.port}`,
     requestCompatibility: { maxInputItemIdLength: 64 }
+}, {
+    getBearerToken: async () => {
+        tokenRequestCount++;
+        return `fresh-token-${tokenRequestCount}`;
+    }
 });
 const oversizedId = "x".repeat(496);
-await fetch(`${proxy.baseUrl}/responses`, {
+const sendRequest = () => fetch(`${proxy.baseUrl}/responses`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+        "content-type": "application/json",
+        authorization: "Bearer stale-runtime-token"
+    },
     body: JSON.stringify({
         input: [
             { type: "tool_search_call", id: oversizedId },
@@ -33,10 +44,18 @@ await fetch(`${proxy.baseUrl}/responses`, {
         ]
     })
 });
+await sendRequest();
 if (received.input[0].id !== received.input[1].id ||
     received.input[0].id.length > 64 ||
     received.input[2].id !== "valid-id") {
     throw new Error("Compatibility proxy did not safely normalize oversized input item IDs.");
+}
+if (receivedAuthorization !== "Bearer fresh-token-1") {
+    throw new Error(`Compatibility proxy did not inject the expected bearer token: ${receivedAuthorization}`);
+}
+await sendRequest();
+if (receivedAuthorization !== "Bearer fresh-token-2" || tokenRequestCount !== 2) {
+    throw new Error("Compatibility proxy did not reacquire authentication for the next request.");
 }
 await proxy.close();
 await new Promise((resolve, reject) => upstream.close((error) => error ? reject(error) : resolve()));

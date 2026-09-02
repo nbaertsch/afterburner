@@ -17,7 +17,10 @@ export function rewriteOversizedInputItemIds(payload, maximumLength) {
     return rewritten;
 }
 
-export async function startRequestCompatibilityProxy(provider, onRewrite = () => {}) {
+export async function startRequestCompatibilityProxy(
+    provider,
+    { onRewrite = () => {}, getBearerToken } = {}
+) {
     const maximumLength = provider.requestCompatibility?.maxInputItemIdLength;
     if (!Number.isInteger(maximumLength) || maximumLength < 16) return null;
     const upstream = new URL(provider.baseUrl);
@@ -41,6 +44,9 @@ export async function startRequestCompatibilityProxy(provider, onRewrite = () =>
             delete headers["content-length"];
             delete headers.connection;
             delete headers["transfer-encoding"];
+            if (getBearerToken) {
+                headers.authorization = `Bearer ${await getBearerToken()}`;
+            }
             const upstreamResponse = await fetch(target, {
                 method: request.method,
                 headers,
