@@ -24,7 +24,7 @@ Copy-Item (Join-Path $projectRoot "schemas") $app -Recurse -Force
 
 @"
 @echo off
-pwsh -NoProfile -ExecutionPolicy Bypass -File "$app\afterburn.ps1" %*
+pwsh -NoProfile -ExecutionPolicy Bypass -Command "& '$app\afterburn.ps1' @args" %*
 "@ | Set-Content (Join-Path $bin "afterburn.cmd") -Encoding ASCII
 Remove-Item (Join-Path $bin "afterburner.cmd") -Force -ErrorAction SilentlyContinue
 

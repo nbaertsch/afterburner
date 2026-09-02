@@ -15,6 +15,6 @@
   },
   "capabilities": ["model-picker", "application-source-transform"],
   "sessionExtension": {
-    "entrypoint": "extensions/BYOModels/extension.mjs"
+    "entrypoint": "com.github.copilot/extensions/BYOModels/extension.mjs"
   }
 }

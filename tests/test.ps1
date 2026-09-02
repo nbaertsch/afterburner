@@ -92,6 +92,16 @@ try {
     $result = & (Join-Path $projectRoot "afterburn.ps1") --version |
         Out-String |
         ConvertFrom-Json
+    $testManagedConfig = Get-Content (Join-Path $testHome "copilot-home\config.json") -Raw | ConvertFrom-Json
+    $testRegistry = Get-Content (Join-Path $testHome "registry.json") -Raw | ConvertFrom-Json
+    $activeByoModelsPath = $testRegistry.extensions.byomodels.activePath
+    $managedByoModels = @($testManagedConfig.installedPlugins | Where-Object { $_.name -eq "afterburner-byomodels" })
+    if ($managedByoModels.Count -ne 1 -or
+        $managedByoModels[0].source.source -ne "local" -or
+        $managedByoModels[0].source.path -ne $managedByoModels[0].cache_path -or
+        $managedByoModels[0].cache_path -ne $activeByoModelsPath) {
+        throw "BYOModels session entrypoint is not registered from the active immutable Afterburner package."
+    }
 } finally {
     Remove-Item Env:COPILOT_RUNTIME_EXTENSION_SELF_TEST -ErrorAction SilentlyContinue
     if ($null -eq $previousAfterburnerHome) { Remove-Item Env:AFTERBURNER_HOME -ErrorAction SilentlyContinue }
@@ -162,14 +172,6 @@ if (Test-Path (Join-Path $HOME ".copilot\afterburner")) {
 }
 if (Test-Path (Join-Path $HOME ".copilot\pkg\win32-x64\9999.0.0-afterburner")) {
     throw "Afterburner runtime leaked into normal Copilot package cache."
-}
-
-$managedConfig = Get-Content (Join-Path $HOME ".afterburner\copilot-home\config.json") -Raw | ConvertFrom-Json
-$managedByoModels = @($managedConfig.installedPlugins | Where-Object { $_.name -eq "afterburner-byomodels" })
-if ($managedByoModels.Count -ne 1 -or
-    $managedByoModels[0].source.source -ne "afterburner" -or
-    $managedByoModels[0].cache_path -ne "$HOME\.afterburner\copilot-home\extensions\afterburner\byomodels") {
-    throw "BYOModels session entrypoint is not registered from the identity-addressed Afterburner package."
 }
 
 $upgradeHome = Join-Path ([System.IO.Path]::GetTempPath()) ("afterburner-upgrade-" + [guid]::NewGuid().ToString("N"))

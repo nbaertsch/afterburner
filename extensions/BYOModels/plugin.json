@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "afterburner-byomodels",
+  "description": "Session component of the built-in BYOModels Afterburner extension.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Afterburner"
+  },
+  "extensions": {
+    "com.github.copilot": {}
+  }
+}
