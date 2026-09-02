@@ -34,5 +34,29 @@ if ($parts -notcontains $bin) {
 }
 $env:Path = "$bin;$env:Path"
 
+# Existing terminal processes do not receive user PATH broadcasts. PowerShell
+# profiles make the command available immediately in newly opened tabs hosted
+# by an already-running terminal application.
+$profilePaths = @(
+    (Join-Path ([Environment]::GetFolderPath("MyDocuments")) "PowerShell\profile.ps1"),
+    (Join-Path ([Environment]::GetFolderPath("MyDocuments")) "WindowsPowerShell\profile.ps1")
+)
+$pathBlock = @"
+# BEGIN AFTERBURN PATH
+`$afterburnBin = '$bin'
+if ((Test-Path `$afterburnBin) -and (`$env:Path -split ';') -notcontains `$afterburnBin) {
+    `$env:Path = "`$afterburnBin;`$env:Path"
+}
+# END AFTERBURN PATH
+"@
+foreach ($profilePath in $profilePaths) {
+    New-Item -ItemType Directory -Force (Split-Path $profilePath -Parent) | Out-Null
+    $content = if (Test-Path $profilePath) { Get-Content $profilePath -Raw } else { "" }
+    $content = [regex]::Replace($content,
+        "(?ms)^# BEGIN AFTERBURN PATH\r?\n.*?^# END AFTERBURN PATH\r?\n?", "")
+    $updated = ($content.TrimEnd() + "`r`n`r`n" + $pathBlock.Trim() + "`r`n").TrimStart()
+    Set-Content $profilePath $updated -Encoding utf8
+}
+
 Write-Output "Installed the afterburn CLI at $bin\afterburn.cmd"
-Write-Output "Open a new terminal and run: afterburn help"
+Write-Output "Run 'afterburn help' from a new PowerShell session."
