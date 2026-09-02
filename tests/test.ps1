@@ -89,6 +89,9 @@ foreach ($task in @($result.externalTasks)) {
     if (@($result.externalTasks).Count -gt 0 -and -not $result.externalTaskRead) {
         throw "External task read routing did not return a result."
     }
+    if ($result.externalTaskRevision -lt 0) {
+        throw "External task subscription revision is invalid."
+    }
 }
 
 $expectedContexts = @("256K", "512K", "768K", "1.05M")

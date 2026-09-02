@@ -49,6 +49,8 @@ if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
 const pickerAdapters = [];
 const appSourceTransforms = [];
 const externalTaskProviders = new Map();
+const externalTaskSubscriptions = new Map();
+let externalTaskRevision = 0;
 const upstreamMetadata = new Map();
 const effortOverrides = new Map();
 const contextOverrides = new Map();
@@ -74,9 +76,17 @@ function registerExternalTaskProvider(provider) {
     if (externalTaskProviders.has(provider.id))
         throw new Error(`External task provider '${provider.id}' is already registered.`);
     externalTaskProviders.set(provider.id, provider);
+    if (typeof provider.subscribe === "function") {
+        const unsubscribe = provider.subscribe(() => { externalTaskRevision++; });
+        if (typeof unsubscribe === "function") externalTaskSubscriptions.set(provider.id, unsubscribe);
+    }
     if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1")
         process.stderr.write(`[runtime-extension-host] registered external task provider ${provider.id}\n`);
-    return () => externalTaskProviders.delete(provider.id);
+    return () => {
+        externalTaskSubscriptions.get(provider.id)?.();
+        externalTaskSubscriptions.delete(provider.id);
+        externalTaskProviders.delete(provider.id);
+    };
 }
 
 async function externalTaskSnapshot() {
@@ -521,6 +531,7 @@ if (process.env.COPILOT_RUNTIME_EXTENSION_SELF_TEST === "1") {
         capabilityOverrides,
         nativeContextNavigation,
         externalTasks: await externalTaskSnapshot(),
+        externalTaskRevision,
         externalTaskRead: externalTaskProviders.size > 0
             ? await invokeExternalTask((await externalTaskSnapshot())[0].nativeId, "read")
             : null
