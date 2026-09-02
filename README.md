@@ -64,8 +64,9 @@ version because Afterburner delegates to the installed package.
 npm test
 ```
 
-The tracked `extensions/byok-models` plugin is provider-agnostic; its checked-in `models.json`
-currently configures the production Colosseum Foundry deployments. It supports Azure CLI tokens,
+`extensions/BYOModels` is the singular built-in Afterburner extension. It contains no provider,
+deployment, endpoint, subscription, or credential configuration. Set
+`AFTERBURNER_BYOMODELS_CONFIG` to a private file based on `models.example.json`. It supports Azure CLI tokens,
 API keys from environment variables, and bearer tokens from environment variables. Machine-private
 extensions can be placed under the gitignored `extensions/local/` directory.
 

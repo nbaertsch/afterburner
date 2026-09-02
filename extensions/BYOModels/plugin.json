@@ -1,0 +1,9 @@
+{
+  "name": "afterburner-byomodels",
+  "description": "BYOModels companion plugin. Requires Copilot Afterburner for native picker enhancements.",
+  "version": "0.1.0",
+  "author": {
+    "name": "BYOModels contributors"
+  },
+  "extensions": "extensions/"
+}

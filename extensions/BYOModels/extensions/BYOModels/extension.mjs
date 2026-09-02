@@ -7,11 +7,18 @@ import { joinSession } from "@github/copilot-sdk/extension";
 import { startRequestCompatibilityProxy } from "./request-compatibility.mjs";
 
 const execFileAsync = promisify(execFile);
-const configPath = new URL("./models.json", import.meta.url);
+const configuredPath = process.env.AFTERBURNER_BYOMODELS_CONFIG?.trim();
+if (!configuredPath) {
+    throw new Error(
+        "BYOModels requires AFTERBURNER_BYOMODELS_CONFIG to point to a private models.json file. " +
+        "Copy models.example.json outside the extension package and customize it."
+    );
+}
+const configPath = new URL(`file:///${configuredPath.replace(/\\/g, "/")}`);
 const runtimeMetadataPath = join(
     process.env.COPILOT_HOME ?? join(process.env.USERPROFILE ?? "", ".copilot"),
     "runtime-extension-data",
-    "afterburner-byok-models",
+    "afterburner-byomodels",
     "model-metadata.json"
 );
 const config = JSON.parse(await readFile(configPath, "utf8"));
@@ -331,7 +338,7 @@ function formatModelSummary() {
 }
 
 const modelsCanvas = createCanvas({
-    id: "afterburner-byok-models",
+    id:     "afterburner-byomodels",
     displayName: "Afterburner BYOK Models",
     description: "Shows the registered BYOK model registry, capabilities, and naming drift.",
     actions: [
@@ -367,7 +374,7 @@ session = await joinSession({
     ],
     commands: [
         {
-            name: "byok-models",
+            name: "byomodels",
             description: "List registered BYOK models and deployment mappings.",
             handler: async () => session.log(`BYOK models: ${formatModelSummary()}`)
         },

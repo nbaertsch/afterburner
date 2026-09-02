@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "name": "Bring Your Own Models",
+  "contextWindowOptions": [256000, 512000, 768000, 1050000],
+  "providers": [
+    {
+      "name": "my-provider",
+      "type": "azure",
+      "baseUrl": "https://example.openai.azure.com",
+      "wireApi": "responses",
+      "requestCompatibility": {
+        "maxInputItemIdLength": 64
+      },
+      "auth": {
+        "type": "azure-cli",
+        "resource": "https://cognitiveservices.azure.com/"
+      }
+    }
+  ],
+  "models": [
+    {
+      "provider": "my-provider",
+      "id": "my-model",
+      "name": "My Model",
+      "modelId": "gpt-5.6-sol",
+      "wireModel": "my-deployment"
+    }
+  ]
+}

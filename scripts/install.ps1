@@ -13,7 +13,6 @@ if ($platform -eq "win32-x64") {
 $copilotHome = if ($env:COPILOT_HOME) { $env:COPILOT_HOME } else { Join-Path $HOME ".copilot" }
 $packageRoot = Join-Path $copilotHome "pkg\$platform"
 $target = Join-Path $packageRoot "9999.0.0-afterburner"
-$legacy = Join-Path $packageRoot "9999.0.0-colosseum"
 
 New-Item -ItemType Directory -Force $target | Out-Null
 Copy-Item (Join-Path $projectRoot "src\app.js") (Join-Path $target "app.js") -Force
@@ -26,23 +25,12 @@ Copy-Item (Join-Path $projectRoot "src\app.js") (Join-Path $target "app.js") -Fo
 }
 '@ | Set-Content -Encoding UTF8 (Join-Path $target "package.json")
 
-if (Test-Path $legacy) {
-    Remove-Item -Recurse -Force $legacy
-}
-
-$trackedByokPlugin = Join-Path $projectRoot "extensions\byok-models"
-$installedPlugins = copilot plugin list | Out-String
-if ($installedPlugins -match "(?m)^\s*•\s+colosseum-foundry-models\b") {
-    & copilot plugin uninstall colosseum-foundry-models
-}
-if ($installedPlugins -match "(?m)^\s*•\s+afterburner-byok-models\b") {
-    & copilot plugin uninstall afterburner-byok-models
-}
+$trackedByokPlugin = Join-Path $projectRoot "extensions\BYOModels"
 & copilot plugin install $trackedByokPlugin
 if ($LASTEXITCODE -ne 0) {
-    throw "Failed to install the tracked Afterburner BYOK plugin."
+    throw "Failed to install the built-in BYOModels companion plugin."
 }
 
 Write-Output "Installed Afterburner at $target"
-Write-Output "Installed tracked plugin: afterburner-byok-models"
+Write-Output "Installed built-in extension companion: BYOModels"
 Write-Output "Restart Copilot so its loader selects the Afterburner package."

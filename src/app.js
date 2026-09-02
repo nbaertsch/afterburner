@@ -458,6 +458,34 @@ async function loadRuntimeExtensions() {
             if (error?.code !== "ENOENT") {
                 process.stderr.write(`Warning: runtime extension '${plugin.name}' failed: ${error?.message ?? String(error)}\n`);
             }
+            const registryPath = join(process.env.COPILOT_HOME ?? join(process.env.USERPROFILE ?? "", ".copilot"),
+                "afterburner", "registry.json");
+            try {
+                const registry = JSON.parse(await readFile(registryPath, "utf8"));
+                for (const [id, entry] of Object.entries(registry.extensions ?? {})) {
+                    if (entry?.enabled !== true || typeof entry.activePath !== "string") continue;
+                    const manifest = JSON.parse(await readFile(join(entry.activePath, "afterburner.json"), "utf8"));
+                    const entrypoint = join(entry.activePath, manifest.runtime.entrypoint);
+                    const module = await import(pathToFileURL(entrypoint).href);
+                    if (typeof module.activate !== "function")
+                        throw new Error(`Afterburner extension '${id}' must export activate().`);
+                    await module.activate({
+                        runtime,
+                        pluginRoot: entry.activePath,
+                        registerModelPickerAdapter,
+                        registerAppSourceTransform,
+                        registerExternalTaskProvider,
+                        externalTaskSnapshot,
+                        invokeExternalTask,
+                        getContextCapabilityOverride: selectionId => contextCapabilityOverride(null, selectionId)
+                    });
+                    if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1")
+                        process.stderr.write(`[runtime-extension-host] activated Afterburner extension '${id}'\n`);
+                }
+            } catch (error) {
+                if (error?.code !== "ENOENT")
+                    process.stderr.write(`Warning: Afterburner extension registry failed: ${error?.message ?? String(error)}\n`);
+            }
         }
     }
 }

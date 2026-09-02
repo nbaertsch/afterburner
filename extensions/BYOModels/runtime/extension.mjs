@@ -88,14 +88,17 @@ function installContextArrowControls(source) {
 }
 
 export async function activate({ pluginRoot, registerModelPickerAdapter, registerAppSourceTransform }) {
+    if (!process.env.AFTERBURNER_BYOMODELS_CONFIG) {
+        throw new Error("BYOModels requires AFTERBURNER_BYOMODELS_CONFIG.");
+    }
     const config = JSON.parse(
-        await readFile(join(pluginRoot, "extensions", "byok-models", "models.json"), "utf8")
+        await readFile(process.env.AFTERBURNER_BYOMODELS_CONFIG, "utf8")
     );
     const contextWindowOptions = config.contextWindowOptions ?? [];
     const metadataPath = join(
         process.env.COPILOT_HOME ?? join(process.env.USERPROFILE ?? "", ".copilot"),
         "runtime-extension-data",
-        "afterburner-byok-models",
+        "afterburner-byomodels",
         "model-metadata.json"
     );
     const upstreamBySelectionId = new Map(

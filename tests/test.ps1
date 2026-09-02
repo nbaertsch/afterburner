@@ -4,7 +4,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 
 $compatibilityTest = @'
 import { createServer } from "node:http";
-import { startRequestCompatibilityProxy } from "./extensions/byok-models/extensions/byok-models/request-compatibility.mjs";
+import { startRequestCompatibilityProxy } from "./extensions/BYOModels/extensions/BYOModels/request-compatibility.mjs";
 
 let received;
 let receivedAuthorization;

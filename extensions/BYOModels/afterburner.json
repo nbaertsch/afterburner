@@ -1,0 +1,21 @@
+{
+  "$schema": "../../schemas/extension-v1.schema.json",
+  "schemaVersion": 1,
+  "id": "byomodels",
+  "displayName": "BYOModels",
+  "description": "Adds first-class picker metadata, context controls, and request compatibility for user-configured models.",
+  "visibility": "builtin",
+  "requires": {
+    "afterburner": ">=0.1.0 <1.0.0",
+    "copilotCli": [">=1.0.83-1 <1.0.84"]
+  },
+  "runtime": {
+    "entrypoint": "runtime/extension.mjs",
+    "execution": "in-process"
+  },
+  "capabilities": ["model-picker", "application-source-transform"],
+  "companionPlugin": {
+    "manifest": "plugin.json",
+    "required": true
+  }
+}
