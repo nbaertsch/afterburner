@@ -40,8 +40,7 @@ function Initialize-ManagedHome {
     foreach ($name in @(
         "session-state",
         "settings.json",
-        "permissions-config.json",
-        "mcp-config.json"
+        "permissions-config.json"
     )) {
         $source = Join-Path $normalHome $name
         $target = Join-Path $ManagedHome $name
