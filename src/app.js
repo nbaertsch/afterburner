@@ -50,6 +50,7 @@ const appSourceTransforms = [];
 const upstreamMetadata = new Map();
 const effortOverrides = new Map();
 const contextOverrides = new Map();
+const nativeContextTiers = ["default", "long_context"];
 
 function adapterFor(selectionId) {
     return pickerAdapters.find((adapter) => adapter.matches(selectionId));
@@ -103,6 +104,23 @@ function contextCapabilityOverride(sessionId, selectionId) {
         maxPromptTokens: Math.max(1, maxContextWindowTokens - maxOutputTokens),
         maxContextWindowTokens,
         ...(maxOutputTokens > 0 ? { maxOutputTokens } : {})
+    };
+}
+
+function withBidirectionalNativeContext(row, source) {
+    if (!row.contextToggleable || metadataFor(source?.value)) return row;
+    const rowContextTier = row.rowKey.split("::")[1];
+    const contextTier = source?.contextTier ?? rowContextTier ?? nativeContextTiers[0];
+    const contextIndex = nativeContextTiers.indexOf(contextTier);
+    if (contextIndex < 0) return row;
+    const previousContextTier = nativeContextTiers[contextIndex - 1];
+    const nextContextTier = nativeContextTiers[contextIndex + 1];
+    return {
+        ...row,
+        contextCanLower: previousContextTier !== undefined,
+        contextCanRaise: nextContextTier !== undefined,
+        previousContextTier,
+        nextContextTier
     };
 }
 
@@ -188,13 +206,19 @@ function installPickerBridge() {
     const originalProjectInlineTable = runtime.modelProjectInlineTable.bind(runtime);
     runtime.modelProjectInlineTable = (input) => {
         const result = originalProjectInlineTable(input);
-        let augmented = false;
+        let changed = false;
+        let customAugmented = false;
         const rowsById = new Map((input.rows ?? []).map((row) => [row.value, row]));
         const rows = result.rows.map((row) => {
             const source = rowsById.get(row.rowKey.split("::", 1)[0]);
+            const nativeContextRow = withBidirectionalNativeContext(row, source);
             const metadata = metadataFor(source?.value);
-            if (!metadata) return row;
-            augmented = true;
+            if (!metadata) {
+                if (nativeContextRow !== row) changed = true;
+                return nativeContextRow;
+            }
+            changed = true;
+            customAugmented = true;
             const efforts = metadata.supportedReasoningEfforts;
             const effort = source.effort ?? metadata.defaultReasoningEffort;
             const effortIndex = efforts.indexOf(effort);
@@ -235,7 +259,12 @@ function installPickerBridge() {
                 contextSegments
             };
         });
-        return augmented ? { ...result, rows, hasReasoningColumn: true, hasContextColumn: true } : result;
+        if (!changed) return result;
+        return {
+            ...result,
+            rows,
+            ...(customAugmented ? { hasReasoningColumn: true, hasContextColumn: true } : {})
+        };
     };
 
     const originalModelSwitchTo = runtime.sessionModelSwitchToJson.bind(runtime);
@@ -413,7 +442,22 @@ if (process.env.COPILOT_RUNTIME_EXTENSION_SELF_TEST === "1") {
         }
     }
     const projection = runtime.modelProjectInlineTable({ rows, screenReaderEnabled: false, costHeader: "Cost" });
-    process.stdout.write(`${JSON.stringify({ projection, contextCycles, capabilityOverrides }, null, 2)}\n`);
+    const nativeContextNavigation = nativeContextTiers.map((contextTier) =>
+        withBidirectionalNativeContext(
+            {
+                rowKey: `native/model::${contextTier}`,
+                contextToggleable: true,
+                nextContextTier: contextTier === "default" ? "long_context" : "default"
+            },
+            { value: "native/model", contextTier }
+        )
+    );
+    process.stdout.write(`${JSON.stringify({
+        projection,
+        contextCycles,
+        capabilityOverrides,
+        nativeContextNavigation
+    }, null, 2)}\n`);
     process.exit(0);
 }globalThis.__copilotRuntimeAddon__ = { addon: runtime, processStateInitialized: false };
 await import(pathToFileURL(await transformedAppPath()).href);

@@ -72,6 +72,18 @@ foreach ($entry in $result.contextCycles.PSObject.Properties) {
     }
 }
 
+$nativeDefault, $nativeLong = @($result.nativeContextNavigation)
+if ($nativeDefault.contextCanLower -or
+    -not $nativeDefault.contextCanRaise -or
+    $nativeDefault.nextContextTier -ne "long_context") {
+    throw "Native default context tier does not expose a proper right-arrow target."
+}
+if (-not $nativeLong.contextCanLower -or
+    $nativeLong.contextCanRaise -or
+    $nativeLong.previousContextTier -ne "default") {
+    throw "Native long context tier does not expose a proper left-arrow target."
+}
+
 $versionOutput = copilot version | Out-String
 if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch "GitHub Copilot CLI") {
     throw "Copilot failed to start through Afterburner."
