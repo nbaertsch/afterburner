@@ -1,0 +1,9 @@
+{
+  "name": "afterburner-byok-models",
+  "description": "Registers configurable BYOK providers and models with native picker metadata.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Noah Baertsch"
+  },
+  "extensions": "extensions/"
+}

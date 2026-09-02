@@ -1,0 +1,13 @@
+{
+  "name": "copilot-afterburner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1",
+    "test": "powershell -NoProfile -ExecutionPolicy Bypass -File tests/test.ps1"
+  },
+  "devDependencies": {
+    "node-pty": "^1.1.0"
+  }
+}
