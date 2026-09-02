@@ -32,6 +32,29 @@ Normal 'copilot' invocations do not load Afterburner.
 "@
 }
 
+function Initialize-ManagedHome {
+    param([string]$ManagedHome)
+
+    New-Item -ItemType Directory -Force $ManagedHome | Out-Null
+    $normalHome = Join-Path $env:USERPROFILE ".copilot"
+    foreach ($name in @(
+        "session-state",
+        "settings.json",
+        "permissions-config.json",
+        "mcp-config.json"
+    )) {
+        $source = Join-Path $normalHome $name
+        $target = Join-Path $ManagedHome $name
+        if ((Test-Path $source) -and !(Test-Path $target)) {
+            if ((Get-Item $source).PSIsContainer) {
+                New-Item -ItemType Junction -Path $target -Target $source | Out-Null
+            } else {
+                Copy-Item $source $target
+            }
+        }
+    }
+}
+
 if (!$Command) {
     $Command = "run"
 } elseif ($Command.StartsWith("-") -or $managementCommands -notcontains $Command) {
@@ -42,7 +65,7 @@ if (!$Command) {
 switch ($Command) {
     "run" {
         $managedHome = Join-Path $env:USERPROFILE ".afterburner\copilot-home"
-        New-Item -ItemType Directory -Force $managedHome | Out-Null
+        Initialize-ManagedHome $managedHome
         $previousCopilotHome = $env:COPILOT_HOME
         $env:COPILOT_HOME = $managedHome
         $exitCode = 1
