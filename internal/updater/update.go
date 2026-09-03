@@ -36,11 +36,32 @@ type ManifestAsset struct {
 }
 
 type Manifest struct {
-	SchemaVersion int             `json:"schemaVersion"`
-	Repository    string          `json:"repository"`
-	Version       string          `json:"version"`
-	Commit        string          `json:"commit"`
-	Assets        []ManifestAsset `json:"assets"`
+	SchemaVersion int               `json:"schemaVersion"`
+	Repository    string            `json:"repository"`
+	Version       string            `json:"version"`
+	Commit        string            `json:"commit"`
+	Assets        []ManifestAsset   `json:"assets"`
+	Builtins      []ManifestBuiltin `json:"builtins,omitempty"`
+}
+
+// ManifestBuiltin describes a signed built-in extension package published as
+// an additional asset on the same GitHub release as the core binary. Unlike
+// ManifestAsset (which is OS/architecture specific), builtin packages are
+// pure JS and are not bound to a platform.
+type ManifestBuiltin struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+func builtinManifestEntry(manifest Manifest, id string) (ManifestBuiltin, bool) {
+	for _, builtin := range manifest.Builtins {
+		if builtin.ID == id {
+			return builtin, true
+		}
+	}
+	return ManifestBuiltin{}, false
 }
 
 func (client Client) Stage(ctx context.Context, release Release, root string) (string, error) {
@@ -141,6 +162,171 @@ func (client Client) Stage(ctx context.Context, release Release, root string) (s
 	}
 	success = true
 	return target, nil
+}
+
+// StageBuiltin downloads, verifies, and extracts a signed built-in extension
+// package published as a release asset named "<id>.zip". It returns the
+// staging directory containing the extracted extension source tree, which
+// callers are responsible for removing once no longer needed. It performs
+// the same manifest signature verification as Stage, but validates the
+// archive against the release manifest's Builtins entries (which are not
+// bound to an OS/architecture) rather than its Assets entries.
+func (client Client) StageBuiltin(ctx context.Context, release Release, root, id string) (string, error) {
+	archiveName := id + ".zip"
+	archiveAsset, ok := findAsset(release, archiveName)
+	if !ok {
+		return "", fmt.Errorf("release %s is missing %s", release.TagName, archiveName)
+	}
+	checksumAsset, ok := findAsset(release, "checksums.txt")
+	if !ok {
+		return "", fmt.Errorf("release %s is missing checksums.txt", release.TagName)
+	}
+	manifestAsset, ok := findAsset(release, "release-manifest.json")
+	if !ok {
+		return "", fmt.Errorf("release %s is missing release-manifest.json", release.TagName)
+	}
+	signatureAsset, ok := findAsset(release, "release-manifest.sig")
+	if !ok {
+		return "", fmt.Errorf("release %s is missing release-manifest.sig", release.TagName)
+	}
+	checksums, err := client.download(ctx, checksumAsset, 1<<20)
+	if err != nil {
+		return "", err
+	}
+	expected, err := checksumFor(checksums, archiveName)
+	if err != nil {
+		return "", err
+	}
+	manifestData, err := client.download(ctx, manifestAsset, 1<<20)
+	if err != nil {
+		return "", err
+	}
+	signatureData, err := client.download(ctx, signatureAsset, 4096)
+	if err != nil {
+		return "", err
+	}
+	publicKey := ed25519.PublicKey(client.ManifestPublicKey)
+	if len(publicKey) == 0 {
+		publicKey, err = releasesign.PublicKey()
+		if err != nil {
+			return "", err
+		}
+	}
+	if err := releasesign.Verify(publicKey, manifestData, signatureData); err != nil {
+		return "", err
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return "", fmt.Errorf("parse release manifest: %w", err)
+	}
+	builtinEntry, ok := builtinManifestEntry(manifest, id)
+	if manifest.SchemaVersion != 1 || manifest.Repository != repository ||
+		manifest.Version != release.TagName || manifest.Commit == "" || !ok ||
+		!strings.EqualFold(builtinEntry.SHA256, expected) {
+		return "", fmt.Errorf("release manifest does not authorize %s for built-in %q", archiveName, id)
+	}
+	archive, err := client.download(ctx, archiveAsset, 64<<20)
+	if err != nil {
+		return "", err
+	}
+	if builtinEntry.Size != int64(len(archive)) {
+		return "", fmt.Errorf("release archive size does not match the manifest")
+	}
+	sum := sha256.Sum256(archive)
+	if !strings.EqualFold(hex.EncodeToString(sum[:]), expected) {
+		return "", fmt.Errorf("release archive checksum mismatch")
+	}
+	stagingRoot := filepath.Join(root, "update-staging")
+	if err := os.MkdirAll(stagingRoot, 0o700); err != nil {
+		return "", err
+	}
+	staging, err := os.MkdirTemp(stagingRoot, sanitizeTag(release.TagName)+"-"+id+"-")
+	if err != nil {
+		return "", err
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = os.RemoveAll(staging)
+		}
+	}()
+	if err := extractBuiltinArchive(archive, staging); err != nil {
+		return "", err
+	}
+	success = true
+	return staging, nil
+}
+
+// extractBuiltinArchive extracts a zip archive into destination, rejecting
+// any entry that would escape destination via path traversal or an absolute
+// path. Unlike extractExecutable (which reads a single named file from an
+// archive), this extracts an entire directory tree.
+func extractBuiltinArchive(data []byte, destination string) error {
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return fmt.Errorf("open built-in archive: %w", err)
+	}
+	for _, file := range reader.File {
+		cleaned := filepath.Clean(file.Name)
+		if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") || strings.Contains(cleaned, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("built-in archive entry %q escapes the extraction root", file.Name)
+		}
+		target := filepath.Join(destination, cleaned)
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o700); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		input, err := file.Open()
+		if err != nil {
+			return err
+		}
+		content, readErr := io.ReadAll(io.LimitReader(input, 32<<20))
+		closeErr := input.Close()
+		if readErr != nil || closeErr != nil {
+			return fmt.Errorf("read built-in archive entry %q", file.Name)
+		}
+		if err := os.WriteFile(target, content, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// BuiltinReleaseFetcher resolves built-in extension IDs to their signed
+// package published on the current core release. It implements the
+// extensions.BuiltinFetcher interface via structural typing so that
+// internal/extensions does not need to import internal/updater.
+type BuiltinReleaseFetcher struct {
+	Client Client
+	Root   string
+	// Version, when non-empty, pins the fetcher to a specific release tag
+	// instead of the latest release. Leave empty to always use latest.
+	Version string
+}
+
+func (fetcher BuiltinReleaseFetcher) FetchBuiltin(id string) (string, func(), error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var release Release
+	var err error
+	if fetcher.Version != "" {
+		release, err = fetcher.Client.Release(ctx, fetcher.Version)
+	} else {
+		release, err = fetcher.Client.Latest(ctx)
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve release for built-in %q: %w", id, err)
+	}
+	staging, err := fetcher.Client.StageBuiltin(ctx, release, fetcher.Root, id)
+	if err != nil {
+		return "", nil, err
+	}
+	return staging, func() { _ = os.RemoveAll(staging) }, nil
 }
 
 func BeginReplacement(candidate, target, previous string) error {

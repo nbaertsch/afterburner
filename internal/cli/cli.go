@@ -208,6 +208,13 @@ func runExtensionCommand(route Route, opts Options) (int, error) {
 		return 1, err
 	}
 	manager := extensions.Manager{Layout: layout, Stdout: opts.Stdout}
+	if route.Command == "install" && strings.TrimSpace(os.Getenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE")) == "" &&
+		strings.TrimSpace(os.Getenv("AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH")) == "" {
+		manager.BuiltinFetcher = updater.BuiltinReleaseFetcher{
+			Client: updater.NewClient(context.Background()),
+			Root:   layout.Root,
+		}
+	}
 	switch route.Command {
 	case "install":
 		err = manager.InstallBuiltins(route.Args)

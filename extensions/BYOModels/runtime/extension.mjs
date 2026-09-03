@@ -123,7 +123,7 @@ function installContextArrowControls(source) {
     return source;
 }
 
-export async function activate({ pluginRoot, registerModelPickerAdapter, registerAppSourceTransform }) {
+export async function activate({ pluginRoot, registerModelPickerAdapter, registerAppSourceTransform, registerModelPickerRowDecorator }) {
     const configPath = process.env.AFTERBURNER_BYOMODELS_CONFIG ??
         join(process.env.AFTERBURNER_HOME ?? join(process.env.USERPROFILE ?? "", ".afterburner"),
             "config", "byomodels.json");
@@ -139,6 +139,11 @@ export async function activate({ pluginRoot, registerModelPickerAdapter, registe
     );
     const upstreamBySelectionId = new Map(
         config.models.map((model) => [`${model.provider}/${model.id}`, model.modelId])
+    );
+    const badgeBySelectionId = new Map(
+        config.models
+            .filter((model) => typeof model.badge === "string" && model.badge.length > 0)
+            .map((model) => [`${model.provider}/${model.id}`, model.badge])
     );
     const runtimeMetadata = (selectionId) => {
         try {
@@ -160,4 +165,14 @@ export async function activate({ pluginRoot, registerModelPickerAdapter, registe
         contextWindowOptions: () => contextWindowOptions
     });
     registerAppSourceTransform(installContextArrowControls);
+    // registerModelPickerRowDecorator is only available on Afterburner builds
+    // that support the model-picker.row-decorator.v1 mod point; older/newer
+    // unprofiled Copilot builds simply won't offer per-model badges, which is
+    // fine (fails closed at the framework level, not here).
+    if (typeof registerModelPickerRowDecorator === "function" && badgeBySelectionId.size > 0) {
+        registerModelPickerRowDecorator({
+            id: "afterburner-byomodels-badge",
+            render: (row) => badgeBySelectionId.get(row.selectionId) ?? null
+        });
+    }
 }

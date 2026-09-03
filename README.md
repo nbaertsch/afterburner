@@ -19,16 +19,41 @@ afterburn install
 
 `core install` atomically installs the executable at `~\.afterburner\bin\afterburn.exe`, retains the
 previous core for rollback, and adds that directory to the user PATH. `afterburn install` installs
-and enables the embedded BYOModels and Black Box built-ins without requiring the source checkout.
+and enables the BYOModels and Black Box built-ins.
 
 Tagged GitHub Releases publish `afterburn-windows-amd64.zip`,
-`afterburn-windows-arm64.zip`, `checksums.txt`, `release-manifest.json`, and
-`release-manifest.sig`.
+`afterburn-windows-arm64.zip`, `black-box.zip`, `byo-models.zip`, `checksums.txt`,
+`release-manifest.json`, and `release-manifest.sig`.
 
 Release publication is manually dispatched from `main` for a version tag that identifies the exact
 current `origin/main` commit. Unsigned assets are built in a secretless job; signing occurs only in
 the `release-signing` GitHub Environment, whose Ed25519 key is restricted to the `main` workflow
 ref.
+
+### Built-in extension updates
+
+`afterburn install <id>` fetches the current signed `black-box.zip`/`byo-models.zip` release asset
+from the latest GitHub release (Ed25519-verified via the same `release-manifest.json`/
+`release-manifest.sig` used for the core binary) and installs it. If the release asset cannot be
+fetched (offline, rate-limited, no network), it automatically falls back to the built-in copy
+embedded in the running `afterburn.exe` binary via `go:embed`, so `afterburn install` always
+succeeds even without network access — it just may install an older built-in version until the core
+binary itself is next updated.
+
+Set `AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH=1` to force `afterburn install` to always use the
+embedded built-in and skip the network fetch entirely.
+
+For local development on a built-in extension's source (`extensions/BlackBox`,
+`extensions/BYOModels`), set `AFTERBURNER_BUILTIN_SOURCE_OVERRIDE=id=path[,id2=path2]` before
+running `afterburn install <id>` to materialize the extension directly from a local source
+directory instead of any release asset or embedded copy. This is a development-only escape hatch:
+it is never consulted for signature or trust decisions, and it still enforces that the source
+directory's `afterburner.json` manifest matches the requested `id` and has `"visibility": "builtin"`.
+
+```powershell
+$env:AFTERBURNER_BUILTIN_SOURCE_OVERRIDE = "black-box=C:\path\to\afterburner\extensions\BlackBox"
+afterburn install black-box
+```
 
 ## Launch and passthrough
 

@@ -13,12 +13,13 @@ import (
 )
 
 type Profile struct {
-	ID                 string   `json:"id"`
-	Version            string   `json:"version"`
-	AppSHA256          string   `json:"appSha256"`
-	RuntimeSHA256      string   `json:"runtimeSha256"`
-	BYOModelsTransform string   `json:"byoModelsTransform"`
-	RequiredAppAnchors []string `json:"requiredAppAnchors"`
+	ID                     string   `json:"id"`
+	Version                string   `json:"version"`
+	AppSHA256              string   `json:"appSha256"`
+	RuntimeSHA256          string   `json:"runtimeSha256"`
+	BYOModelsTransform     string   `json:"byoModelsTransform"`
+	RequiredAppAnchors     []string `json:"requiredAppAnchors"`
+	ModelPickerRowRenderer string   `json:"modelPickerRowRenderer"`
 }
 
 var profiles = []Profile{
@@ -30,7 +31,9 @@ var profiles = []Profile{
 		BYOModelsTransform: "picker-kn",
 		RequiredAppAnchors: []string{
 			`W=(0,Kn.useRef)(r[0]??null),Y=(0,Kn.useRef)(null),{rows:Z,columns:de}=vi()`,
+			`j=(0,Kn.useMemo)(()=>{let Ue=new Map;for(let nt of r){let ut=ne.get(nt.value);ut&&Ue.set(ut.rowKey,nt)}return Ue},[r,ne])`,
 		},
+		ModelPickerRowRenderer: "vzr",
 	},
 	{
 		ID:                 "copilot-1.0.83-2-win32-x64",
@@ -40,7 +43,9 @@ var profiles = []Profile{
 		BYOModelsTransform: "picker-vn",
 		RequiredAppAnchors: []string{
 			`W=(0,Vn.useRef)(r[0]??null),Y=(0,Vn.useRef)(null),{rows:ee,columns:ce}=Ci()`,
+			`j=(0,Vn.useMemo)(()=>{let Ue=new Map;for(let nt of r){let ut=ne.get(nt.value);ut&&Ue.set(ut.rowKey,nt)}return Ue},[r,ne])`,
 		},
+		ModelPickerRowRenderer: "Wzr",
 	},
 	{
 		ID:                 "copilot-1.0.83-3-win32-x64",
@@ -50,7 +55,9 @@ var profiles = []Profile{
 		BYOModelsTransform: "picker-wn",
 		RequiredAppAnchors: []string{
 			`j=(0,Wn.useRef)(r[0]??null),W=(0,Wn.useRef)(null),{rows:X,columns:ce}=Ti()`,
+			`V=(0,Wn.useMemo)(()=>{let Le=new Map;for(let tt of r){let Ct=re.get(tt.value);Ct&&Le.set(Ct.rowKey,tt)}return Le},[r,re])`,
 		},
+		ModelPickerRowRenderer: "U6r",
 	},
 }
 

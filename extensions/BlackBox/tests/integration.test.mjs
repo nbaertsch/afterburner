@@ -23,26 +23,34 @@ test("native event path resolves the Copilot extension SESSION_ID", () => {
     }), "C:\\managed-home\\session-state\\session-123\\events.jsonl");
 });
 
-test("session registration exposes all commands and the Black Box canvas", async () => {
-    let canvasDefinition;
-    let registration;
-    const logs = [];
-    const service = {
+function fakePanelService(records = []) {
+    return {
         status: async () => ({
-            storage: { segmentCount: 2, segmentBytes: 100 },
-            queue: { droppedRecords: 0 },
-            analytics: { anomalyCount: 1 }
+            schemaVersion: 1,
+            enabled: true,
+            mode: "session",
+            storage: { segmentCount: 2, segmentBytes: 100, retentionBlockedBytes: 0 },
+            queue: { records: 0, bytes: 0, droppedRecords: 0, writeErrors: 0 },
+            analytics: { anomalyCount: 1, milestoneCount: 3, totalRecords: 12 },
+            native: { enabled: true, configured: true },
+            recentSignals: records
         }),
-        tail: async () => [],
+        tail: async () => records,
         exportBundle: async () => ({ path: "bundle", manifest: { recordCount: 0 } }),
         doctor: async () => ({ healthy: true })
     };
+}
+
+test("session registration exposes all commands and the optional Black Box canvas", async () => {
+    let canvasDefinition;
+    let registration;
+    const logs = [];
     const createCanvas = definition => { canvasDefinition = definition; return definition; };
     const joinSession = async options => {
         registration = options;
         return { log: async message => logs.push(message) };
     };
-    await buildSessionRegistration({ service, createCanvas, joinSession });
+    await buildSessionRegistration({ service: fakePanelService(), createCanvas, joinSession });
     assert.equal(canvasDefinition.id, "afterburner-black-box");
     assert.deepEqual(registration.commands.map(command => command.name), [
         "black-box", "black-box-tail", "black-box-tail-stop", "black-box-export", "black-box-doctor"
@@ -50,7 +58,47 @@ test("session registration exposes all commands and the Black Box canvas", async
     assert.deepEqual(canvasDefinition.actions.map(action => action.name), ["snapshot", "tail", "export", "doctor"]);
     assert.equal(logs.length, 0, "Black Box must not write timeline entries before explicit user action.");
     await registration.commands[0].handler();
-    assert.match(logs[0], /2 segment/);
+    assert.match(logs[0], /Afterburner Black Box/);
+    assert.match(logs[0], /Storage/);
+    assert.match(logs[0], /Queue/);
+    assert.match(logs[0], /1 anomalie/);
+});
+
+test("session registration renders the visible panel without canvas support", async () => {
+    let registration;
+    const logs = [];
+    const joinSession = async options => {
+        registration = options;
+        return { log: async message => logs.push(message) };
+    };
+    await buildSessionRegistration({ service: fakePanelService(), createCanvas: undefined, joinSession });
+    assert.deepEqual(registration.canvases, []);
+    assert.equal(logs.length, 0, "Black Box must stay silent before explicit user action.");
+    await registration.commands.find(command => command.name === "black-box").handler();
+    assert.match(logs[0], /Afterburner Black Box/);
+    assert.match(logs[0], /Storage\s*:/);
+    assert.match(logs[0], /Queue\s*:/);
+    assert.match(logs[0], /Signals\s*:/);
+});
+
+test("Black Box tail command renders a sanitized timeline panel", async () => {
+    let registration;
+    const logs = [];
+    const records = [{
+        timestamp: "2026-09-02T10:00:00.000Z",
+        kind: "milestone",
+        eventType: "milestone.tool-complete",
+        attributes: { durationMs: 42, success: true, body: "MUST NOT RENDER" }
+    }];
+    const joinSession = async options => {
+        registration = options;
+        return { log: async message => logs.push(message) };
+    };
+    await buildSessionRegistration({ service: fakePanelService(records), createCanvas: undefined, joinSession });
+    await registration.commands.find(command => command.name === "black-box-tail").handler("5");
+    assert.match(logs[0], /Afterburner Black Box timeline/);
+    assert.match(logs[0], /milestone\.tool-complete 42ms success=true/);
+    assert.doesNotMatch(logs[0], /MUST NOT RENDER/);
 });
 
 test("runtime activation registers an isolated observer definition", async t => {

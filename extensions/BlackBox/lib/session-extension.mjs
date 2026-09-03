@@ -17,10 +17,60 @@ function statusLine(status) {
         `${status.queue.droppedRecords} dropped record(s), ${status.analytics.anomalyCount} anomaly/anomalies.`;
 }
 
+function formatBytes(value) {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes < 0) return "unknown";
+    const units = ["B", "KiB", "MiB", "GiB"];
+    let scaled = bytes;
+    let unit = 0;
+    while (scaled >= 1024 && unit < units.length - 1) {
+        scaled /= 1024;
+        unit++;
+    }
+    const digits = scaled >= 10 || unit === 0 ? 0 : 1;
+    return `${scaled.toFixed(digits)} ${units[unit]}`;
+}
+
+function formatEnabled(value) {
+    return value ? "enabled" : "disabled";
+}
+
+function formatPanel(status) {
+    const signals = Array.isArray(status.recentSignals) && status.recentSignals.length > 0
+        ? status.recentSignals.slice(0, 5).map(record => `  - ${tailLine(record)}`).join("\n")
+        : "  - none";
+    return [
+        "Afterburner Black Box",
+        "======================",
+        `Recorder: ${formatEnabled(status.enabled)} (${status.mode ?? "unknown"})`,
+        `Storage : ${status.storage.segmentCount} segment(s), ${formatBytes(status.storage.segmentBytes)} used, ` +
+            `${formatBytes(status.storage.retentionBlockedBytes)} retention-blocked`,
+        `Queue   : ${status.queue.records ?? 0} queued, ${formatBytes(status.queue.bytes ?? 0)}, ` +
+            `${status.queue.droppedRecords} dropped, ${status.queue.writeErrors} write error(s)`,
+        `Signals : ${status.analytics.anomalyCount} anomalie(s), ${status.analytics.milestoneCount} milestone(s), ` +
+            `${status.analytics.totalRecords} total record(s)`,
+        `Native  : ${formatEnabled(status.native?.enabled)}, ` +
+            `${status.native?.configured ? "configured" : "not configured"}`,
+        "Recent signals:",
+        signals,
+        "Commands: /black-box-tail [N] | /black-box-export [N] | /black-box-doctor"
+    ].join("\n");
+}
+
 function tailLine(record) {
-    const duration = Number.isFinite(record.attributes.durationMs) ? ` ${record.attributes.durationMs}ms` : "";
-    const outcome = typeof record.attributes.success === "boolean" ? ` success=${record.attributes.success}` : "";
+    const attributes = record.attributes ?? {};
+    const duration = Number.isFinite(attributes.durationMs) ? ` ${attributes.durationMs}ms` : "";
+    const outcome = typeof attributes.success === "boolean" ? ` success=${attributes.success}` : "";
     return `${record.timestamp} ${record.kind} ${record.eventType}${duration}${outcome}`;
+}
+
+function formatTimeline(records) {
+    if (!records.length) return "Black Box timeline is empty.";
+    return [
+        `Afterburner Black Box timeline (${records.length} record(s))`,
+        "========================================",
+        ...records.map(tailLine)
+    ].join("\n");
 }
 
 async function safeAction(action) {
@@ -52,7 +102,7 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
         }, 2000);
         liveTailTimer.unref?.();
     };
-    const canvas = createCanvas({
+    const canvas = typeof createCanvas === "function" ? createCanvas({
         id: "afterburner-black-box",
         displayName: "Afterburner Black Box",
         description: "Metadata-only session timeline, anomalies, milestones, storage health, and sanitized exports.",
@@ -100,7 +150,7 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
                 status: status?.storage ? statusLine(status) : "Black Box is unavailable."
             };
         }
-    });
+    }) : null;
 
     const logSafely = async action => {
         try { await action(); }
@@ -112,7 +162,7 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
             {
                 name: "black-box",
                 description: "Show Black Box recorder, retention, queue, and anomaly status.",
-                handler: async () => logSafely(async () => session.log(statusLine(await service.status())))
+                handler: async () => logSafely(async () => session.log(formatPanel(await service.status())))
             },
             {
                 name: "black-box-tail",
@@ -125,7 +175,7 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
                     }
                     const limit = requestedLimit(input) ?? 50;
                     const records = await service.tail({ limit });
-                    await session.log(records.length ? records.map(tailLine).join("\n") : "Black Box timeline is empty.");
+                    await session.log(formatTimeline(records));
                     await startLiveTail(limit);
                     await session.log("Black Box live tail started; run /black-box-tail stop to stop it.");
                 })
@@ -152,7 +202,7 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
                 handler: async () => logSafely(async () => session.log(JSON.stringify(await service.doctor(), null, 2)))
             }
         ],
-        canvases: [canvas]
+        canvases: canvas ? [canvas] : []
     });
     return {
         session,

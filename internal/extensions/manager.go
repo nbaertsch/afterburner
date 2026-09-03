@@ -28,14 +28,65 @@ var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 type Manager struct {
 	Layout home.Layout
 	Stdout io.Writer
+	// BuiltinFetcher, when set, is consulted before the embedded release
+	// asset for each built-in extension ID during InstallBuiltins. It lets
+	// callers (e.g. the CLI's install command) source built-ins from the
+	// current signed GitHub release instead of the binary's go:embed'd
+	// snapshot, so a built-in extension update no longer requires a full
+	// core rebuild. It is nil by default, preserving prior behavior.
+	BuiltinFetcher BuiltinFetcher
+}
+
+// BuiltinFetcher resolves a built-in extension ID to an extracted, verified
+// source directory. Implementations are responsible for any network fetch
+// and signature verification; InstallBuiltins itself does not perform any
+// trust decisions on the returned directory beyond the standard manifest
+// ID/visibility check it already applies to every source. FetchBuiltin
+// should return an error for any ID it cannot resolve so InstallBuiltins can
+// fall back to the embedded release asset.
+type BuiltinFetcher interface {
+	FetchBuiltin(id string) (path string, cleanup func(), err error)
+}
+
+// builtinSourceOverrides parses AFTERBURNER_BUILTIN_SOURCE_OVERRIDE, a development-only escape
+// hatch that lets 'afterburn install <id>' materialize a built-in from a local source directory
+// instead of the embedded release asset. It is never consulted for signature or trust decisions;
+// it only changes which directory is hashed and copied into the managed extension package root.
+// Format: "id=path[,id2=path2,...]".
+func builtinSourceOverrides() map[string]string {
+	raw := strings.TrimSpace(os.Getenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE"))
+	if raw == "" {
+		return nil
+	}
+	overrides := map[string]string{}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		id, path, found := strings.Cut(entry, "=")
+		id = canonicalID(strings.TrimSpace(id))
+		path = strings.TrimSpace(path)
+		if !found || id == "" || path == "" {
+			continue
+		}
+		overrides[id] = path
+	}
+	return overrides
 }
 
 func (m Manager) InstallBuiltins(ids []string) error {
 	return m.withRegistry(func(value *registry.Registry) error {
 		catalog := assets.Builtins()
+		overrides := builtinSourceOverrides()
 		if len(ids) == 0 {
 			for id := range catalog {
 				ids = append(ids, id)
+			}
+			for id := range overrides {
+				if _, ok := catalog[id]; !ok {
+					ids = append(ids, id)
+				}
 			}
 			sort.Strings(ids)
 		}
@@ -45,13 +96,52 @@ func (m Manager) InstallBuiltins(ids []string) error {
 		}
 		ids = normalized
 		for _, id := range ids {
-			archive, ok := catalog[id]
-			if !ok {
+			_, knownBuiltin := catalog[id]
+			overridePath, hasOverride := overrides[id]
+			if !knownBuiltin && !hasOverride {
 				return fmt.Errorf("unknown built-in extension %q; available: %s", id, strings.Join(sortedKeys(catalog), ", "))
 			}
-			source, cleanup, err := m.extractBuiltin(id, archive)
-			if err != nil {
-				return err
+			var source string
+			var cleanup func()
+			if hasOverride {
+				resolved, err := filepath.Abs(overridePath)
+				if err != nil {
+					return fmt.Errorf("resolve built-in source override for %q: %w", id, err)
+				}
+				manifest, err := readManifest(resolved)
+				if err != nil || manifest.ID != id || manifest.Visibility != "builtin" {
+					return fmt.Errorf("built-in source override for %q at %s has an invalid or mismatched manifest", id, resolved)
+				}
+				source, cleanup = resolved, func() {}
+				fmt.Fprintf(m.Stdout, "Using development source override for built-in extension %q at %s.\n", id, resolved)
+			} else if m.BuiltinFetcher != nil {
+				fetched, fetchCleanup, err := m.BuiltinFetcher.FetchBuiltin(id)
+				if err != nil {
+					if !knownBuiltin {
+						return fmt.Errorf("fetch built-in extension %q: %w", id, err)
+					}
+					fmt.Fprintf(m.Stdout, "Could not fetch built-in extension %q from the current release (%v); using the built-in version bundled with this binary.\n", id, err)
+					archive := catalog[id]
+					extracted, extractCleanup, err := m.extractBuiltin(id, archive)
+					if err != nil {
+						return err
+					}
+					source, cleanup = extracted, extractCleanup
+				} else {
+					manifest, err := readManifest(fetched)
+					if err != nil || manifest.ID != id || manifest.Visibility != "builtin" {
+						fetchCleanup()
+						return fmt.Errorf("fetched built-in extension %q has an invalid or mismatched manifest", id)
+					}
+					source, cleanup = fetched, fetchCleanup
+				}
+			} else {
+				archive := catalog[id]
+				extracted, extractCleanup, err := m.extractBuiltin(id, archive)
+				if err != nil {
+					return err
+				}
+				source, cleanup = extracted, extractCleanup
 			}
 			entry, err := m.materialize(source, registry.Source{Type: "builtin", Value: id}, value.Extensions[id], true)
 			if err != nil {

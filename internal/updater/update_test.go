@@ -157,6 +157,138 @@ func TestStageRejectsTamperedManifestBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestStageBuiltinExtractsVerifiedArchive(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archiveBuffer bytes.Buffer
+	writer := zip.NewWriter(&archiveBuffer)
+	entry, err := writer.Create("lib/session-extension.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("export const marker = 'fixture';")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive := archiveBuffer.Bytes()
+	sum := sha256.Sum256(archive)
+	checksum := hex.EncodeToString(sum[:])
+	manifest, err := json.Marshal(Manifest{
+		SchemaVersion: 1,
+		Repository:    repository,
+		Version:       "v1.2.3",
+		Commit:        "fixture",
+		Builtins: []ManifestBuiltin{{
+			ID: "black-box", Name: "black-box.zip", SHA256: checksum, Size: int64(len(archive)),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, manifest))
+	files := map[string][]byte{
+		"/archive":   archive,
+		"/checksums": []byte(checksum + "  black-box.zip\n"),
+		"/manifest":  manifest,
+		"/signature": []byte(signature),
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		data, ok := files[request.URL.Path]
+		if !ok {
+			http.NotFound(response, request)
+			return
+		}
+		_, _ = response.Write(data)
+	}))
+	defer server.Close()
+	release := Release{
+		TagName: "v1.2.3",
+		Assets: []Asset{
+			{Name: "black-box.zip", APIURL: server.URL + "/archive"},
+			{Name: "checksums.txt", APIURL: server.URL + "/checksums"},
+			{Name: "release-manifest.json", APIURL: server.URL + "/manifest"},
+			{Name: "release-manifest.sig", APIURL: server.URL + "/signature"},
+		},
+	}
+	staged, err := (Client{HTTP: server.Client(), ManifestPublicKey: publicKey}).StageBuiltin(t.Context(), release, t.TempDir(), "black-box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(staged, "lib", "session-extension.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "fixture") {
+		t.Fatalf("extracted content = %q", content)
+	}
+}
+
+func TestStageBuiltinRejectsMissingManifestEntry(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := []byte("PK\x03\x04")
+	sum := sha256.Sum256(archive)
+	checksum := hex.EncodeToString(sum[:])
+	manifest, err := json.Marshal(Manifest{
+		SchemaVersion: 1,
+		Repository:    repository,
+		Version:       "v1.2.3",
+		Commit:        "fixture",
+		// No Builtins entries: byo-models must not be authorized.
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, manifest))
+	files := map[string][]byte{
+		"/archive":   archive,
+		"/checksums": []byte(checksum + "  byo-models.zip\n"),
+		"/manifest":  manifest,
+		"/signature": []byte(signature),
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		_, _ = response.Write(files[request.URL.Path])
+	}))
+	defer server.Close()
+	release := Release{
+		TagName: "v1.2.3",
+		Assets: []Asset{
+			{Name: "byo-models.zip", APIURL: server.URL + "/archive"},
+			{Name: "checksums.txt", APIURL: server.URL + "/checksums"},
+			{Name: "release-manifest.json", APIURL: server.URL + "/manifest"},
+			{Name: "release-manifest.sig", APIURL: server.URL + "/signature"},
+		},
+	}
+	_, err = (Client{HTTP: server.Client(), ManifestPublicKey: publicKey}).StageBuiltin(t.Context(), release, t.TempDir(), "byo-models")
+	if err == nil || !strings.Contains(err.Error(), "does not authorize") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestExtractBuiltinArchiveRejectsPathTraversal(t *testing.T) {
+	var archiveBuffer bytes.Buffer
+	writer := zip.NewWriter(&archiveBuffer)
+	entry, err := writer.Create("../escape.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("bad")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractBuiltinArchive(archiveBuffer.Bytes(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "escapes the extraction root") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestStageRequiresManifestSignature(t *testing.T) {
 	assetName := "afterburn-windows-" + runtime.GOARCH + ".zip"
 	_, err := (Client{}).Stage(t.Context(), Release{
