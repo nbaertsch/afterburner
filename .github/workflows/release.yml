@@ -1,0 +1,196 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag at the current main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag }}
+
+      - name: Require exact current main tag
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Release tag must use the expected version format."
+          }
+          git fetch origin main --tags
+          $tagCommit = git rev-list -n 1 $env:RELEASE_TAG
+          $mainCommit = git rev-parse origin/main
+          if (-not $tagCommit -or $tagCommit -ne $mainCommit -or $tagCommit -ne (git rev-parse HEAD)) {
+            throw "Release tag must identify the exact current origin/main commit."
+          }
+          if (git status --porcelain) {
+            throw "Release checkout is not clean."
+          }
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.1
+          cache: true
+
+      - run: go generate ./internal/assets
+      - run: go test ./...
+      - run: go vet ./...
+
+      - name: Build unsigned release assets
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG
+          New-Item artifacts -ItemType Directory -Force | Out-Null
+          foreach ($architecture in @("amd64", "arm64")) {
+            $env:GOOS = "windows"
+            $env:GOARCH = $architecture
+            $directory = Join-Path artifacts "afterburn-windows-$architecture"
+            New-Item $directory -ItemType Directory -Force | Out-Null
+            $executable = Join-Path $directory "afterburn.exe"
+            $archive = Join-Path artifacts "afterburn-windows-$architecture.zip"
+            go build -trimpath -ldflags "-s -w -X main.version=$version" `
+              -o $executable ./cmd/afterburn
+            $stream = [IO.File]::Open($archive, [IO.FileMode]::Create)
+            try {
+              $zip = [IO.Compression.ZipArchive]::new(
+                $stream, [IO.Compression.ZipArchiveMode]::Create, $false)
+              try {
+                $entry = $zip.CreateEntry("afterburn.exe", [IO.Compression.CompressionLevel]::Optimal)
+                $entry.LastWriteTime = [DateTimeOffset]::new(1980, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
+                $input = [IO.File]::OpenRead($executable)
+                try {
+                  $output = $entry.Open()
+                  try { $input.CopyTo($output) } finally { $output.Dispose() }
+                } finally { $input.Dispose() }
+              } finally { $zip.Dispose() }
+            } finally { $stream.Dispose() }
+          }
+          $assetNames = @("afterburn-windows-amd64.zip", "afterburn-windows-arm64.zip")
+          $releaseAssets = foreach ($asset in $assetNames) {
+            $path = Join-Path artifacts $asset
+            $hash = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            [ordered]@{
+              name = $asset
+              os = "windows"
+              architecture = if ($asset -match "arm64") { "arm64" } else { "amd64" }
+              sha256 = $hash
+              size = (Get-Item $path).Length
+            }
+          }
+          $checksums = foreach ($asset in $releaseAssets) {
+            "$($asset.sha256)  $($asset.name)"
+          }
+          $checksums | Set-Content artifacts/checksums.txt -Encoding ascii
+          [ordered]@{
+            schemaVersion = 1
+            repository = "${{ github.repository }}"
+            version = $version
+            commit = "${{ github.sha }}"
+            assets = @($releaseAssets)
+          } | ConvertTo-Json -Depth 4 | Set-Content artifacts/release-manifest.json -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-release
+          path: |
+            artifacts/afterburn-windows-amd64.zip
+            artifacts/afterburn-windows-arm64.zip
+            artifacts/checksums.txt
+            artifacts/release-manifest.json
+          if-no-files-found: error
+
+  sign-and-publish:
+    needs: build
+    runs-on: windows-latest
+    environment: release-signing
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_REPOSITORY: ${{ github.repository }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.1
+          cache: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned-release
+          path: artifacts
+
+      - name: Verify and sign trusted manifest
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.AFTERBURNER_RELEASE_SIGNING_KEY }}
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -ne "refs/heads/main") {
+            throw "Release signing must run from the protected main branch workflow."
+          }
+          if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Release tag must use the expected version format."
+          }
+          git fetch origin main --tags
+          $tagCommit = git rev-list -n 1 $env:RELEASE_TAG
+          $mainCommit = git rev-parse origin/main
+          if (-not $tagCommit -or $tagCommit -ne $mainCommit -or $mainCommit -ne (git rev-parse HEAD)) {
+            throw "Trusted signing checkout or release tag no longer matches origin/main."
+          }
+          $manifest = Get-Content artifacts/release-manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.repository -ne $env:RELEASE_REPOSITORY -or
+              $manifest.version -ne $env:RELEASE_TAG -or
+              $manifest.commit -ne $tagCommit) {
+            throw "Unsigned release manifest identity does not match the trusted release."
+          }
+          foreach ($asset in @($manifest.assets)) {
+            $path = Join-Path artifacts $asset.name
+            if (-not (Test-Path $path) -or
+                (Get-Item $path).Length -ne $asset.size -or
+                (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.sha256) {
+              throw "Unsigned release asset does not match its manifest: $($asset.name)"
+            }
+          }
+          if (-not $env:RELEASE_SIGNING_KEY) {
+            throw "AFTERBURNER_RELEASE_SIGNING_KEY is not configured in the release-signing environment."
+          }
+          Set-Content artifacts/release-signing-key.txt `
+            $env:RELEASE_SIGNING_KEY -Encoding ascii -NoNewline
+          try {
+            go run ./internal/releasesign/cmd sign `
+              artifacts/release-signing-key.txt `
+              artifacts/release-manifest.json `
+              artifacts/release-manifest.sig
+          } finally {
+            Remove-Item artifacts/release-signing-key.txt -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create $env:RELEASE_TAG `
+            artifacts/afterburn-windows-amd64.zip `
+            artifacts/afterburn-windows-arm64.zip `
+            artifacts/checksums.txt `
+            artifacts/release-manifest.json `
+            artifacts/release-manifest.sig `
+            --repo "${{ github.repository }}" `
+            --generate-notes `
+            --verify-tag

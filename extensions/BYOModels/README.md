@@ -7,10 +7,11 @@ reasoning controls. It is installed and upgraded as part of Afterburner; do not 
 
 ## Setup
 
-From an Afterburner source checkout, install or refresh the CLI, then install this built-in package:
+Build and install the native CLI, then install this built-in package:
 
 ```powershell
-.\scripts\install-cli.ps1
+go build -o .\afterburn.exe .\cmd\afterburn
+.\afterburn.exe core install
 afterburn install byo-models
 ```
 
@@ -86,11 +87,11 @@ Never put credentials directly in the configuration file.
 
 ## Updates and safety
 
-Use the normal Afterburner upgrade path:
+Built-ins update with the installed Afterburner core:
 
 ```powershell
-afterburn extension update byo-models
-afterburn extension rollback byo-models
+afterburn update
+afterburn install byo-models
 ```
 
 Package versions are immutable and stored under `~\.afterburner\extensions\byo-models`. User

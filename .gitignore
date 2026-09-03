@@ -1,5 +1,6 @@
 node_modules/
 artifacts/
+.native-build/
 *.log
 extensions/local/*
 !extensions/local/.gitkeep

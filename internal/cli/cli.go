@@ -1,0 +1,528 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/nbaertsch/afterburner/internal/compatibility"
+	"github.com/nbaertsch/afterburner/internal/copilot"
+	"github.com/nbaertsch/afterburner/internal/doctor"
+	"github.com/nbaertsch/afterburner/internal/extensions"
+	"github.com/nbaertsch/afterburner/internal/home"
+	"github.com/nbaertsch/afterburner/internal/installer"
+	"github.com/nbaertsch/afterburner/internal/launch"
+	"github.com/nbaertsch/afterburner/internal/preflight"
+	"github.com/nbaertsch/afterburner/internal/registry"
+	"github.com/nbaertsch/afterburner/internal/runtimepkg"
+	"github.com/nbaertsch/afterburner/internal/sessions"
+	"github.com/nbaertsch/afterburner/internal/telemetry"
+	"github.com/nbaertsch/afterburner/internal/updater"
+)
+
+var reserved = map[string]struct{}{
+	"install": {}, "enable": {}, "disable": {}, "uninstall": {},
+	"extension": {}, "doctor": {}, "repair": {}, "update": {},
+	"rollback": {}, "version": {}, "help": {}, "run": {},
+	"compatibility": {},
+	"core":          {},
+}
+
+type Options struct {
+	Version string
+	Stdin   io.Reader
+	Stdout  io.Writer
+	Stderr  io.Writer
+}
+
+type Route struct {
+	Command           string
+	Args              []string
+	ForcedPassthrough bool
+}
+
+func Classify(args []string) Route {
+	if len(args) == 0 {
+		return Route{Command: "run", Args: []string{}}
+	}
+	if args[0] == "--" {
+		return Route{Command: "run", Args: clone(args[1:]), ForcedPassthrough: true}
+	}
+	if args[0] == "run" {
+		return Route{Command: "run", Args: clone(args[1:]), ForcedPassthrough: true}
+	}
+	if _, ok := reserved[args[0]]; ok {
+		return Route{Command: args[0], Args: clone(args[1:])}
+	}
+	return Route{Command: "run", Args: clone(args)}
+}
+
+func Run(ctx context.Context, args []string, opts Options) (int, error) {
+	route := Classify(args)
+	switch route.Command {
+	case "run":
+		return runCopilot(ctx, route.Args, route.ForcedPassthrough, opts)
+	case "version":
+		fmt.Fprintf(opts.Stdout, "Afterburn %s\n", opts.Version)
+		return 0, nil
+	case "help":
+		io.WriteString(opts.Stdout, help)
+		return 0, nil
+	case "doctor":
+		return runDoctor(route.Args, opts)
+	case "repair":
+		return runRepair(route.Args, opts)
+	case "compatibility":
+		return runCompatibility(route.Args, opts)
+	case "update":
+		return runUpdate(ctx, route.Args, opts)
+	case "rollback":
+		return runRollback(route.Args, opts)
+	case "install", "enable", "disable", "uninstall", "extension":
+		return runExtensionCommand(route, opts)
+	case "core":
+		return runCoreCommand(route.Args, opts)
+	default:
+		return 2, fmt.Errorf("native command %q is not implemented yet", route.Command)
+	}
+}
+
+func runRollback(args []string, opts Options) (int, error) {
+	if len(args) != 1 || args[0] != "core" {
+		return 2, fmt.Errorf("usage: afterburn rollback core")
+	}
+	layout, err := home.Initialize()
+	if err != nil {
+		return 1, err
+	}
+	target := filepath.Join(layout.Root, "bin", "afterburn.exe")
+	previous := filepath.Join(layout.Root, "bin", "afterburn.previous.exe")
+	candidate, err := updater.StageRollback(layout.Root, previous)
+	if err != nil {
+		return 1, err
+	}
+	if err := updater.BeginReplacement(candidate, target, previous); err != nil {
+		_ = os.RemoveAll(filepath.Dir(candidate))
+		return 1, err
+	}
+	fmt.Fprintln(opts.Stdout, "Afterburner core rollback is staged; replacement will complete after this process exits.")
+	return 0, nil
+}
+
+func runUpdate(ctx context.Context, args []string, opts Options) (int, error) {
+	checkOnly := len(args) == 1 && args[0] == "--check"
+	pinned := len(args) == 2 && args[0] == "--version" && args[1] != ""
+	if len(args) != 0 && !checkOnly && !pinned {
+		return 2, fmt.Errorf("usage: afterburn update [--check|--version <version>]")
+	}
+	client := updater.NewClient(ctx)
+	var release updater.Release
+	var err error
+	if pinned {
+		release, err = client.Release(ctx, args[1])
+	} else {
+		release, err = client.Latest(ctx)
+	}
+	if err == updater.ErrNoRelease {
+		fmt.Fprintln(opts.Stdout, "No Afterburner GitHub release exists yet.")
+		return 0, nil
+	}
+	if err != nil {
+		return 1, err
+	}
+	if !pinned && !updater.IsNewer(opts.Version, release.TagName) {
+		fmt.Fprintf(opts.Stdout, "Afterburner %s is current.\n", opts.Version)
+		return 0, nil
+	}
+	if checkOnly {
+		fmt.Fprintf(opts.Stdout, "Afterburner %s is available.\n", release.TagName)
+		return 0, nil
+	}
+	layout, err := home.Initialize()
+	if err != nil {
+		return 1, err
+	}
+	candidate, err := client.Stage(ctx, release, layout.Root)
+	if err != nil {
+		return 1, err
+	}
+	target := filepath.Join(layout.Root, "bin", "afterburn.exe")
+	previous := filepath.Join(layout.Root, "bin", "afterburn.previous.exe")
+	if err := updater.BeginReplacement(candidate, target, previous); err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(opts.Stdout, "Afterburner %s is staged; replacement will complete after this process exits.\n", release.TagName)
+	return 0, nil
+}
+
+func runCoreCommand(args []string, opts Options) (int, error) {
+	if len(args) == 1 && args[0] == "install" {
+		layout, err := home.Initialize()
+		if err != nil {
+			return 1, err
+		}
+		executable, err := os.Executable()
+		if err != nil {
+			return 1, fmt.Errorf("resolve running executable: %w", err)
+		}
+		if _, err := installer.Install(layout, executable, opts.Stdout); err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}
+	if len(args) == 9 && args[0] == "replace" &&
+		args[1] == "--parent" && args[3] == "--source" &&
+		args[5] == "--target" && args[7] == "--previous" {
+		parent, err := strconv.Atoi(args[2])
+		if err != nil || parent <= 0 {
+			return 2, fmt.Errorf("invalid replacement parent PID")
+		}
+		layout, err := home.Resolve()
+		if err != nil {
+			return 1, err
+		}
+		expectedTarget := filepath.Join(layout.Root, "bin", "afterburn.exe")
+		expectedPrevious := filepath.Join(layout.Root, "bin", "afterburn.previous.exe")
+		if !strings.EqualFold(filepath.Clean(args[6]), filepath.Clean(expectedTarget)) ||
+			!strings.EqualFold(filepath.Clean(args[8]), filepath.Clean(expectedPrevious)) ||
+			!registry.Within(args[4], filepath.Join(layout.Root, "update-staging")) {
+			return 2, fmt.Errorf("replacement paths are outside the managed update transaction")
+		}
+		if err := updater.ApplyReplacement(parent, args[4], args[6], args[8]); err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}
+	return 2, fmt.Errorf("usage: afterburn core install")
+}
+
+func runExtensionCommand(route Route, opts Options) (int, error) {
+	layout, err := home.Initialize()
+	if err != nil {
+		return 1, err
+	}
+	manager := extensions.Manager{Layout: layout, Stdout: opts.Stdout}
+	switch route.Command {
+	case "install":
+		err = manager.InstallBuiltins(route.Args)
+	case "enable":
+		err = manager.SetBuiltinsEnabled(route.Args, true)
+	case "disable":
+		err = manager.SetBuiltinsEnabled(route.Args, false)
+	case "uninstall":
+		err = manager.UninstallBuiltins(route.Args)
+	case "extension":
+		if len(route.Args) == 0 {
+			return 2, fmt.Errorf("extension subcommand is required")
+		}
+		switch route.Args[0] {
+		case "install":
+			if len(route.Args) != 2 {
+				return 2, fmt.Errorf("usage: afterburn extension install <local-path>")
+			}
+			err = manager.Install(route.Args[1])
+		case "enable":
+			if len(route.Args) != 2 {
+				return 2, fmt.Errorf("usage: afterburn extension enable <id>")
+			}
+			err = manager.SetEnabled(route.Args[1], true)
+		case "disable":
+			if len(route.Args) != 2 {
+				return 2, fmt.Errorf("usage: afterburn extension disable <id>")
+			}
+			err = manager.SetEnabled(route.Args[1], false)
+		case "list":
+			err = manager.List()
+		case "inspect":
+			if len(route.Args) != 2 {
+				return 2, fmt.Errorf("usage: afterburn extension inspect <id>")
+			}
+			err = manager.Inspect(route.Args[1])
+		case "update":
+			if len(route.Args) != 2 {
+				return 2, fmt.Errorf("usage: afterburn extension update <id>|--all")
+			}
+			if route.Args[1] == "--all" {
+				err = manager.UpdateAll()
+			} else {
+				err = manager.Update(route.Args[1])
+			}
+		case "rollback":
+			if len(route.Args) != 2 {
+				return 2, fmt.Errorf("usage: afterburn extension rollback <id>")
+			}
+			err = manager.Rollback(route.Args[1])
+		default:
+			return 2, fmt.Errorf("native extension subcommand %q is not implemented yet", route.Args[0])
+		}
+	}
+	if err != nil {
+		return 1, err
+	}
+	return 0, nil
+}
+
+func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts Options) (int, error) {
+	launchOptions := nativeLaunchOptions{}
+	var err error
+	if !forcedPassthrough {
+		launchOptions, args, err = extractLaunchOptions(args)
+		if err != nil {
+			return 2, err
+		}
+	}
+	baseLayout, err := home.Initialize()
+	if err != nil {
+		return 1, err
+	}
+	layout := baseLayout
+	cleanup := func() {}
+	if launchOptions.safeMode || len(launchOptions.disabledExtensions) > 0 {
+		layout, cleanup, err = home.CreateLaunchHome(baseLayout)
+		if err != nil {
+			return 1, err
+		}
+		defer cleanup()
+	}
+	extensionRegistry, err := registry.Load(baseLayout.Root)
+	if err != nil {
+		return 1, err
+	}
+	effectiveRegistry := extensionRegistry
+	if launchOptions.safeMode {
+		for id, entry := range effectiveRegistry.Extensions {
+			entry.Enabled = false
+			effectiveRegistry.Extensions[id] = entry
+		}
+	} else {
+		for _, id := range launchOptions.disabledExtensions {
+			entry, ok := effectiveRegistry.Extensions[id]
+			if !ok {
+				return 2, fmt.Errorf("unknown extension %q", id)
+			}
+			entry.Enabled = false
+			effectiveRegistry.Extensions[id] = entry
+		}
+	}
+	if err := sessions.Reconcile(layout, effectiveRegistry); err != nil {
+		return 1, err
+	}
+	executable, err := launch.FindCopilot()
+	if err != nil {
+		return 1, err
+	}
+	inventory, err := copilot.Discover(copilot.DiscoveryOptions{
+		ManagedHome:       layout.CopilotHome,
+		CopilotExecutable: executable,
+	})
+	if err != nil {
+		return 1, err
+	}
+	selection, err := compatibility.Select(inventory)
+	if err != nil {
+		return 1, err
+	}
+	selected := selection.Package
+	prepared, err := runtimepkg.Prepare(layout, selected)
+	if err != nil {
+		return 1, err
+	}
+	env := home.ManagedEnvironment(layout, os.Environ())
+	env = setEnv(env, "AFTERBURNER_BASE_PACKAGE", selected.Path)
+	env = setEnv(env, "AFTERBURNER_BASE_APP_SHA256", selected.AppSHA256)
+	env = setEnv(env, "AFTERBURNER_BASE_RUNTIME_SHA256", selected.RuntimeSHA256)
+	env = setEnv(env, "AFTERBURNER_COMPATIBILITY_PROFILE", selection.Profile.ID)
+	if launchOptions.safeMode {
+		env = setEnv(env, "AFTERBURNER_DISABLED_EXTENSIONS", "*")
+	} else if len(launchOptions.disabledExtensions) > 0 {
+		env = setEnv(env, "AFTERBURNER_DISABLED_EXTENSIONS", strings.Join(launchOptions.disabledExtensions, ","))
+	}
+	if _, ok := os.LookupEnv("AFTERBURNER_BYOMODELS_CONFIG"); !ok {
+		if _, err := os.Stat(layout.BYOModelsConfig); err == nil {
+			env = setEnv(env, "AFTERBURNER_BYOMODELS_CONFIG", layout.BYOModelsConfig)
+		}
+	}
+	validated := preflight.Result{Package: selected, Profile: selection.Profile, Prepared: prepared}
+	if !launchOptions.safeMode && len(launchOptions.disabledExtensions) == 0 {
+		validated, err = preflight.Ensure(ctx, layout, executable, selection, prepared, env, opts.Stderr)
+		if err != nil {
+			return 1, err
+		}
+	}
+	if validated.UsedFallback {
+		selected = validated.Package
+		prepared = validated.Prepared
+		env = setEnv(env, "AFTERBURNER_BASE_PACKAGE", selected.Path)
+		env = setEnv(env, "AFTERBURNER_BASE_APP_SHA256", selected.AppSHA256)
+		env = setEnv(env, "AFTERBURNER_BASE_RUNTIME_SHA256", selected.RuntimeSHA256)
+		env = setEnv(env, "AFTERBURNER_COMPATIBILITY_PROFILE", validated.Profile.ID)
+	}
+	childArgs := append([]string{"--prefer-version", prepared.Version}, args...)
+	telemetry.Record(layout.Root, "launch.started", map[string]any{
+		"copilotVersion": selected.Version,
+		"profile":        validated.Profile.ID,
+		"runtimeVersion": prepared.Version,
+		"argumentCount":  len(args),
+		"safeMode":       launchOptions.safeMode,
+		"fallback":       validated.UsedFallback,
+	})
+	started := time.Now()
+	exitCode, launchErr := launch.Run(ctx, launch.Options{
+		Executable: executable,
+		Args:       childArgs,
+		Env:        env,
+		Stdin:      opts.Stdin,
+		Stdout:     opts.Stdout,
+		Stderr:     opts.Stderr,
+	})
+	attributes := map[string]any{
+		"exitCode":             exitCode,
+		"durationMillis":       time.Since(started).Milliseconds(),
+		"copilotVersion":       selected.Version,
+		"compatibilityProfile": validated.Profile.ID,
+	}
+	if launchErr != nil {
+		attributes["status"] = "failed"
+	} else {
+		attributes["status"] = "completed"
+	}
+	telemetry.Record(layout.Root, "launch.completed", attributes)
+	return exitCode, launchErr
+}
+
+type nativeLaunchOptions struct {
+	safeMode           bool
+	disabledExtensions []string
+}
+
+func extractLaunchOptions(args []string) (nativeLaunchOptions, []string, error) {
+	var options nativeLaunchOptions
+	forwarded := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--safe-mode":
+			options.safeMode = true
+		case args[i] == "--disable-extension":
+			if i+1 >= len(args) || args[i+1] == "" {
+				return nativeLaunchOptions{}, nil, fmt.Errorf("--disable-extension requires an ID")
+			}
+			i++
+			options.disabledExtensions = append(options.disabledExtensions, args[i])
+		case strings.HasPrefix(args[i], "--disable-extension="):
+			id := strings.TrimPrefix(args[i], "--disable-extension=")
+			if id == "" {
+				return nativeLaunchOptions{}, nil, fmt.Errorf("--disable-extension requires an ID")
+			}
+			options.disabledExtensions = append(options.disabledExtensions, id)
+		default:
+			forwarded = append(forwarded, args[i])
+		}
+	}
+	return options, forwarded, nil
+}
+
+func runDoctor(args []string, opts Options) (int, error) {
+	if len(args) == 1 && args[0] == "--bundle" {
+		path, err := doctor.Bundle(opts.Version)
+		if err != nil {
+			return 1, err
+		}
+		fmt.Fprintf(opts.Stdout, "Diagnostic bundle created at %s\n", path)
+		return 0, nil
+	}
+	asJSON := len(args) == 1 && args[0] == "--json"
+	if len(args) > 0 && !asJSON {
+		return 2, fmt.Errorf("usage: afterburn doctor [--json|--bundle]")
+	}
+	report := doctor.Inspect(opts.Version)
+	if err := doctor.Write(report, opts.Stdout, asJSON); err != nil {
+		return 1, err
+	}
+	if !report.Healthy {
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func runRepair(args []string, opts Options) (int, error) {
+	if len(args) != 0 {
+		return 2, fmt.Errorf("usage: afterburn repair")
+	}
+	result, err := doctor.Repair()
+	if err != nil {
+		return 1, err
+	}
+	for _, action := range result.Actions {
+		fmt.Fprintf(opts.Stdout, "OK  %s\n", action)
+	}
+	return 0, nil
+}
+
+func runCompatibility(args []string, opts Options) (int, error) {
+	if len(args) != 1 || (args[0] != "list" && args[0] != "status" && args[0] != "retry") {
+		return 2, fmt.Errorf("usage: afterburn compatibility list|status|retry")
+	}
+	switch args[0] {
+	case "list":
+		for _, profile := range compatibility.Profiles() {
+			fmt.Fprintf(opts.Stdout, "%s %s %s\n", profile.ID, profile.Version, profile.BYOModelsTransform)
+		}
+	case "status":
+		report := doctor.Inspect(opts.Version)
+		if report.SelectedPackage == nil || report.CompatibilityProfile == nil {
+			return 1, fmt.Errorf("no compatible Copilot package is selected")
+		}
+		fmt.Fprintf(opts.Stdout, "%s -> %s\n", report.SelectedPackage.Version, report.CompatibilityProfile.ID)
+	case "retry":
+		layout, err := home.Resolve()
+		if err != nil {
+			return 1, err
+		}
+		path := filepath.Join(layout.Root, "state", "last-known-good.json")
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return 1, err
+		}
+		fmt.Fprintln(opts.Stdout, "Compatibility preflight will run on the next launch.")
+	}
+	return 0, nil
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := strings.ToUpper(key) + "="
+	result := make([]string, 0, len(env)+1)
+	for _, item := range env {
+		if !strings.HasPrefix(strings.ToUpper(item), prefix) {
+			result = append(result, item)
+		}
+	}
+	return append(result, key+"="+value)
+}
+
+func clone(values []string) []string {
+	return append([]string(nil), values...)
+}
+
+const help = `Afterburn - GitHub Copilot CLI with trusted Afterburner extensions
+
+Usage:
+  afterburn
+  afterburn [copilot arguments]
+  afterburn run <copilot arguments>
+  afterburn -- <copilot arguments>
+  afterburn install [id...]
+  afterburn enable <id...>
+  afterburn disable <id...>
+  afterburn uninstall <id...>
+  afterburn extension <command>
+  afterburn core install
+  afterburn doctor
+  afterburn repair
+  afterburn update [--check|--version <version>]
+  afterburn rollback core
+  afterburn version
+`

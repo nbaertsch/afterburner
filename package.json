@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1",
-    "install:cli": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-cli.ps1",
-    "test": "powershell -NoProfile -ExecutionPolicy Bypass -File tests/test.ps1"
+    "test": "go test ./... && npm run test:black-box && npm run test:compatibility",
+    "test:native": "go test ./...",
+    "test:black-box": "npm test --prefix extensions/BlackBox",
+    "test:compatibility": "node --test tests/request-compatibility.test.mjs"
   },
   "devDependencies": {
     "node-pty": "^1.1.0"
