@@ -81,7 +81,7 @@ child.onData(data => {
   if (!openedPicker &&
       text.includes("[runtime-extension-host] registered picker adapter") &&
       text.includes("[runtime-extension-host] activated Afterburner extension 'byo-models'") &&
-      text.includes("Registered 3 BYOK model(s)") &&
+      text.includes("Registered 3 BYOModels model(s)") &&
       text.includes("Plan:")) {
     openedPicker = true;
     const openPicker = () => {
@@ -98,23 +98,47 @@ child.onData(data => {
     clearInterval(pickerInterval);
     const interactionOffset = raw.length;
     setTimeout(() => child.write("colosseum-prod/gpt-5-5"), 1200);
-    setTimeout(() => child.write("\t"), 3200);
-    setTimeout(() => child.write("\x1b[D"), 4300);
-    setTimeout(() => child.write("\x1b[D"), 5400);
-    setTimeout(() => child.write("\x1b[D"), 6500);
+    setTimeout(() => child.write("\x1b[D"), 3200);
+    setTimeout(() => child.write("\x1b[D"), 4200);
+    setTimeout(() => child.write("\x1b[C"), 5200);
+    setTimeout(() => child.write("\x1b[C"), 6200);
+    setTimeout(() => child.write("\x1b[C"), 7200);
+    setTimeout(() => child.write("\x1b[C"), 8200);
+    setTimeout(() => child.write("\t"), 9200);
+    setTimeout(() => child.write("\x1b[D"), 10200);
+    setTimeout(() => child.write("\x1b[D"), 11200);
+    setTimeout(() => child.write("\x1b[D"), 12200);
+    setTimeout(() => child.write("\t"), 13200);
     setTimeout(() => {
       const interaction = stripAnsi(raw.slice(interactionOffset));
       if (interaction.includes("Colosseum Prod GPT-5.5") &&
+          interaction.includes("None") &&
+          interaction.includes("Low") &&
+          interaction.includes("Medium") &&
+          interaction.includes("High") &&
+          interaction.includes("Extra high") &&
+          interaction.includes("reasoning effort") &&
           interaction.includes("context window") &&
+          interaction.includes("1.05M") &&
           interaction.includes("768K") &&
           interaction.includes("512K") &&
           interaction.includes("256")) {
-        process.stdout.write("native-conpty-ok\n");
-        finish();
+        const applicationOffset = raw.length;
+        child.write("\r");
+        setTimeout(() => {
+          const application = stripAnsi(raw.slice(applicationOffset));
+          if (application.includes("Model changed") &&
+              application.includes("colosseum-prod/gpt-5-5")) {
+            process.stdout.write("native-conpty-ok\n");
+            finish();
+          } else {
+            finish("native model picker did not apply the selected BYOModels model");
+          }
+        }, 4000);
       } else {
-        finish("native model picker did not expose every context transition");
+        finish("native model picker did not expose every reasoning/context transition");
       }
-    }, 8000);
+    }, 15000);
   }
 });
 

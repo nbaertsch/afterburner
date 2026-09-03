@@ -53,3 +53,58 @@ test("compatibility proxy normalizes IDs and refreshes authentication", async ()
     await new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
   }
 });
+
+test("stable compatibility proxy survives owner handoff between sessions", async () => {
+  const upstream = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"ok":true}');
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const upstreamAddress = upstream.address();
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, "127.0.0.1", resolve));
+  const reservedAddress = reservation.address();
+  const proxyPort = reservedAddress.port;
+  await new Promise((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+  const provider = {
+    name: "stable-test",
+    baseUrl: `http://127.0.0.1:${upstreamAddress.port}`,
+    requestCompatibility: { maxInputItemIdLength: 64, proxyPort }
+  };
+  const owner = await startRequestCompatibilityProxy(provider);
+  const standby = await startRequestCompatibilityProxy(provider, { standbyRetryMs: 10 });
+  try {
+    assert.equal(owner.baseUrl, standby.baseUrl);
+    await owner.close();
+    let response;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      try {
+        response = await fetch(`${standby.baseUrl}/responses`);
+        if (response.ok) break;
+      } catch {}
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(response?.status, 200);
+  } finally {
+    await standby.close();
+    await new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test("stable compatibility proxy rejects an unrelated listener", async () => {
+  const unrelated = createServer((_request, response) => {
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise(resolve => unrelated.listen(0, "127.0.0.1", resolve));
+  const address = unrelated.address();
+  try {
+    await assert.rejects(() => startRequestCompatibilityProxy({
+      name: "collision-test",
+      baseUrl: "https://example.invalid",
+      requestCompatibility: { maxInputItemIdLength: 64, proxyPort: address.port }
+    }), error => error?.code === "EADDRINUSE");
+  } finally {
+    await new Promise((resolve, reject) => unrelated.close(error => error ? reject(error) : resolve()));
+  }
+});

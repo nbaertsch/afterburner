@@ -3,14 +3,16 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 )
 
 type capture struct {
-	Args []string          `json:"args"`
-	Env  map[string]string `json:"env"`
+	Args       []string          `json:"args"`
+	Env        map[string]string `json:"env"`
+	ProxyReady bool              `json:"proxyReady,omitempty"`
 }
 
 func main() {
@@ -24,6 +26,19 @@ func main() {
 			"AFTERBURNER_BASE_APP_SHA256":     os.Getenv("AFTERBURNER_BASE_APP_SHA256"),
 			"AFTERBURNER_BASE_RUNTIME_SHA256": os.Getenv("AFTERBURNER_BASE_RUNTIME_SHA256"),
 		},
+	}
+	if proxyURL := os.Getenv("AFTERBURNER_TEST_PROXY_URL"); proxyURL != "" {
+		response, err := http.Get(proxyURL + "/__afterburner/byomodels/health")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(41)
+		}
+		value.ProxyReady = response.StatusCode == http.StatusOK
+		_ = response.Body.Close()
+		if !value.ProxyReady {
+			fmt.Fprintf(os.Stderr, "proxy health status = %d\n", response.StatusCode)
+			os.Exit(42)
+		}
 	}
 	data, _ := json.Marshal(value)
 	_ = os.WriteFile(path, data, 0o600)

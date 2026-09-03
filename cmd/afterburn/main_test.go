@@ -2,6 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,8 +15,9 @@ import (
 )
 
 type capturedInvocation struct {
-	Args []string          `json:"args"`
-	Env  map[string]string `json:"env"`
+	Args       []string          `json:"args"`
+	Env        map[string]string `json:"env"`
+	ProxyReady bool              `json:"proxyReady"`
 }
 
 func TestNativeArgumentFidelity(t *testing.T) {
@@ -79,6 +84,104 @@ func TestNativeArgumentFidelity(t *testing.T) {
 				t.Fatalf("managed environment incomplete: %#v", got.Env)
 			}
 		})
+	}
+}
+
+func TestNativeProxyStartsBeforeCopilot(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows launcher acceptance")
+	}
+	goExe := filepath.Join(runtime.GOROOT(), "bin", "go.exe")
+	bin := filepath.Join(t.TempDir(), "afterburn.exe")
+	fake := filepath.Join(t.TempDir(), "fakecopilot.exe")
+	build(t, goExe, bin, ".")
+	build(t, goExe, fake, "../../internal/testutil/fakecopilot")
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	afterburnerHome := filepath.Join(root, "afterburner")
+	activePath := filepath.Join(afterburnerHome, "extensions", "byo-models", "test")
+	if err := os.MkdirAll(activePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := fmt.Sprintf(`{
+  "schemaVersion": 1,
+  "extensions": {
+    "byo-models": {
+      "enabled": true,
+      "activePath": %q,
+      "manifest": {
+        "schemaVersion": 1,
+        "id": "byo-models",
+        "name": "BYOModels",
+        "visibility": "builtin",
+        "runtime": {}
+      },
+      "source": {"type": "builtin", "value": "byo-models"},
+      "updatedAt": "2026-09-03T00:00:00Z"
+    }
+  }
+}`, activePath)
+	if err := os.MkdirAll(afterburnerHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(afterburnerHome, "registry.json"), []byte(registry), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "byomodels.json")
+	config := fmt.Sprintf(`{
+  "version": 1,
+  "providers": [{
+    "name": "test",
+    "baseUrl": %q,
+    "requestCompatibility": {
+      "maxInputItemIdLength": 64,
+      "proxyPort": %d
+    }
+  }]
+}`, upstream.URL, port)
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	createFakePackage(t, root)
+	capturePath := filepath.Join(root, "capture.json")
+	cmd := exec.Command(bin, "--version")
+	cmd.Env = append(os.Environ(),
+		"AFTERBURNER_HOME="+afterburnerHome,
+		"AFTERBURNER_NORMAL_COPILOT_HOME="+filepath.Join(root, "normal"),
+		"AFTERBURNER_COPILOT_EXECUTABLE="+fake,
+		"AFTERBURNER_COPILOT_PACKAGE_ROOTS="+filepath.Join(root, "packages"),
+		"AFTERBURNER_ALLOW_UNPROFILED=1",
+		"AFTERBURNER_SKIP_PREFLIGHT=1",
+		"AFTERBURNER_BYOMODELS_CONFIG="+configPath,
+		"AFTERBURNER_TEST_PROXY_URL="+fmt.Sprintf("http://127.0.0.1:%d", port),
+		"AFTERBURNER_TEST_CAPTURE="+capturePath,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("afterburn failed: %v\n%s", err, output)
+	}
+	data, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got capturedInvocation
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.ProxyReady {
+		t.Fatal("BYOModels proxy was not ready when Copilot started")
 	}
 }
 

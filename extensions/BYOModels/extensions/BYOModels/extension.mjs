@@ -30,21 +30,28 @@ const runtimeMetadataPath = join(
 const config = JSON.parse(await readFile(configPath, "utf8"));
 
 if (config.version !== 1) {
-    throw new Error(`Unsupported BYOK model configuration version: ${config.version}`);
+    throw new Error(`Unsupported BYOModels configuration version: ${config.version}`);
 }
 
 if (!Array.isArray(config.providers) || !Array.isArray(config.models)) {
-    throw new Error("BYOK model configuration must define providers and models arrays.");
+    throw new Error("BYOModels configuration must define providers and models arrays.");
 }
 
 function validateConfig() {
     const providerNames = new Set();
     for (const provider of config.providers) {
         if (!provider || typeof provider.name !== "string" || !provider.name) {
-            throw new Error("Every BYOK provider must define a non-empty name.");
+            throw new Error("Every BYOModels provider must define a non-empty name.");
         }
         if (providerNames.has(provider.name)) {
-            throw new Error(`Duplicate BYOK provider name: ${provider.name}`);
+            throw new Error(`Duplicate BYOModels provider name: ${provider.name}`);
+        }
+        const proxyPort = provider.requestCompatibility?.proxyPort;
+        if (proxyPort !== undefined &&
+            (!Number.isInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535)) {
+            throw new Error(
+                `Provider '${provider.name}' must define requestCompatibility.proxyPort between 1024 and 65535.`
+            );
         }
         providerNames.add(provider.name);
     }
@@ -52,7 +59,7 @@ function validateConfig() {
     const modelIds = new Set();
     for (const model of config.models) {
         if (!model || typeof model.provider !== "string" || typeof model.id !== "string") {
-            throw new Error("Every BYOK model must define provider and id strings.");
+            throw new Error("Every BYOModels model must define provider and id strings.");
         }
         if (!providerNames.has(model.provider)) {
             throw new Error(`Model '${model.id}' references unknown provider '${model.provider}'.`);
@@ -60,7 +67,7 @@ function validateConfig() {
 
         const selectionId = `${model.provider}/${model.id}`;
         if (modelIds.has(selectionId)) {
-            throw new Error(`Duplicate BYOK model selection ID: ${selectionId}`);
+            throw new Error(`Duplicate BYOModels model selection ID: ${selectionId}`);
         }
         modelIds.add(selectionId);
     }
@@ -345,12 +352,12 @@ function formatModelSummary() {
 
 const modelsCanvas = createCanvas({
     id:     "afterburner-byomodels",
-    displayName: "Afterburner BYOK Models",
-    description: "Shows the registered BYOK model registry, capabilities, and naming drift.",
+    displayName: "Afterburner BYOModels",
+    description: "Shows the registered BYOModels registry, capabilities, and naming drift.",
     actions: [
         {
             name: "snapshot",
-            description: "Return a sanitized snapshot of the BYOK model registry and token-cache state.",
+            description: "Return a sanitized snapshot of the BYOModels registry and token-cache state.",
             inputSchema: { type: "object", properties: {} },
             handler: async () => getStatus()
         }
@@ -359,7 +366,7 @@ const modelsCanvas = createCanvas({
         const status = getStatus();
         const driftCount = status.models.filter((model) => model.hasNamingDrift).length;
         return {
-            title: "Afterburner BYOK Models",
+            title: "Afterburner BYOModels",
             status: `${status.modelCount} models registered; ${driftCount} naming drift item(s)`
         };
     }
@@ -369,30 +376,17 @@ let session;
 const hydratedProviders = await Promise.all(config.providers.map(hydrateProvider));
 session = await joinSession({
     providers: hydratedProviders,
-    tools: [
-        {
-            name: "byok_models_status",
-            description: "Return sanitized status for registered BYOK models and authentication caching.",
-            parameters: { type: "object", properties: {} },
-            skipPermission: true,
-            handler: async () => JSON.stringify(getStatus())
-        }
-    ],
     commands: [
         {
             name: "byomodels",
-            description: "List registered BYOK models and deployment mappings.",
-            handler: async () => session.log(`BYOK models: ${formatModelSummary()}`)
-        },
-        {
-            name: "byok-status",
-            description: "Show sanitized BYOK provider and authentication-cache status.",
+            description: "List registered BYOModels deployments and status.",
             handler: async () => {
                 const status = getStatus();
                 await session.log(
-                    `BYOK status: ${status.providerCount} provider(s), ${status.modelCount} model(s), ` +
+                    `BYOModels status: ${status.providerCount} provider(s), ${status.modelCount} model(s), ` +
                     `token cache ${status.activeTokenCache ? "active" : "empty"}, ` +
-                    `plugin data ${status.pluginDataAvailable ? "available" : "unavailable"}.`
+                    `plugin data ${status.pluginDataAvailable ? "available" : "unavailable"}. ` +
+                    `Models: ${formatModelSummary()}`
                 );
             }
         }
@@ -410,6 +404,6 @@ await writeRuntimeMetadata({
 await session.rpc.provider.add({ models: registeredModels });
 
 await session.log(
-    `Registered ${registeredModels.length} BYOK model(s) from live upstream capabilities: ` +
+    `Registered ${registeredModels.length} BYOModels model(s) from live upstream capabilities: ` +
         registeredModels.map((model) => `${model.provider}/${model.id} <- ${model.modelId}`).join(", ")
 );

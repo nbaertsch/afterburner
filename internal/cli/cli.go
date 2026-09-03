@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nbaertsch/afterburner/internal/byomodels"
 	"github.com/nbaertsch/afterburner/internal/compatibility"
 	"github.com/nbaertsch/afterburner/internal/copilot"
 	"github.com/nbaertsch/afterburner/internal/doctor"
@@ -364,6 +365,19 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 			env = setEnv(env, "AFTERBURNER_BYOMODELS_CONFIG", layout.BYOModelsConfig)
 		}
 	}
+	byoModelsConfig := layout.BYOModelsConfig
+	if explicit := os.Getenv("AFTERBURNER_BYOMODELS_CONFIG"); explicit != "" {
+		byoModelsConfig = explicit
+	}
+	var proxyManager *byomodels.Manager
+	if entry, ok := effectiveRegistry.Extensions["byo-models"]; ok && entry.Enabled {
+		proxyManager, err = byomodels.Start(byoModelsConfig)
+		if err != nil {
+			return 1, err
+		}
+		defer proxyManager.Close()
+	}
+	traceStartup("byomodels-proxy")
 	validated := preflight.Result{Package: selected, Profile: selection.Profile, Prepared: prepared}
 	if !launchOptions.safeMode && len(launchOptions.disabledExtensions) == 0 {
 		validated, err = preflight.Ensure(ctx, layout, executable, selection, prepared, env, opts.Stderr)

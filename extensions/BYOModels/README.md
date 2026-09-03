@@ -2,8 +2,8 @@
 
 BYOModels is Afterburner's built-in model integration. It registers user-configured providers and
 models with an Afterburner-managed Copilot session, then adds model-picker context-window and
-reasoning controls. It is installed and upgraded as part of Afterburner; do not install it with
-`copilot plugin install`.
+reasoning controls plus the `afterburner-byomodels` status canvas. It is installed and upgraded as
+part of Afterburner; do not install it with `copilot plugin install`.
 
 ## Setup
 
@@ -102,4 +102,7 @@ deleted with package versions. Normal `copilot` sessions do not load BYOModels.
 
 The bundled package currently supports Copilot CLI `>=1.0.83-1 <1.0.84`. Provider
 `requestCompatibility.maxInputItemIdLength` enables a loopback-only proxy that shortens oversized
-Responses API input-item IDs without changing message content.
+Responses API input-item IDs without changing message content. Set `requestCompatibility.proxyPort`
+to a stable, provider-specific port so resumed sessions never retain an expired ephemeral endpoint.
+Concurrent Afterburner sessions verify and share the same proxy, and a standby process takes
+ownership when the previous owner exits.
