@@ -19,10 +19,7 @@ func TestNativeArgumentFidelity(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows launcher acceptance")
 	}
-	goExe := filepath.Join(os.Getenv("USERPROFILE"), ".afterburner", "toolchains", "go1.27.1", "bin", "go.exe")
-	if _, err := os.Stat(goExe); err != nil {
-		goExe = "go"
-	}
+	goExe := filepath.Join(runtime.GOROOT(), "bin", "go.exe")
 	bin := filepath.Join(t.TempDir(), "afterburn.exe")
 	fake := filepath.Join(t.TempDir(), "fakecopilot.exe")
 	build(t, goExe, bin, ".")
@@ -89,7 +86,7 @@ func TestChildExitCode(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows launcher acceptance")
 	}
-	goExe := filepath.Join(os.Getenv("USERPROFILE"), ".afterburner", "toolchains", "go1.27.1", "bin", "go.exe")
+	goExe := filepath.Join(runtime.GOROOT(), "bin", "go.exe")
 	bin := filepath.Join(t.TempDir(), "afterburn.exe")
 	fake := filepath.Join(t.TempDir(), "fakecopilot.exe")
 	build(t, goExe, bin, ".")

@@ -22,7 +22,7 @@ func TestFailedPreflightUsesValidLastKnownGood(t *testing.T) {
 	}
 	root := t.TempDir()
 	fake := filepath.Join(root, "fakecopilot.exe")
-	goExe := filepath.Join(os.Getenv("USERPROFILE"), ".afterburner", "toolchains", "go1.27.1", "bin", "go.exe")
+	goExe := filepath.Join(runtime.GOROOT(), "bin", "go.exe")
 	command := exec.Command(goExe, "build", "-o", fake, "./testutil/fakecopilot")
 	command.Dir = filepath.Join("..")
 	if output, err := command.CombinedOutput(); err != nil {
