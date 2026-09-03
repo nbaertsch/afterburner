@@ -67,9 +67,13 @@ func Select(packages []copilot.Package) (Selection, error) {
 			if pkg.Complete &&
 				strings.EqualFold(pkg.AppSHA256, profile.AppSHA256) &&
 				strings.EqualFold(pkg.RuntimeSHA256, profile.RuntimeSHA256) {
-				if err := validateProbes(pkg, profile); err != nil {
-					probeFailures = append(probeFailures, fmt.Sprintf("%s: %v", pkg.Version, err))
-					continue
+				// A warm cache hit has the exact profile hashes; preflight still
+				// verifies the cached file metadata before Copilot is launched.
+				if !pkg.HashCacheHit {
+					if err := validateProbes(pkg, profile); err != nil {
+						probeFailures = append(probeFailures, fmt.Sprintf("%s: %v", pkg.Version, err))
+						continue
+					}
 				}
 				matches = append(matches, Selection{Package: pkg, Profile: profile})
 			}

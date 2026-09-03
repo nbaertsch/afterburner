@@ -268,6 +268,15 @@ func runExtensionCommand(route Route, opts Options) (int, error) {
 }
 
 func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts Options) (int, error) {
+	startupStarted := time.Now()
+	startupPhase := startupStarted
+	traceStartup := func(name string) {
+		if os.Getenv("AFTERBURNER_TRACE_STARTUP") == "1" {
+			fmt.Fprintf(opts.Stderr, "[afterburn startup] %s=%s total=%s\n",
+				name, time.Since(startupPhase).Round(time.Millisecond), time.Since(startupStarted).Round(time.Millisecond))
+		}
+		startupPhase = time.Now()
+	}
 	launchOptions := nativeLaunchOptions{}
 	var err error
 	if !forcedPassthrough {
@@ -280,6 +289,7 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	if err != nil {
 		return 1, err
 	}
+	traceStartup("home")
 	layout := baseLayout
 	cleanup := func() {}
 	if launchOptions.safeMode || len(launchOptions.disabledExtensions) > 0 {
@@ -293,6 +303,7 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	if err != nil {
 		return 1, err
 	}
+	traceStartup("registry")
 	effectiveRegistry := extensionRegistry
 	if launchOptions.safeMode {
 		for id, entry := range effectiveRegistry.Extensions {
@@ -312,26 +323,32 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	if err := sessions.Reconcile(layout, effectiveRegistry); err != nil {
 		return 1, err
 	}
+	traceStartup("sessions")
 	executable, err := launch.FindCopilot()
 	if err != nil {
 		return 1, err
 	}
+	traceStartup("executable")
 	inventory, err := copilot.Discover(copilot.DiscoveryOptions{
 		ManagedHome:       layout.CopilotHome,
 		CopilotExecutable: executable,
+		HashCachePath:     filepath.Join(layout.Root, "state", "package-hashes.json"),
 	})
 	if err != nil {
 		return 1, err
 	}
+	traceStartup("discovery")
 	selection, err := compatibility.Select(inventory)
 	if err != nil {
 		return 1, err
 	}
+	traceStartup("compatibility")
 	selected := selection.Package
 	prepared, err := runtimepkg.Prepare(layout, selected)
 	if err != nil {
 		return 1, err
 	}
+	traceStartup("runtime")
 	env := home.ManagedEnvironment(layout, os.Environ())
 	env = setEnv(env, "AFTERBURNER_BASE_PACKAGE", selected.Path)
 	env = setEnv(env, "AFTERBURNER_BASE_APP_SHA256", selected.AppSHA256)
@@ -354,6 +371,7 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 			return 1, err
 		}
 	}
+	traceStartup("preflight")
 	if validated.UsedFallback {
 		selected = validated.Package
 		prepared = validated.Prepared
@@ -371,6 +389,7 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 		"safeMode":       launchOptions.safeMode,
 		"fallback":       validated.UsedFallback,
 	})
+	traceStartup("telemetry")
 	started := time.Now()
 	exitCode, launchErr := launch.Run(ctx, launch.Options{
 		Executable: executable,

@@ -209,6 +209,7 @@ func Inspect(version string) Report {
 		report.CopilotExecutable = executable
 		packages, discoverErr := copilot.Discover(copilot.DiscoveryOptions{
 			ManagedHome: layout.CopilotHome, CopilotExecutable: executable,
+			HashCachePath: filepath.Join(layout.Root, "state", "package-hashes.json"),
 		})
 		if discoverErr != nil {
 			report.Healthy = false

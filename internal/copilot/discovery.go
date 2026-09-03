@@ -5,33 +5,63 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/nbaertsch/afterburner/internal/platform"
 )
 
 type Package struct {
-	Version       string `json:"version"`
-	Path          string `json:"path"`
-	SourceRoot    string `json:"sourceRoot"`
-	BuildCommit   string `json:"buildCommit,omitempty"`
-	AppSHA256     string `json:"appSha256"`
-	IndexSHA256   string `json:"indexSha256,omitempty"`
-	PackageSHA256 string `json:"packageSha256,omitempty"`
-	RuntimeSHA256 string `json:"runtimeSha256"`
-	Complete      bool   `json:"complete"`
+	Version         string `json:"version"`
+	Path            string `json:"path"`
+	SourceRoot      string `json:"sourceRoot"`
+	BuildCommit     string `json:"buildCommit,omitempty"`
+	AppSHA256       string `json:"appSha256"`
+	AppSize         int64  `json:"appSize,omitempty"`
+	AppModified     int64  `json:"appModifiedUnixNano,omitempty"`
+	IndexSHA256     string `json:"indexSha256,omitempty"`
+	PackageSHA256   string `json:"packageSha256,omitempty"`
+	RuntimeSHA256   string `json:"runtimeSha256"`
+	RuntimeSize     int64  `json:"runtimeSize,omitempty"`
+	RuntimeModified int64  `json:"runtimeModifiedUnixNano,omitempty"`
+	Complete        bool   `json:"complete"`
+	HashCacheHit    bool   `json:"-"`
 }
 
 type DiscoveryOptions struct {
 	ManagedHome       string
 	CopilotExecutable string
 	AdditionalRoots   []string
+	HashCachePath     string
+}
+
+type fileHashCache struct {
+	Size             int64  `json:"size"`
+	ModifiedUnixNano int64  `json:"modifiedUnixNano"`
+	SHA256           string `json:"sha256"`
+}
+
+type packageHashCache struct {
+	App         fileHashCache `json:"app"`
+	Index       fileHashCache `json:"index"`
+	Package     fileHashCache `json:"package"`
+	Runtime     fileHashCache `json:"runtime"`
+	BuildCommit string        `json:"buildCommit,omitempty"`
+}
+
+type hashCache struct {
+	SchemaVersion int                         `json:"schemaVersion"`
+	Packages      map[string]packageHashCache `json:"packages"`
 }
 
 func Discover(opts DiscoveryOptions) ([]Package, error) {
+	cache := loadHashCache(opts.HashCachePath)
+	nextCache := hashCache{SchemaVersion: 1, Packages: map[string]packageHashCache{}}
 	platform := "win32-" + mapArch(runtime.GOARCH)
 	userHome, _ := os.UserHomeDir()
 	roots := []string{
@@ -74,7 +104,8 @@ func Discover(opts DiscoveryOptions) ([]Package, error) {
 			if !entry.IsDir() || strings.Contains(entry.Name(), "afterburner") {
 				continue
 			}
-			pkg := inspectPackage(root, entry.Name())
+			pkg, cached := inspectPackage(root, entry.Name(), cache.Packages)
+			nextCache.Packages[strings.ToLower(pkg.Path)] = cached
 			identity := pkg.AppSHA256 + ":" + pkg.RuntimeSHA256
 			if pkg.Complete && seenPackages[identity] {
 				continue
@@ -84,6 +115,9 @@ func Discover(opts DiscoveryOptions) ([]Package, error) {
 			}
 			result = append(result, pkg)
 		}
+	}
+	if opts.HashCachePath != "" {
+		_ = saveHashCache(opts.HashCachePath, nextCache)
 	}
 	return result, nil
 }
@@ -104,15 +138,26 @@ func SelectNewestComplete(packages []Package) (Package, error) {
 	return candidates[0], nil
 }
 
-func inspectPackage(root, version string) Package {
+func inspectPackage(root, version string, cache map[string]packageHashCache) (Package, packageHashCache) {
 	path := filepath.Join(root, version)
 	pkg := Package{Version: version, Path: path, SourceRoot: root}
-	pkg.AppSHA256, _ = hashFile(filepath.Join(path, "app.js"))
-	pkg.IndexSHA256, _ = hashFile(filepath.Join(path, "index.js"))
-	pkg.PackageSHA256, _ = hashFile(filepath.Join(path, "package.json"))
-	pkg.RuntimeSHA256, _ = hashFile(filepath.Join(path, "prebuilds", runtimePlatform(), "runtime.node"))
+	previous := cache[strings.ToLower(path)]
+	var current packageHashCache
+	var appCacheHit, runtimeCacheHit bool
+	pkg.AppSHA256, current.App, appCacheHit = cachedHash(filepath.Join(path, "app.js"), previous.App)
+	pkg.IndexSHA256, current.Index, _ = cachedHash(filepath.Join(path, "index.js"), previous.Index)
+	pkg.PackageSHA256, current.Package, _ = cachedHash(filepath.Join(path, "package.json"), previous.Package)
+	pkg.RuntimeSHA256, current.Runtime, runtimeCacheHit = cachedHash(
+		filepath.Join(path, "prebuilds", runtimePlatform(), "runtime.node"), previous.Runtime)
+	pkg.AppSize = current.App.Size
+	pkg.AppModified = current.App.ModifiedUnixNano
+	pkg.RuntimeSize = current.Runtime.Size
+	pkg.RuntimeModified = current.Runtime.ModifiedUnixNano
+	pkg.HashCacheHit = appCacheHit && runtimeCacheHit
 	pkg.Complete = pkg.AppSHA256 != "" && pkg.RuntimeSHA256 != ""
-	if data, err := os.ReadFile(filepath.Join(path, "package.json")); err == nil {
+	if current.Package == previous.Package && previous.BuildCommit != "" {
+		pkg.BuildCommit = previous.BuildCommit
+	} else if data, err := os.ReadFile(filepath.Join(path, "package.json")); err == nil {
 		var metadata map[string]any
 		if json.Unmarshal(data, &metadata) == nil {
 			for _, key := range []string{"commit", "buildCommit", "gitCommit"} {
@@ -123,16 +168,74 @@ func inspectPackage(root, version string) Package {
 			}
 		}
 	}
-	return pkg
+	current.BuildCommit = pkg.BuildCommit
+	return pkg, current
 }
 
 func hashFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func cachedHash(path string, previous fileHashCache) (string, fileHashCache, bool) {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return "", fileHashCache{}, false
+	}
+	current := fileHashCache{Size: info.Size(), ModifiedUnixNano: info.ModTime().UnixNano()}
+	if current.Size == previous.Size &&
+		current.ModifiedUnixNano == previous.ModifiedUnixNano &&
+		previous.SHA256 != "" {
+		current.SHA256 = previous.SHA256
+		return current.SHA256, current, true
+	}
+	current.SHA256, _ = hashFile(path)
+	return current.SHA256, current, false
+}
+
+func loadHashCache(path string) hashCache {
+	cache := hashCache{SchemaVersion: 1, Packages: map[string]packageHashCache{}}
+	if path == "" {
+		return cache
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, &cache) != nil ||
+		cache.SchemaVersion != 1 || cache.Packages == nil {
+		return hashCache{SchemaVersion: 1, Packages: map[string]packageHashCache{}}
+	}
+	return cache
+}
+
+func saveHashCache(path string, cache hashCache) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(cache)
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".package-hashes-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return platform.ReplaceFile(temporaryPath, path)
 }
 
 func compareVersion(left, right string) int {

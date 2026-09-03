@@ -139,6 +139,10 @@ func tupleMatches(tuple Tuple, selection compatibility.Selection, prepared runti
 		tuple.Package.Path == selection.Package.Path &&
 		strings.EqualFold(tuple.Package.AppSHA256, selection.Package.AppSHA256) &&
 		strings.EqualFold(tuple.Package.RuntimeSHA256, selection.Package.RuntimeSHA256) &&
+		tuple.Package.AppSize == selection.Package.AppSize &&
+		tuple.Package.AppModified == selection.Package.AppModified &&
+		tuple.Package.RuntimeSize == selection.Package.RuntimeSize &&
+		tuple.Package.RuntimeModified == selection.Package.RuntimeModified &&
 		tuple.RuntimeVersion == prepared.Version &&
 		tuple.RuntimePath == prepared.Path &&
 		tuple.RegistryFingerprint == fingerprint &&
@@ -149,19 +153,34 @@ func validateTuple(tuple Tuple) error {
 	if tuple.SchemaVersion != 1 || tuple.Package.Path == "" || tuple.RuntimePath == "" {
 		return fmt.Errorf("tuple is incomplete")
 	}
-	appHash, err := hashFile(filepath.Join(tuple.Package.Path, "app.js"))
-	if err != nil || !strings.EqualFold(appHash, tuple.Package.AppSHA256) {
-		return fmt.Errorf("base app.js no longer matches")
+	appPath := filepath.Join(tuple.Package.Path, "app.js")
+	if !metadataMatches(appPath, tuple.Package.AppSize, tuple.Package.AppModified) {
+		appHash, err := hashFile(appPath)
+		if err != nil || !strings.EqualFold(appHash, tuple.Package.AppSHA256) {
+			return fmt.Errorf("base app.js no longer matches")
+		}
 	}
 	runtimePath := filepath.Join(tuple.Package.Path, "prebuilds", runtimePlatform(), "runtime.node")
-	runtimeHash, err := hashFile(runtimePath)
-	if err != nil || !strings.EqualFold(runtimeHash, tuple.Package.RuntimeSHA256) {
-		return fmt.Errorf("base runtime.node no longer matches")
+	if !metadataMatches(runtimePath, tuple.Package.RuntimeSize, tuple.Package.RuntimeModified) {
+		runtimeHash, err := hashFile(runtimePath)
+		if err != nil || !strings.EqualFold(runtimeHash, tuple.Package.RuntimeSHA256) {
+			return fmt.Errorf("base runtime.node no longer matches")
+		}
 	}
+
 	if _, err := os.Stat(filepath.Join(tuple.RuntimePath, "app.js")); err != nil {
 		return fmt.Errorf("prepared runtime is unavailable: %w", err)
 	}
 	return nil
+}
+
+func metadataMatches(path string, size, modified int64) bool {
+	if size <= 0 || modified == 0 {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() &&
+		info.Size() == size && info.ModTime().UnixNano() == modified
 }
 
 func load(root string) (Tuple, error) {
