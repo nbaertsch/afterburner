@@ -76,6 +76,14 @@ func builtinSourceOverrides() map[string]string {
 }
 
 func (m Manager) InstallBuiltins(ids []string) error {
+	return m.syncBuiltins(ids, false)
+}
+
+func (m Manager) SyncBuiltins(ids []string) error {
+	return m.syncBuiltins(ids, true)
+}
+
+func (m Manager) syncBuiltins(ids []string, requireFetcher bool) error {
 	return m.withRegistry(func(value *registry.Registry) error {
 		catalog := assets.Builtins()
 		overrides := builtinSourceOverrides()
@@ -117,7 +125,7 @@ func (m Manager) InstallBuiltins(ids []string) error {
 			} else if m.BuiltinFetcher != nil {
 				fetched, fetchCleanup, err := m.BuiltinFetcher.FetchBuiltin(id)
 				if err != nil {
-					if !knownBuiltin {
+					if requireFetcher || !knownBuiltin {
 						return fmt.Errorf("fetch built-in extension %q: %w", id, err)
 					}
 					fmt.Fprintf(m.Stdout, "Could not fetch built-in extension %q from the current release (%v); using the built-in version bundled with this binary.\n", id, err)
@@ -136,6 +144,9 @@ func (m Manager) InstallBuiltins(ids []string) error {
 					source, cleanup = fetched, fetchCleanup
 				}
 			} else {
+				if requireFetcher {
+					return fmt.Errorf("built-in extension %q must be synced from a pinned release", id)
+				}
 				archive := catalog[id]
 				extracted, extractCleanup, err := m.extractBuiltin(id, archive)
 				if err != nil {
@@ -143,13 +154,20 @@ func (m Manager) InstallBuiltins(ids []string) error {
 				}
 				source, cleanup = extracted, extractCleanup
 			}
-			entry, err := m.materialize(source, registry.Source{Type: "builtin", Value: id}, value.Extensions[id], true)
+			previous := value.Extensions[id]
+			entry, err := m.materialize(source, registry.Source{Type: "builtin", Value: id}, previous, true)
 			if err != nil {
 				cleanup()
 				return err
 			}
 			value.Extensions[id] = entry
-			fmt.Fprintf(m.Stdout, "Installed and enabled built-in extension %q at %s.\n", id, filepath.Base(entry.ActivePath))
+			if requireFetcher && previous.ActivePath == entry.ActivePath {
+				fmt.Fprintf(m.Stdout, "Built-in extension %q is already synced at %s.\n", id, filepath.Base(entry.ActivePath))
+			} else if requireFetcher {
+				fmt.Fprintf(m.Stdout, "Synced built-in extension %q to %s.\n", id, filepath.Base(entry.ActivePath))
+			} else {
+				fmt.Fprintf(m.Stdout, "Installed and enabled built-in extension %q at %s.\n", id, filepath.Base(entry.ActivePath))
+			}
 			if err := m.initializeBuiltinConfig(id, source); err != nil {
 				cleanup()
 				return err
@@ -285,12 +303,23 @@ func (m Manager) UpdateAll() error {
 	if err != nil {
 		return err
 	}
+	var builtins []string
 	for _, id := range sortedKeys(value.Extensions) {
-		if value.Extensions[id].Source.Type == "path" || value.Extensions[id].Source.Type == "git" {
+		switch value.Extensions[id].Source.Type {
+		case "path", "git":
 			if err := m.Update(id); err != nil {
 				return err
 			}
+		case "builtin":
+			builtins = append(builtins, id)
 		}
+	}
+	if len(builtins) > 0 {
+		if m.BuiltinFetcher == nil {
+			fmt.Fprintf(m.Stdout, "Built-in extensions (%s) are pinned to the installed Afterburner core release; run `afterburn update` to sync them.\n", strings.Join(builtins, ", "))
+			return nil
+		}
+		return m.SyncBuiltins(builtins)
 	}
 	return nil
 }

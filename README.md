@@ -32,13 +32,15 @@ ref.
 
 ### Built-in extension updates
 
-`afterburn install <id>` fetches the current signed `black-box.zip`/`byo-models.zip` release asset
-from the latest GitHub release (Ed25519-verified via the same `release-manifest.json`/
-`release-manifest.sig` used for the core binary) and installs it. If the release asset cannot be
-fetched (offline, rate-limited, no network), it automatically falls back to the built-in copy
-embedded in the running `afterburn.exe` binary via `go:embed`, so `afterburn install` always
-succeeds even without network access — it just may install an older built-in version until the core
-binary itself is next updated.
+Built-in extensions are versioned in lockstep with the Afterburner core release. `afterburn update`
+fetches the signed core archive plus every built-in package listed in that release manifest (for
+example `black-box.zip` and `byo-models.zip`) and re-syncs the installed built-ins to the same tag
+before staging the core replacement. If a pinned built-in cannot be fetched or verified, the update
+fails instead of leaving a core/extension mismatch.
+
+`afterburn install <id>` still works as a repair/bootstrap command. It fetches the signed built-in
+release asset matching the running core version when possible and falls back to the copy embedded in
+the running `afterburn.exe` binary via `go:embed` if the network fetch fails.
 
 Set `AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH=1` to force `afterburn install` to always use the
 embedded built-in and skip the network fetch entirely.
@@ -156,11 +158,13 @@ afterburn rollback core
 ```
 
 Updates use GitHub Releases and private-repository authentication from `GITHUB_TOKEN`, `GH_TOKEN`,
-or `gh auth token`. Before downloading or executing the archive, the updater verifies an Ed25519
+or `gh auth token`. Before downloading or executing archives, the updater verifies an Ed25519
 signature over a canonical manifest bound to this repository, tag, commit, platform, architecture,
-archive SHA-256, and size. It then verifies PE architecture and embedded version before launching a
-detached replacement helper. The current core is retained, a bounded post-update doctor runs, and
-validation failure restores the previous binary automatically.
+archive SHA-256, size, and built-in extension package checksums. It syncs built-ins to that exact
+release tag, verifies PE architecture and embedded version, then launches a detached replacement
+helper. The current core is retained, a bounded post-update doctor runs, and validation failure
+restores the previous binary automatically. If Windows reports the executable is locked, the helper
+reports an actionable error asking the user to close other Afterburner sessions and retry.
 
 ## Layout
 

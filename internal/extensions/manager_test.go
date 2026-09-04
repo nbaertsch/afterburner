@@ -2,6 +2,7 @@ package extensions
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -366,5 +367,66 @@ func TestInstallBuiltinsFallsBackToEmbeddedWhenFetcherFails(t *testing.T) {
 	entry := value.Extensions["black-box"]
 	if entry.Source.Type != "builtin" || !entry.Enabled {
 		t.Fatalf("fallback entry = %#v", entry)
+	}
+}
+
+func TestUpdateAllReportsBuiltinLockstepWithoutFetcher(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "builtin-source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeBuiltinFixture(t, source, "black-box", "one")
+	layout := home.Layout{Root: filepath.Join(root, "home"), CopilotHome: filepath.Join(root, "home", "copilot-home"), Config: filepath.Join(root, "home", "config"), ExtensionData: filepath.Join(root, "home", "extension-data"), Extensions: filepath.Join(root, "home", "extensions"), Staging: filepath.Join(root, "home", "staging")}
+	t.Setenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE", "black-box="+source)
+	var out strings.Builder
+	manager := Manager{Layout: layout, Stdout: &out}
+	if err := manager.InstallBuiltins([]string{"black-box"}); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	t.Setenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE", "")
+	if err := manager.UpdateAll(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "pinned to the installed Afterburner core release") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestSyncBuiltinsRequiresPinnedFetcherAndPreservesLockstep(t *testing.T) {
+	root := t.TempDir()
+	oldSource := filepath.Join(root, "old")
+	newSource := filepath.Join(root, "new")
+	if err := os.MkdirAll(oldSource, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(newSource, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeBuiltinFixture(t, oldSource, "black-box", "old")
+	writeBuiltinFixture(t, newSource, "black-box", "new")
+	layout := home.Layout{Root: filepath.Join(root, "home"), CopilotHome: filepath.Join(root, "home", "copilot-home"), Config: filepath.Join(root, "home", "config"), ExtensionData: filepath.Join(root, "home", "extension-data"), Extensions: filepath.Join(root, "home", "extensions"), Staging: filepath.Join(root, "home", "staging")}
+	t.Setenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE", "black-box="+oldSource)
+	manager := Manager{Layout: layout, Stdout: io.Discard}
+	if err := manager.InstallBuiltins([]string{"black-box"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE", "")
+	manager.BuiltinFetcher = fakeBuiltinFetcher{paths: map[string]string{"black-box": newSource}}
+	if err := manager.SyncBuiltins([]string{"black-box"}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := value.Extensions["black-box"]
+	content, err := os.ReadFile(filepath.Join(entry.ActivePath, "runtime.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "new") || entry.Source.Type != "builtin" {
+		t.Fatalf("entry/content = %#v %q", entry, content)
 	}
 }

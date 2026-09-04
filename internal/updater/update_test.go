@@ -16,8 +16,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/nbaertsch/afterburner/internal/platform"
 )
 
 func TestChecksumAndArchiveExtraction(t *testing.T) {
@@ -304,6 +307,34 @@ func TestStageRequiresManifestSignature(t *testing.T) {
 	}
 }
 
+func TestWaitForOtherAfterburnersReportsBlockingProcess(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("process enumeration is Windows-specific")
+	}
+	homeRoot := filepath.Join(t.TempDir(), "home")
+	blocker := buildNamedFixtureExecutableInDir(t, filepath.Join(homeRoot, "bin"), "afterburn.exe", "blocker", true)
+	command := exec.Command(blocker)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = command.Process.Kill()
+		_, _ = command.Process.Wait()
+	}()
+	processes, err := platform.RunningExecutables([]string{"afterburn.exe"}, command.Process.Pid+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processes = filterManagedProcesses(processes, filepath.Dir(blocker))
+	if len(processes) == 0 {
+		t.Fatalf("expected blocking process PID %d to be detected", command.Process.Pid)
+	}
+	err = waitForOtherAfterburners(command.Process.Pid+1, homeRoot, 0)
+	if err == nil || !strings.Contains(err.Error(), "afterburn.exe PID") || !strings.Contains(err.Error(), strconv.Itoa(command.Process.Pid)) {
+		t.Fatalf("error = %v, pid = %d", err, command.Process.Pid)
+	}
+}
+
 func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("replacement semantics are validated on Windows")
@@ -337,10 +368,23 @@ func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 
 func buildFixtureExecutable(t *testing.T, version string, doctorOK bool) string {
 	t.Helper()
-	directory := t.TempDir()
+	return buildNamedFixtureExecutable(t, "fixture.exe", version, doctorOK)
+}
+
+func buildNamedFixtureExecutable(t *testing.T, executableName, version string, doctorOK bool) string {
+	t.Helper()
+	return buildNamedFixtureExecutableInDir(t, t.TempDir(), executableName, version, doctorOK)
+}
+
+func buildNamedFixtureExecutableInDir(t *testing.T, directory, executableName, version string, doctorOK bool) string {
+	t.Helper()
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	source := fmt.Sprintf(`package main
-import ("fmt"; "os")
+import ("fmt"; "os"; "time")
 func main() {
+	if len(os.Args) == 1 { time.Sleep(30 * time.Second); return }
 	if len(os.Args) > 1 && os.Args[1] == "version" { fmt.Println(%q); return }
 	if len(os.Args) > 1 && os.Args[1] == "doctor" && %t { return }
 	os.Exit(1)
@@ -349,7 +393,7 @@ func main() {
 	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	executable := filepath.Join(directory, "fixture.exe")
+	executable := filepath.Join(directory, executableName)
 	command := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go.exe"), "build", "-o", executable, sourcePath)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build fixture: %v\n%s", err, output)

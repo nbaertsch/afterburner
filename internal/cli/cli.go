@@ -154,10 +154,19 @@ func runUpdate(ctx context.Context, args []string, opts Options) (int, error) {
 	}
 	target := filepath.Join(layout.Root, "bin", "afterburn.exe")
 	previous := filepath.Join(layout.Root, "bin", "afterburn.previous.exe")
+	manager := extensions.Manager{Layout: layout, Stdout: opts.Stdout, BuiltinFetcher: updater.BuiltinReleaseFetcher{
+		Client:  client,
+		Root:    layout.Root,
+		Version: release.TagName,
+	}}
+	if err := manager.SyncBuiltins(nil); err != nil {
+		_ = os.RemoveAll(filepath.Dir(candidate))
+		return 1, fmt.Errorf("sync built-in extensions for %s: %w", release.TagName, err)
+	}
 	if err := updater.BeginReplacement(candidate, target, previous); err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(opts.Stdout, "Afterburner %s is staged; replacement will complete after this process exits.\n", release.TagName)
+	fmt.Fprintf(opts.Stdout, "Afterburner %s and built-in extensions are staged; core replacement will complete after this process exits.\n", release.TagName)
 	return 0, nil
 }
 
@@ -208,11 +217,12 @@ func runExtensionCommand(route Route, opts Options) (int, error) {
 		return 1, err
 	}
 	manager := extensions.Manager{Layout: layout, Stdout: opts.Stdout}
-	if route.Command == "install" && strings.TrimSpace(os.Getenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE")) == "" &&
+	if strings.TrimSpace(os.Getenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE")) == "" &&
 		strings.TrimSpace(os.Getenv("AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH")) == "" {
 		manager.BuiltinFetcher = updater.BuiltinReleaseFetcher{
-			Client: updater.NewClient(context.Background()),
-			Root:   layout.Root,
+			Client:  updater.NewClient(context.Background()),
+			Root:    layout.Root,
+			Version: opts.Version,
 		}
 	}
 	switch route.Command {
