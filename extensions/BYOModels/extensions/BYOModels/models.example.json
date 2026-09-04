@@ -24,8 +24,7 @@
       "id": "my-model",
       "name": "My Model",
       "modelId": "gpt-5.6-sol",
-      "wireModel": "my-deployment",
-      "badge": " 🔧 BYO"
+      "wireModel": "my-deployment"
     }
   ]
 }

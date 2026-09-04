@@ -339,168 +339,6 @@ const externalTaskLifecycle = new Map();
 const nativeTaskKinds = new Map();
 const copilotPackageVersion = copilotRoot.split(/[\\/]/).at(-1);
 
-// uiModRegistry backs the framework-owned "mod point" layer described in
-// docs/ui-mods.md. Extension authors register semantic UI intent (e.g. "add
-// a badge next to this model row") instead of hand-writing minified-bundle
-// string surgery; Afterburner owns the profile-specific anchors and applies
-// them centrally. registerAppSourceTransform remains available as a raw,
-// unstable, first-party-only escape hatch for capabilities the framework
-// does not yet generalize (e.g. BYOModels' context-arrow controls).
-const uiModRegistry = {
-    modelPickerRowDecorators: []
-};
-const uiModDiagnostics = {
-    schemaVersion: 1,
-    modPoints: {}
-};
-
-// modelPickerRowRendererByProfile maps each known compatibility profile ID to
-// the exact minified function name Copilot's model picker uses to render a
-// row's context cell, plus the exact minified "row identity map" builder
-// anchor for that same profile. These names are already validated by
-// BYOModels' own passing tests (extensions/BYOModels/runtime/extension.mjs),
-// which patch the identical renderer functions for the context-arrow
-// feature; the row-decorator mod point reuses the same verified renderer
-// anchors rather than introducing new, unverified ones. The row-identity map
-// anchor is a second, independently verified anchor (confirmed against the
-// real installed Copilot bundles for all three profiles) that builds a
-// Map<rowKey, originalRow> local to the model picker component; patching its
-// construction lets the row-decorator mod point recover the original
-// selection id (originalRow.value) from the opaque rendered row object (e),
-// which itself only carries e.rowKey, not the raw selection id.
-const modelPickerRowRendererByProfile = {
-    "copilot-1.0.83-1-win32-x64": {
-        rendererName: "vzr",
-        rowIdentityMapAnchor: "j=(0,Kn.useMemo)(()=>{let Ue=new Map;for(let nt of r){let ut=ne.get(nt.value);ut&&Ue.set(ut.rowKey,nt)}return Ue},[r,ne])"
-    },
-    "copilot-1.0.83-2-win32-x64": {
-        rendererName: "Wzr",
-        rowIdentityMapAnchor: "j=(0,Vn.useMemo)(()=>{let Ue=new Map;for(let nt of r){let ut=ne.get(nt.value);ut&&Ue.set(ut.rowKey,nt)}return Ue},[r,ne])"
-    },
-    "copilot-1.0.83-3-win32-x64": {
-        rendererName: "U6r",
-        rowIdentityMapAnchor: "V=(0,Wn.useMemo)(()=>{let Le=new Map;for(let tt of r){let Ct=re.get(tt.value);Ct&&Le.set(Ct.rowKey,tt)}return Le},[r,re])"
-    }
-};
-
-function currentCompatibilityProfileID() {
-    return process.env.AFTERBURNER_COMPATIBILITY_PROFILE ?? "";
-}
-
-// registerModelPickerRowDecorator lets an extension attach short badge text
-// after a model picker row's context cell (e.g. " 🔧 BYO"). Decorators are
-// applied in registration order; each decorator receives a frozen descriptor
-// containing the row's selectionId (matching registerModelPickerAdapter's
-// selectionIds()/selection ids elsewhere in this API) and must return either
-// a string or null/undefined (no badge). Decorator exceptions are isolated
-// per-decorator and never abort rendering for other decorators or crash
-// Copilot.
-function registerModelPickerRowDecorator(decorator) {
-    if (!decorator || typeof decorator.id !== "string" || decorator.id.trim() === "") {
-        throw new Error("A model picker row decorator must define a non-empty string id.");
-    }
-    if (typeof decorator.render !== "function") {
-        throw new Error(`Model picker row decorator "${decorator.id}" must define render().`);
-    }
-    if (uiModRegistry.modelPickerRowDecorators.some((existing) => existing.id === decorator.id)) {
-        throw new Error(`Model picker row decorator id "${decorator.id}" is already registered.`);
-    }
-    uiModRegistry.modelPickerRowDecorators.push(decorator);
-    emitRuntimeEvent("ui.mod.registered", {
-        modPoint: "model-picker.row-decorator.v1",
-        modId: decorator.id
-    });
-}
-
-// getUiModDiagnostics reports, per known mod point, whether the current
-// Copilot profile is supported and which decorators are registered. This is
-// the framework's introspection surface for `afterburn doctor`-style tooling
-// and for extension authors debugging why a mod point is unavailable.
-function getUiModDiagnostics() {
-    const profileID = currentCompatibilityProfileID();
-    const profile = modelPickerRowRendererByProfile[profileID];
-    return {
-        schemaVersion: 1,
-        profileId: profileID || null,
-        modPoints: {
-            "model-picker.row-decorator.v1": {
-                available: Boolean(profile),
-                reason: profile ? undefined : "profile-does-not-declare-mod-point",
-                registeredMods: uiModRegistry.modelPickerRowDecorators.map((decorator) => decorator.id)
-            }
-        }
-    };
-}
-
-// applyModelPickerRowDecorators patches the profile's already-verified model
-// picker row renderer function, plus the row-identity map builder, to
-// additionally resolve each rendered row's real selectionId and call into
-// registered decorators, appending their returned text to the rendered
-// context cell. It fails closed: if the current Copilot package does not
-// match a known profile, or either expected anchor is not found in the
-// bundle (exactly once each), no patch is applied and the source is
-// returned unchanged -- decorators simply become unavailable rather than
-// corrupting the UI.
-function applyModelPickerRowDecorators(source) {
-    if (uiModRegistry.modelPickerRowDecorators.length === 0) return source;
-    const profileID = currentCompatibilityProfileID();
-    const profile = modelPickerRowRendererByProfile[profileID];
-    if (!profile) {
-        if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
-            process.stderr.write(`[runtime-extension-host] model-picker.row-decorator.v1 unavailable for profile "${profileID}"\n`);
-        }
-        return source;
-    }
-    const rendererAnchor = `function ${profile.rendererName}(e,t,n){return`;
-    const rendererOccurrences = source.split(rendererAnchor).length - 1;
-    const identityOccurrences = source.split(profile.rowIdentityMapAnchor).length - 1;
-    if (rendererOccurrences !== 1 || identityOccurrences !== 1) {
-        if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
-            process.stderr.write(`[runtime-extension-host] model-picker.row-decorator.v1 anchor mismatch (renderer=${rendererOccurrences}, identity=${identityOccurrences}) for profile "${profileID}"\n`);
-        }
-        return source;
-    }
-    const identityBridge = "__afterburnerModelPickerRowIdentity";
-    const renderBridge = "__afterburnerModelPickerRowDecorators";
-    globalThis[identityBridge] = new Map();
-    globalThis[renderBridge] = (row) => {
-        const selectionId = globalThis[identityBridge].get(row.rowKey);
-        const parts = [];
-        for (const decorator of uiModRegistry.modelPickerRowDecorators) {
-            try {
-                const text = decorator.render(Object.freeze({ selectionId: selectionId ?? null }));
-                if (typeof text === "string" && text.length > 0) parts.push(text);
-            } catch (error) {
-                reportInstrumentationFailure(`modelPickerRowDecorator:${decorator.id}`, error);
-            }
-        }
-        return parts.join("");
-    };
-    // Rewrite the identity-map builder so each entry is also mirrored into
-    // globalThis.__afterburnerModelPickerRowIdentity as rowKey -> selectionId,
-    // giving the renderer patch below a way to recover the true selection id
-    // from the opaque rendered row object (which only carries .rowKey).
-    const identityReplacement = profile.rowIdentityMapAnchor.replace(
-        /\.set\(([A-Za-z0-9_]+)\.rowKey,\s*([A-Za-z0-9_]+)\)/,
-        (match, mapRowVar, originalRowVar) =>
-            `.set(${mapRowVar}.rowKey,${originalRowVar}),globalThis.${identityBridge}.set(${mapRowVar}.rowKey,${originalRowVar}.value)`
-    );
-    if (identityReplacement === profile.rowIdentityMapAnchor) {
-        // Defensive: the regex should always match the known anchor shape;
-        // if it somehow does not, fail closed rather than silently skipping
-        // identity tracking (which would make decorators see null selectionId).
-        if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
-            process.stderr.write(`[runtime-extension-host] model-picker.row-decorator.v1 identity rewrite failed for profile "${profileID}"\n`);
-        }
-        return source;
-    }
-    const rendererReplacement = `function ${profile.rendererName}(e,t,n){e={...e,contextCellText:e.contextCellText+(globalThis.${renderBridge}?.(e)??"")};return`;
-    return source
-        .replace(profile.rowIdentityMapAnchor, identityReplacement)
-        .replace(rendererAnchor, rendererReplacement);
-}
-
-
 function opaqueRuntimeId(prefix, value) {
     if (value === undefined || value === null || value === "") return undefined;
     const digest = createHash("sha256").update(String(value)).digest("base64url").slice(0, 20);
@@ -1442,8 +1280,6 @@ function runtimeExtensionApi(pluginRoot) {
         pluginRoot,
         registerModelPickerAdapter,
         registerAppSourceTransform,
-        registerModelPickerRowDecorator,
-        getUiModDiagnostics,
         registerExternalTaskProvider,
         registerRuntimeObserver,
         getRuntimeObserverDiagnostics,
@@ -1558,9 +1394,8 @@ async function loadRuntimeExtensions() {
 }
 
 async function transformedAppPath() {
-    if (appSourceTransforms.length === 0 && uiModRegistry.modelPickerRowDecorators.length === 0) return originalAppPath;
+    if (appSourceTransforms.length === 0) return originalAppPath;
     let source = await readFile(originalAppPath, "utf8");
-    source = applyModelPickerRowDecorators(source);
     for (const transform of appSourceTransforms) {
         source = await transform(source, { copilotRoot, originalAppPath });
         if (typeof source !== "string") {
