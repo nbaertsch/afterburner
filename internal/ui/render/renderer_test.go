@@ -35,8 +35,9 @@ func TestGoldenComponentCatalogPlainSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(expected) != frame.Body+"\n" {
-		t.Fatalf("plain golden mismatch\n--- expected\n%s\n--- actual\n%s", expected, frame.Body)
+	expectedText := strings.ReplaceAll(string(expected), "\r\n", "\n")
+	if expectedText != frame.Body+"\n" {
+		t.Fatalf("plain golden mismatch\n--- expected\n%s\n--- actual\n%s", expectedText, frame.Body)
 	}
 }
 
@@ -216,8 +217,9 @@ func TestSDKShapedRenderFixtureGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(expected) != frame.Body+"\n" {
-		t.Fatalf("SDK-shaped fixture golden mismatch\n--- expected\n%s\n--- actual\n%s", expected, frame.Body)
+	expectedText := strings.ReplaceAll(string(expected), "\r\n", "\n")
+	if expectedText != frame.Body+"\n" {
+		t.Fatalf("SDK-shaped fixture golden mismatch\n--- expected\n%s\n--- actual\n%s", expectedText, frame.Body)
 	}
 }
 
