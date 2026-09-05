@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nbaertsch/afterburner/schemas/ui-envelope-v1.schema.json",
+  "title": "Afterburner UI envelope",
+  "type": "object",
+  "required": ["schemaVersion", "protocol", "revision", "sessionId", "extensionId", "messageId", "epoch", "sequence", "kind", "source", "target", "timestamp", "payload"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "protocol": { "const": "afterburner.ui" },
+    "revision": { "const": 1 },
+    "sessionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "extensionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "messageId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "correlationId": { "type": "string", "maxLength": 128 },
+    "causationId": { "type": "string", "maxLength": 128 },
+    "epoch": { "type": "integer", "minimum": 0 },
+    "generation": { "type": "integer", "minimum": 0 },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "kind": {
+      "enum": ["hello", "hello.result", "component.snapshot", "component.patch", "ui.event", "grant.policy", "lifecycle", "audit.event", "observation", "error", "ack", "backpressure"]
+    },
+    "source": { "$ref": "#/$defs/actor" },
+    "target": { "$ref": "#/$defs/actor" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "compatibility": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^afterburner\\.ui\\.[a-z0-9.-]+$" },
+      "uniqueItems": true
+    },
+    "contentType": { "type": "string" },
+    "payload": true,
+    "auth": { "$ref": "#/$defs/auth" },
+    "ack": { "$ref": "#/$defs/ack" },
+    "retry": { "$ref": "#/$defs/retry" },
+    "backpressure": { "$ref": "#/$defs/backpressure" },
+    "extensions": { "type": "object", "additionalProperties": true },
+    "idempotencyKey": { "type": "string", "maxLength": 256 }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["host", "extension", "renderer", "surface", "sdk", "black-box", "policy", "reconciler", "terminal", "unspecified"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "additionalProperties": false
+    },
+    "auth": {
+      "type": "object",
+      "required": ["algorithm", "keyId", "epoch", "nonce", "timestamp", "signature"],
+      "properties": {
+        "algorithm": { "const": "HMAC-SHA256" },
+        "keyId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "epoch": { "type": "integer", "minimum": 0 },
+        "nonce": { "type": "string", "minLength": 16, "maxLength": 128 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "signature": { "type": "string", "minLength": 32, "maxLength": 512 }
+      },
+      "additionalProperties": false
+    },
+    "ack": {
+      "type": "object",
+      "required": ["epoch", "highWater", "contiguous"],
+      "properties": {
+        "epoch": { "type": "integer", "minimum": 0 },
+        "highWater": { "type": "integer", "minimum": 0 },
+        "received": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "missing": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "contiguous": { "type": "boolean" },
+        "duplicate": { "type": "boolean" },
+        "outOfWindow": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "retry": {
+      "type": "object",
+      "required": ["retryable"],
+      "properties": {
+        "retryable": { "type": "boolean" },
+        "afterMillis": { "type": "integer", "minimum": 0 },
+        "maxAttempts": { "type": "integer", "minimum": 0 },
+        "idempotencySafe": { "type": "boolean" },
+        "reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "backpressure": {
+      "type": "object",
+      "required": ["active"],
+      "properties": {
+        "active": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "queueDepth": { "type": "integer", "minimum": 0 },
+        "queueLimit": { "type": "integer", "minimum": 0 },
+        "retryAfterMillis": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

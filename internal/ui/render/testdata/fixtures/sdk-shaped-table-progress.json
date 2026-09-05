@@ -1,0 +1,45 @@
+{
+  "root": {
+    "id": "sdk-shaped-root",
+    "kind": "application",
+    "props": { "title": "SDK-shaped render fixture" },
+    "children": [
+      {
+        "id": "sdk-shaped-table",
+        "kind": "table",
+        "props": {
+          "columns": [
+            { "id": "eventType", "title": "Event Type" },
+            { "id": "severity", "title": "Severity" },
+            { "id": "durationMs", "title": "Duration" }
+          ],
+          "rows": [
+            {
+              "id": "row-1",
+              "cells": {
+                "eventType": { "display": { "text": "Audit event" }, "plain": "Audit event" },
+                "severity": { "display": { "kind": "badge", "props": { "label": "Info" } }, "plain": "info" },
+                "durationMs": { "value": 65, "plain": "65 ms" }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sdk-shaped-progress",
+        "kind": "progress",
+        "props": { "label": "Completion", "value": 65, "min": 0, "max": 100 }
+      },
+      {
+        "id": "sdk-shaped-meter",
+        "kind": "meter",
+        "props": { "label": "Quota", "value": 3, "min": 0, "max": 4 }
+      }
+    ]
+  },
+  "revision": 1,
+  "surfaceId": "sdk-shaped-render-fixture",
+  "themeId": "afterburner.dark",
+  "locale": "en-US",
+  "capabilities": ["ui.render.components"]
+}

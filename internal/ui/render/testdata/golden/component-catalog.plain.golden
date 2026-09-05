@@ -1,0 +1,113 @@
+[ Run ] │ OK
+ALERT: Heads up
+ badge 
+[███████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  42%
+╭ box ─────────────────────────────────────────────────────────────────╮
+│ box text with unicode Ω and ansi red                                 │
+╰──────────────────────────────────────────────────────────────────────╯
+Home › Project › Run
+[ button ]
+canvas text with unicode Ω and ansi red
+╭ card ────────────────────────────────────────────────────────────────╮
+│ card text with unicode Ω and ansi red                                │
+╰──────────────────────────────────────────────────────────────────────╯
+▁▄▂█▃
+(checked) ☑ Agree
+╭ code ────────────────────────────────────────────────────────────────╮
+│ code text with unicode Ω and ansi red                                │
+╰──────────────────────────────────────────────────────────────────────╯
+column text with unicode Ω and ansi red
+╭ Command Palette ─────────────────────────────────────────────────────╮
+│ > deploy                                                             │
+│ › Deploy app                                                         │
+│ › Rollback                                                           │
+╰──────────────────────────────────────────────────────────────────────╯
+╭ Confirmation ────────────────────────────────────────────────────────╮
+│ confirmation text with unicode Ω and ansi red                        │
+│ confirmation text with unicode Ω and ansi red                        │
+╰──────────────────────────────────────────────────────────────────────╯
+(selected) › alpha
+› beta
+… 2/4
+dateInput: dateInput value
+Esc: Close
+Enter: Accept
+╭ dialog ──────────────────────────────────────────────────────────────╮
+│ dialog text with unicode Ω and ansi red                              │
+╰──────────────────────────────────────────────────────────────────────╯
+(expanded) ▾ Details
+  disclosure text with unicode Ω and ansi red
+No content
+(error) ERROR: Failure
+extensionOutlet text with unicode Ω and ansi red
+fileInput: fileInput value
+[ Run ]
+ OK 
+cell 1                             │ cell 2                            
+Esc: Close
+Enter: Accept
+icon text with unicode Ω and ansi red
+[image: image alt]
+Esc: Close
+Enter: Accept
+Esc: Close
+Enter: Accept
+link
+(selected) • alpha
+• beta
+… 2/4
+… Loading
+(selected) │ alpha
+│ beta
+… 2/4
+markdown text with unicode Ω and ansi red
+[███████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  42%
+numberInput: numberInput value
+Page 2 of 5  [Prev] [Next]
+╭ panel ───────────────────────────────────────────────────────────────╮
+│ panel text with unicode Ω and ansi red                               │
+╰──────────────────────────────────────────────────────────────────────╯
+passwordInput: •••••••••••••••••••
+[███████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  42%
+╭ Prompt ──────────────────────────────────────────────────────────────╮
+│ prompt text with unicode Ω and ansi red                              │
+│ prompt text with unicode Ω and ansi red                              │
+╰──────────────────────────────────────────────────────────────────────╯
+radioGroup: a, b
+[ Run ] │ OK
+b
+c
+… 3/5
+searchInput: searchInput value
+╭ section ─────────────────────────────────────────────────────────────╮
+│ section text with unicode Ω and ansi red                             │
+╰──────────────────────────────────────────────────────────────────────╯
+select: a, b
+────────────────────────────── separator ───────────────────────────────
+Volume [█████████████████████████████████████████░░░░░░░░░░░░░░░░░]  70%
+▁▄▂█▃
+[ Run ]                             │  OK 
+stack text with unicode Ω and ansi red
+cell 1                             │ cell 2                            
+Name                               │ State                             
+────────────────────────────────────────────────────────────────────────
+Build                              │ green                             
+Test                               │ blue                              
+(selected) One [Two]
+two
+terminal red
+text text with unicode Ω and ansi red
+textArea:
+textArea value
+textInput: textInput value
+(selected) ◷ alpha
+◷ beta
+… 2/4
+TOAST: Heads up
+toggle: off
+[ Run ] │ OK
+(selected) ├─ alpha
+├─ beta
+… 2/4
+[video: video alt]
+viewport text with unicode Ω and ansi red

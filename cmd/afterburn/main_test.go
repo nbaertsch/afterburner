@@ -12,6 +12,8 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+
+	regpkg "github.com/nbaertsch/afterburner/internal/registry"
 )
 
 type capturedInvocation struct {
@@ -116,28 +118,29 @@ func TestNativeProxyStartsBeforeCopilot(t *testing.T) {
 	if err := os.MkdirAll(activePath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	registry := fmt.Sprintf(`{
-  "schemaVersion": 1,
-  "extensions": {
-    "byo-models": {
-      "enabled": true,
-      "activePath": %q,
-      "manifest": {
-        "schemaVersion": 1,
-        "id": "byo-models",
-        "name": "BYOModels",
-        "visibility": "builtin",
-        "runtime": {}
-      },
-      "source": {"type": "builtin", "value": "byo-models"},
-      "updatedAt": "2026-09-03T00:00:00Z"
-    }
-  }
-}`, activePath)
+	manifest := regpkg.Manifest{SchemaVersion: 1, ID: "byo-models", Name: "BYOModels", DisplayName: "BYOModels", Visibility: "builtin"}
+	manifestData, _ := json.Marshal(manifest)
+	if err := os.WriteFile(filepath.Join(activePath, "afterburner.json"), manifestData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestHash, treeHash, err := regpkg.VerifyActivePackage(regpkg.Entry{ActivePath: activePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := regpkg.Entry{Enabled: true, ActivePath: activePath, Manifest: manifest, Source: regpkg.Source{Type: "embedded", Value: "byo-models"}, UpdatedAt: "2026-09-03T00:00:00Z"}
+	entry.Identity = regpkg.IdentityBinding{ExtensionID: "byo-models", ManifestHash: manifestHash, TreeHash: treeHash, SourceType: "embedded", SourceValue: "byo-models", SignerID: "afterburner-core", SignerFingerprint: "builtin:byo-models", BuiltinSigned: true, RegistryEpoch: 1, GrantEpoch: 1, BoundAt: "2026-09-03T00:00:00Z"}
+	entry, err = regpkg.SealEntry(afterburnerHome, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registryData, err := json.Marshal(regpkg.Registry{SchemaVersion: 1, Extensions: map[string]regpkg.Entry{"byo-models": entry}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(afterburnerHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(afterburnerHome, "registry.json"), []byte(registry), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(afterburnerHome, "registry.json"), registryData, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(root, "byomodels.json")

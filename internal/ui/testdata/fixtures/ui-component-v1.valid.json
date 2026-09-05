@@ -1,0 +1,28 @@
+{
+  "root": {
+    "id": "app-root",
+    "kind": "application",
+    "props": {
+      "title": "Afterburner"
+    },
+    "children": [
+      {
+        "id": "terminal-main",
+        "kind": "terminal",
+        "accessibility": {
+          "role": "application",
+          "name": "Copilot terminal"
+        },
+        "actionBindings": {
+          "submit": "terminal.submit"
+        },
+        "dataBindings": ["terminal.transcript"]
+      }
+    ]
+  },
+  "revision": 7,
+  "surfaceId": "surface-terminal-main",
+  "themeId": "afterburner.dark",
+  "locale": "en-US",
+  "capabilities": ["ui.render.components", "ui.surface.terminal"]
+}

@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -119,6 +120,7 @@ func writeExtensionFixture(t *testing.T, root, marker string) {
 	  "id": "fixture",
 	  "name": "Fixture",
 	  "visibility": "private",
+	  "requires": {"afterburner": ">=0.1.0 <1.0.0"},
 	  "runtime": {"execution": "in-process", "entrypoint": "runtime.mjs"}
 	}`
 	if err := os.WriteFile(filepath.Join(root, "afterburner.json"), []byte(manifest), 0o600); err != nil {
@@ -128,6 +130,216 @@ func writeExtensionFixture(t *testing.T, root, marker string) {
 	if err := os.WriteFile(filepath.Join(root, "runtime.mjs"), []byte("export default "+marker), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestReadManifestAcceptsDisplayNameAndLegacyName(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		identity string
+		want     string
+	}{
+		{name: "displayName", identity: `"displayName": "Display Fixture"`, want: "Display Fixture"},
+		{name: "legacy-name", identity: `"name": "Legacy Fixture"`, want: "Legacy Fixture"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			manifest := fmt.Sprintf(`{
+			  "schemaVersion": 1,
+			  "id": "fixture",
+			  %s,
+			  "visibility": "private",
+			  "requires": {"afterburner": ">=0.1.0 <1.0.0"},
+			  "runtime": {"execution": "in-process", "entrypoint": "runtime.mjs"}
+			}`, tc.identity)
+			if err := os.WriteFile(filepath.Join(root, "afterburner.json"), []byte(manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "runtime.mjs"), []byte("export default {}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := readManifest(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.DisplayName != tc.want || got.Name != tc.want {
+				t.Fatalf("manifest names = (%q, %q), want %q", got.DisplayName, got.Name, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadManifestRequiresValidVisibility(t *testing.T) {
+	root := t.TempDir()
+	manifest := `{
+	  "schemaVersion": 1,
+	  "id": "fixture",
+	  "displayName": "Fixture",
+	  "visibility": "internal",
+	  "requires": {"afterburner": ">=0.1.0 <1.0.0"},
+	  "runtime": {"execution": "in-process", "entrypoint": "runtime.mjs"}
+	}`
+	if err := os.WriteFile(filepath.Join(root, "afterburner.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "runtime.mjs"), []byte("export default {}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readManifest(root); err == nil {
+		t.Fatal("expected invalid visibility to be rejected")
+	}
+}
+
+func TestGenericInstallRejectsBuiltinVisibilitySpoof(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeBuiltinFixture(t, source, "spoof", "one")
+	layout := home.Layout{Root: filepath.Join(root, "home"), CopilotHome: filepath.Join(root, "home", "copilot-home"), Config: filepath.Join(root, "home", "config"), Extensions: filepath.Join(root, "home", "extensions"), Staging: filepath.Join(root, "home", "staging")}
+	manager := Manager{Layout: layout, Stdout: io.Discard}
+	if err := manager.Install(source); err == nil {
+		t.Fatal("expected local extension declaring builtin visibility to be rejected")
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Extensions) != 0 {
+		t.Fatalf("spoofed builtin persisted in registry: %#v", value.Extensions)
+	}
+}
+
+func TestGenericInstallRejectsReservedBuiltinID(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{
+	  "schemaVersion": 1,
+	  "id": "black-box",
+	  "name": "Spoofed Black Box",
+	  "visibility": "private",
+	  "requires": {"afterburner": ">=0.1.0 <1.0.0"},
+	  "runtime": {"execution": "in-process", "entrypoint": "runtime.mjs"}
+	}`
+	if err := os.WriteFile(filepath.Join(source, "afterburner.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "runtime.mjs"), []byte("export default {}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layout := home.Layout{Root: filepath.Join(root, "home"), CopilotHome: filepath.Join(root, "home", "copilot-home"), Config: filepath.Join(root, "home", "config"), Extensions: filepath.Join(root, "home", "extensions"), Staging: filepath.Join(root, "home", "staging")}
+	manager := Manager{Layout: layout, Stdout: io.Discard}
+	if err := manager.Install(source); err == nil {
+		t.Fatal("expected local extension using reserved black-box ID to be rejected")
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Extensions) != 0 {
+		t.Fatalf("reserved ID spoof persisted in registry: %#v", value.Extensions)
+	}
+}
+
+func TestGitInstallRejectsReservedBuiltinID(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{
+	  "schemaVersion": 1,
+	  "id": "black-box",
+	  "name": "Spoofed Black Box",
+	  "visibility": "private",
+	  "requires": {"afterburner": ">=0.1.0 <1.0.0"},
+	  "runtime": {"execution": "in-process", "entrypoint": "runtime.mjs"}
+	}`
+	if err := os.WriteFile(filepath.Join(source, "afterburner.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "runtime.mjs"), []byte("export default {}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, source, "init")
+	runGit(t, source, "config", "user.email", "test@example.invalid")
+	runGit(t, source, "config", "user.name", "Afterburner Test")
+	runGit(t, source, "add", ".")
+	runGit(t, source, "commit", "-m", "reserved")
+	layout := home.Layout{Root: filepath.Join(root, "home"), CopilotHome: filepath.Join(root, "home", "copilot-home"), Config: filepath.Join(root, "home", "config"), Extensions: filepath.Join(root, "home", "extensions"), Staging: filepath.Join(root, "home", "staging")}
+	manager := Manager{Layout: layout, Stdout: io.Discard}
+	if err := manager.Install("file:///" + filepath.ToSlash(source)); err == nil {
+		t.Fatal("expected Git extension using reserved black-box ID to be rejected")
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Extensions) != 0 {
+		t.Fatalf("reserved Git ID spoof persisted in registry: %#v", value.Extensions)
+	}
+}
+
+func TestGitInstallRejectsBuiltinVisibilitySpoof(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeBuiltinFixture(t, source, "spoof", "one")
+	runGit(t, source, "init")
+	runGit(t, source, "config", "user.email", "test@example.invalid")
+	runGit(t, source, "config", "user.name", "Afterburner Test")
+	runGit(t, source, "add", ".")
+	runGit(t, source, "commit", "-m", "spoof")
+	layout := home.Layout{Root: filepath.Join(root, "home"), CopilotHome: filepath.Join(root, "home", "copilot-home"), Config: filepath.Join(root, "home", "config"), Extensions: filepath.Join(root, "home", "extensions"), Staging: filepath.Join(root, "home", "staging")}
+	manager := Manager{Layout: layout, Stdout: io.Discard}
+	if err := manager.Install("file:///" + filepath.ToSlash(source)); err == nil {
+		t.Fatal("expected Git extension declaring builtin visibility to be rejected")
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Extensions) != 0 {
+		t.Fatalf("spoofed Git builtin persisted in registry: %#v", value.Extensions)
+	}
+}
+
+func TestSchemaAllowsDisplayNameOrLegacyNameAndRequiresVisibility(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "schemas", "extension-v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Required []string              `json:"required"`
+		AnyOf    []map[string][]string `json:"anyOf"`
+		Props    map[string]any        `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(schema.Required, "visibility") || containsString(schema.Required, "displayName") {
+		t.Fatalf("schema required fields = %#v", schema.Required)
+	}
+	if _, ok := schema.Props["name"]; !ok {
+		t.Fatal("schema is missing legacy name property")
+	}
+	if len(schema.AnyOf) != 2 || !containsString(schema.AnyOf[0]["required"], "displayName") || !containsString(schema.AnyOf[1]["required"], "name") {
+		t.Fatalf("schema name/displayName compatibility = %#v", schema.AnyOf)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGitInstallAndUpdateUseImmutableCommits(t *testing.T) {
@@ -175,6 +387,9 @@ func TestGitInstallAndUpdateUseImmutableCommits(t *testing.T) {
 	if secondEntry.Source.Commit == firstEntry.Source.Commit || secondEntry.ActivePath == firstEntry.ActivePath {
 		t.Fatalf("Git update did not advance: %#v", secondEntry)
 	}
+	if firstEntry.Identity.RegistryMAC == "" || secondEntry.Identity.RegistryMAC == "" || firstEntry.Identity.RegistryMAC == secondEntry.Identity.RegistryMAC {
+		t.Fatalf("Git update did not rotate registry integrity records: first=%#v second=%#v", firstEntry.Identity, secondEntry.Identity)
+	}
 }
 
 func runGit(t *testing.T, directory string, args ...string) {
@@ -192,6 +407,7 @@ func writeBuiltinFixture(t *testing.T, root, id, marker string) {
 	  "id": %q,
 	  "name": "Fixture Builtin",
 	  "visibility": "builtin",
+	  "requires": {"afterburner": ">=0.1.0 <1.0.0"},
 	  "runtime": {"execution": "in-process", "entrypoint": "runtime.mjs"}
 	}`, id)
 	if err := os.WriteFile(filepath.Join(root, "afterburner.json"), []byte(manifest), 0o600); err != nil {
@@ -207,7 +423,7 @@ func writeBuiltinFixture(t *testing.T, root, id, marker string) {
 	}
 }
 
-func TestInstallBuiltinsUsesDevelopmentSourceOverride(t *testing.T) {
+func TestInstallBuiltinsRejectsUnverifiedDevelopmentSourceOverride(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "override-source")
 	if err := os.MkdirAll(source, 0o755); err != nil {
@@ -230,30 +446,15 @@ func TestInstallBuiltinsUsesDevelopmentSourceOverride(t *testing.T) {
 	}
 	t.Setenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE", "black-box="+source)
 	manager := Manager{Layout: layout, Stdout: os.Stdout}
-	if err := manager.InstallBuiltins([]string{"black-box"}); err != nil {
-		t.Fatal(err)
+	if err := manager.InstallBuiltins([]string{"black-box"}); err == nil {
+		t.Fatal("expected unverified development source override to be rejected for built-in trust")
 	}
 	value, err := registry.Load(layout.Root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry := value.Extensions["black-box"]
-	if entry.Source.Type != "builtin" || !entry.Enabled {
-		t.Fatalf("override entry = %#v", entry)
-	}
-	first := entry.ActivePath
-
-	writeBuiltinFixture(t, source, "black-box", "two")
-	if err := manager.InstallBuiltins([]string{"black-box"}); err != nil {
-		t.Fatal(err)
-	}
-	value, err = registry.Load(layout.Root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry = value.Extensions["black-box"]
-	if entry.ActivePath == first {
-		t.Fatalf("override reinstall did not pick up the modified source: %#v", entry)
+	if _, ok := value.Extensions["black-box"]; ok {
+		t.Fatal("unverified development override was persisted as a built-in")
 	}
 }
 
@@ -325,7 +526,7 @@ func TestInstallBuiltinsPrefersFetcherOverEmbedded(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry := value.Extensions["black-box"]
-	if entry.Source.Type != "builtin" || !entry.Enabled {
+	if entry.Source.Type != "signed-release" || !entry.Enabled || !entry.Identity.BuiltinSigned {
 		t.Fatalf("fetched entry = %#v", entry)
 	}
 	content, err := os.ReadFile(filepath.Join(entry.ActivePath, "runtime.mjs"))
@@ -365,27 +566,20 @@ func TestInstallBuiltinsFallsBackToEmbeddedWhenFetcherFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry := value.Extensions["black-box"]
-	if entry.Source.Type != "builtin" || !entry.Enabled {
+	if entry.Source.Type != "embedded" || !entry.Enabled || !entry.Identity.BuiltinSigned {
 		t.Fatalf("fallback entry = %#v", entry)
 	}
 }
 
 func TestUpdateAllReportsBuiltinLockstepWithoutFetcher(t *testing.T) {
 	root := t.TempDir()
-	source := filepath.Join(root, "builtin-source")
-	if err := os.MkdirAll(source, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeBuiltinFixture(t, source, "black-box", "one")
 	layout := home.Layout{Root: filepath.Join(root, "home"), CopilotHome: filepath.Join(root, "home", "copilot-home"), Config: filepath.Join(root, "home", "config"), ExtensionData: filepath.Join(root, "home", "extension-data"), Extensions: filepath.Join(root, "home", "extensions"), Staging: filepath.Join(root, "home", "staging")}
-	t.Setenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE", "black-box="+source)
 	var out strings.Builder
 	manager := Manager{Layout: layout, Stdout: &out}
 	if err := manager.InstallBuiltins([]string{"black-box"}); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	t.Setenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE", "")
 	if err := manager.UpdateAll(); err != nil {
 		t.Fatal(err)
 	}
@@ -396,23 +590,16 @@ func TestUpdateAllReportsBuiltinLockstepWithoutFetcher(t *testing.T) {
 
 func TestSyncBuiltinsRequiresPinnedFetcherAndPreservesLockstep(t *testing.T) {
 	root := t.TempDir()
-	oldSource := filepath.Join(root, "old")
 	newSource := filepath.Join(root, "new")
-	if err := os.MkdirAll(oldSource, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(newSource, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeBuiltinFixture(t, oldSource, "black-box", "old")
 	writeBuiltinFixture(t, newSource, "black-box", "new")
 	layout := home.Layout{Root: filepath.Join(root, "home"), CopilotHome: filepath.Join(root, "home", "copilot-home"), Config: filepath.Join(root, "home", "config"), ExtensionData: filepath.Join(root, "home", "extension-data"), Extensions: filepath.Join(root, "home", "extensions"), Staging: filepath.Join(root, "home", "staging")}
-	t.Setenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE", "black-box="+oldSource)
 	manager := Manager{Layout: layout, Stdout: io.Discard}
 	if err := manager.InstallBuiltins([]string{"black-box"}); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE", "")
 	manager.BuiltinFetcher = fakeBuiltinFetcher{paths: map[string]string{"black-box": newSource}}
 	if err := manager.SyncBuiltins([]string{"black-box"}); err != nil {
 		t.Fatal(err)
@@ -426,7 +613,7 @@ func TestSyncBuiltinsRequiresPinnedFetcherAndPreservesLockstep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), "new") || entry.Source.Type != "builtin" {
+	if !strings.Contains(string(content), "new") || entry.Source.Type != "signed-release" || !entry.Identity.BuiltinSigned {
 		t.Fatalf("entry/content = %#v %q", entry, content)
 	}
 }

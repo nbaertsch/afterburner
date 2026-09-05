@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nbaertsch/afterburner/schemas/extension-ui-v1.schema.json",
+  "title": "Afterburner extension UI contract declaration",
+  "type": "object",
+  "required": ["protocol", "revision"],
+  "properties": {
+    "protocol": { "const": "afterburner.ui" },
+    "revision": { "const": 1 },
+    "surfaces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "kind": { "enum": ["terminal", "modal", "panel", "inline", "statusLine", "commandPalette", "overlay"] },
+          "title": { "type": "string" },
+          "requiredCapabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+        },
+        "additionalProperties": false
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^ui\\.[a-z0-9.-]+$" },
+      "uniqueItems": true
+    },
+    "grantPolicy": { "$ref": "ui-grant-policy-v1.schema.json" },
+    "observability": {
+      "type": "object",
+      "properties": {
+        "eventSinks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "extensionId", "requirement", "capability"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "extensionId": { "type": "string" },
+              "requirement": { "enum": ["optional", "required"] },
+              "capability": { "type": "string" },
+              "failureBehavior": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

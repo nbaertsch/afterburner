@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "protocol": "afterburner.ui",
+  "revision": 999,
+  "messageId": "bad-revision",
+  "kind": "component.snapshot",
+  "payload": { "schemaVersion": 1 }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nbaertsch/afterburner/schemas/ui-grant-record-v1.schema.json",
+  "title": "Afterburner UI runtime grant event",
+  "type": "object",
+  "required": ["schemaVersion", "protocol", "revision", "action", "grant", "at"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "protocol": { "const": "afterburner.ui" },
+    "revision": { "const": 1 },
+    "action": { "enum": ["grant", "revoke", "expire", "rotate"] },
+    "at": { "type": "string", "format": "date-time" },
+    "previousEpoch": { "type": "integer", "minimum": 0 },
+    "grant": {
+      "type": "object",
+      "required": ["id", "extensionId", "capability", "effect", "epoch", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "extensionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+        "capability": { "type": "string", "pattern": "^ui\\.[a-z0-9.-]+$" },
+        "resources": {
+          "type": "array",
+          "description": "Resource identifiers covered by the grant. For ui.action.invoke, a surface ID grants every action on that surface; use surfaceId/actionId for action-specific scope.",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "effect": { "enum": ["allow", "deny", "audit"] },
+        "epoch": { "type": "integer", "minimum": 1 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "revokedAt": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string", "maxLength": 256 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

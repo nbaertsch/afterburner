@@ -41,6 +41,7 @@ func Record(root, eventType string, attributes map[string]any) {
 	if err != nil {
 		return
 	}
+
 	data = append(data, '\n')
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -48,4 +49,25 @@ func Record(root, eventType string, attributes map[string]any) {
 	}
 	_, _ = file.Write(data)
 	_ = file.Close()
+}
+
+func RecordUIMetadata(root, eventType string, attributes map[string]any) {
+	Record(root, eventType, metadataOnly(attributes))
+}
+
+func metadataOnly(attributes map[string]any) map[string]any {
+	if len(attributes) == 0 {
+		return nil
+	}
+	allowed := map[string]bool{"hostId": true, "extensionId": true, "surfaceId": true, "instanceId": true, "state": true, "reason": true, "result": true, "opaqueId": true, "durationMillis": true, "counter": true}
+	out := map[string]any{}
+	for key, value := range attributes {
+		if allowed[key] {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

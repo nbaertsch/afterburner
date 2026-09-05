@@ -115,14 +115,30 @@ func validate(ctx context.Context, executable, runtimeVersion string, env []stri
 		}
 		return fmt.Errorf("self-test exited unsuccessfully: %w: %s", err, stderr.String())
 	}
-	var output struct {
-		Projection struct {
-			HasReasoningColumn bool `json:"hasReasoningColumn"`
-			HasContextColumn   bool `json:"hasContextColumn"`
-		} `json:"projection"`
-		RuntimeObservers any `json:"runtimeObservers"`
-	}
-	data := stdout.Bytes()
+	return validateSelfTestOutput(stdout.Bytes(), modalBrokerConfigured(env))
+}
+
+type selfTestOutput struct {
+	Projection struct {
+		HasReasoningColumn bool `json:"hasReasoningColumn"`
+		HasContextColumn   bool `json:"hasContextColumn"`
+	} `json:"projection"`
+	RuntimeObservers any `json:"runtimeObservers"`
+	Modal            struct {
+		FallbackAPIOK            bool `json:"fallbackAPIOK"`
+		BrokerExpected           bool `json:"brokerExpected"`
+		BrokerTransportOK        bool `json:"brokerTransportOK"`
+		UpdateBeforeOpenRejected bool `json:"updateBeforeOpenRejected"`
+		ActionOK                 bool `json:"actionOK"`
+		Diagnostics              struct {
+			Registered int `json:"registered"`
+			Closed     int `json:"closed"`
+		} `json:"diagnostics"`
+	} `json:"modal"`
+}
+
+func validateSelfTestOutput(data []byte, expectBrokerTransport bool) error {
+	var output selfTestOutput
 	start := bytes.IndexByte(data, '{')
 	if start < 0 || json.Unmarshal(data[start:], &output) != nil {
 		return fmt.Errorf("self-test did not return valid JSON")
@@ -130,7 +146,27 @@ func validate(ctx context.Context, executable, runtimeVersion string, env []stri
 	if !output.Projection.HasReasoningColumn || !output.Projection.HasContextColumn || output.RuntimeObservers == nil {
 		return fmt.Errorf("self-test runtime seams are incomplete")
 	}
+	if !output.Modal.FallbackAPIOK || !output.Modal.ActionOK || !output.Modal.UpdateBeforeOpenRejected ||
+		output.Modal.Diagnostics.Registered == 0 || output.Modal.Diagnostics.Closed == 0 {
+		return fmt.Errorf("self-test modal fallback API seams are incomplete")
+	}
+	if output.Modal.BrokerExpected != expectBrokerTransport {
+		return fmt.Errorf("self-test modal broker expectation mismatch")
+	}
+	if expectBrokerTransport && !output.Modal.BrokerTransportOK {
+		return fmt.Errorf("self-test modal broker transport is incomplete")
+	}
 	return nil
+}
+
+func modalBrokerConfigured(env []string) bool {
+	for _, item := range env {
+		name, value, ok := strings.Cut(item, "=")
+		if ok && value != "" && strings.EqualFold(name, "AFTERBURNER_MODAL_BOOTSTRAP") {
+			return true
+		}
+	}
+	return false
 }
 
 func tupleMatches(tuple Tuple, selection compatibility.Selection, prepared runtimepkg.Prepared, fingerprint string) bool {

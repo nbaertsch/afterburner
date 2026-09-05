@@ -66,17 +66,20 @@ export async function startBlackBoxService(options = {}) {
         idFactory: options.idFactory
     });
     const signalListeners = new Set();
+    const recordListeners = new Set();
     const internal = {
         observerErrors: 0,
         diagnosticRecords: 0,
         disabledDrops: 0
     };
-    const publishSignal = record => {
-        for (const listener of signalListeners) {
+    const publish = (listeners, record) => {
+        for (const listener of listeners) {
             try { Promise.resolve(listener(record)).catch(() => {}); }
             catch {}
         }
     };
+    const publishSignal = record => publish(signalListeners, record);
+    const publishRecord = record => publish(recordListeners, record);
 
     const recordDiagnostic = async (code, source = {}) => {
         const record = createBlackBoxRecord({
@@ -94,8 +97,10 @@ export async function startBlackBoxService(options = {}) {
         }, { now: options.now, idFactory: options.idFactory });
         if (record) {
             internal.diagnosticRecords++;
-            store.enqueue(record);
-            publishSignal(record);
+            if (store.enqueue(record)) {
+                publishRecord(record);
+                publishSignal(record);
+            }
         }
     };
 
@@ -115,11 +120,15 @@ export async function startBlackBoxService(options = {}) {
             }, { salt, now: options.now, idFactory: options.idFactory });
             if (!record) return false;
             const accepted = store.enqueue(record);
+            if (!accepted) return false;
+            publishRecord(record);
             for (const derived of analytics.ingest(record)) {
-                store.enqueue(derived);
-                if (derived.kind === "anomaly" || derived.kind === "milestone") publishSignal(derived);
+                if (store.enqueue(derived)) {
+                    publishRecord(derived);
+                    if (derived.kind === "anomaly" || derived.kind === "milestone") publishSignal(derived);
+                }
             }
-            return accepted;
+            return true;
         } catch {
             internal.observerErrors++;
             await recordDiagnostic("observer-processing-failed");
@@ -201,6 +210,11 @@ export async function startBlackBoxService(options = {}) {
             signalListeners.add(listener);
             return () => signalListeners.delete(listener);
         },
+        subscribeRecords(listener) {
+            if (typeof listener !== "function") throw new Error("Black Box record listener must be a function.");
+            recordListeners.add(listener);
+            return () => recordListeners.delete(listener);
+        },
         async tail(input = {}) {
             await store.flush();
             const limit = safeLimit(input.limit, config.tail.defaultRecords, config.tail.maxRecords);
@@ -256,6 +270,7 @@ export async function startBlackBoxService(options = {}) {
         },
         async close() {
             signalListeners.clear();
+            recordListeners.clear();
             await tailer?.stop();
             await store.close();
         },

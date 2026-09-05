@@ -73,12 +73,40 @@ function formatTimeline(records) {
     ].join("\n");
 }
 
+function modalOpenSucceeded(result) {
+    return result === undefined || typeof result === "string" || result?.ok === true || result?.opened === true || result?.frame;
+}
+
+function renderReturnedFrame(frame) {
+    if (typeof frame === "string") return frame.trim();
+    if (!frame || typeof frame !== "object") return "";
+    return [frame.title, frame.status, frame.body, frame.footer]
+        .filter(value => typeof value === "string" && value.trim().length > 0)
+        .join("\n");
+}
+
+function returnedFallbackText(result) {
+    if (typeof result === "string") return result.trim();
+    if (!result || typeof result !== "object") return "";
+    return renderReturnedFrame(result.frame ?? result.fallbackFrame) ||
+        [result.fallbackText, result.text, result.message, result.content, result.body]
+            .find(value => typeof value === "string" && value.trim().length > 0)?.trim() || "";
+}
+
+function modalFallbackText(reason, status) {
+    return [
+        `Black Box modal unavailable: ${reason}. Showing text fallback.`,
+        "",
+        formatPanel(status)
+    ].join("\n");
+}
+
 async function safeAction(action) {
     try { return await action(); }
     catch { return { ok: false, error: "black-box-unavailable" }; }
 }
 
-export async function buildSessionRegistration({ service, createCanvas, joinSession }) {
+export async function buildSessionRegistration({ service, createCanvas, joinSession, openModalCanvas }) {
     let session;
     let liveTailTimer = null;
     const liveTailSeen = new Set();
@@ -156,6 +184,24 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
         try { await action(); }
         catch { await session?.log("Black Box operation failed without affecting the session."); }
     };
+    const openRuntimeModal = async () => {
+        if (typeof openModalCanvas !== "function") {
+            return { opened: false, reason: "modal open API is unavailable in this session" };
+        }
+        try {
+            const result = await openModalCanvas("afterburner-black-box-live", {});
+            if (modalOpenSucceeded(result)) {
+                return {
+                    opened: true,
+                    fallback: typeof result === "string" || result?.fallback === true,
+                    fallbackText: returnedFallbackText(result)
+                };
+            }
+            return { opened: false, reason: "the registered runtime modal did not open" };
+        } catch {
+            return { opened: false, reason: "the registered runtime modal is unavailable" };
+        }
+    };
 
     session = await joinSession({
         commands: [
@@ -163,6 +209,23 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
                 name: "black-box",
                 description: "Show Black Box recorder, retention, queue, and anomaly status.",
                 handler: async () => logSafely(async () => session.log(formatPanel(await service.status())))
+            },
+            {
+                name: "black-box-modal",
+                description: "Open the registered Black Box live modal, or show an explicit text fallback.",
+                handler: async () => logSafely(async () => {
+                    const result = await openRuntimeModal();
+                    if (result.opened) {
+                        if (result.fallback) {
+                            await session.log(result.fallbackText ||
+                                modalFallbackText("the host opened a text fallback because no modal broker is attached", await service.status()));
+                            return;
+                        }
+                        await session.log("Black Box live modal opened.");
+                        return;
+                    }
+                    await session.log(modalFallbackText(result.reason, await service.status()));
+                })
             },
             {
                 name: "black-box-tail",
@@ -221,7 +284,8 @@ export async function startSessionExtension(options = {}) {
         const registration = await buildSessionRegistration({
             service,
             createCanvas: options.createCanvas,
-            joinSession: options.joinSession
+            joinSession: options.joinSession,
+            openModalCanvas: options.openModalCanvas
         });
         return {
             service,

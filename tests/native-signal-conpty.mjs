@@ -24,7 +24,8 @@ const environment = {
   AFTERBURNER_ALLOW_UNPROFILED: "1",
   AFTERBURNER_SKIP_PREFLIGHT: "1",
   AFTERBURNER_TEST_CAPTURE: capturePath,
-  AFTERBURNER_TEST_WAIT_FOR_INTERRUPT: "1"
+  AFTERBURNER_TEST_WAIT_FOR_INTERRUPT: "1",
+  AFTERBURNER_TERMINAL_BROKER: "1"
 };
 delete environment.COPILOT_AGENT_SESSION_ID;
 delete environment.COPILOT_LOADER_PID;
@@ -43,11 +44,14 @@ let output = "";
 let interrupted = false;
 let finished = false;
 const cleanup = () => rmSync(root, { recursive: true, force: true });
+const terminateChild = () => {
+  try { process.kill(child.pid); } catch {}
+};
 const fail = message => {
   if (finished) return;
   finished = true;
   clearTimeout(timeout);
-  child.kill();
+  terminateChild();
   cleanup();
   process.stderr.write(`${message}\n${output}\n`);
   setTimeout(() => process.exit(1), 50);
@@ -62,6 +66,11 @@ child.onData(data => {
       fail("resume argument was not forwarded exactly");
       return;
     }
+    if (capture.env.AFTERBURNER_MODAL_PIPE || capture.env.AFTERBURNER_MODAL_SECRET || capture.env.AFTERBURNER_MODAL_OWNER_EXTENSION_ID ||
+        capture.env.AFTERBURNER_MODAL_CANVAS_ID || capture.env.AFTERBURNER_MODAL_SURFACE_ID) {
+      fail(`terminal broker leaked reusable modal transport, secret, or implicit identity\n${JSON.stringify(capture)}`);
+      return;
+    }
     child.write("\x03");
   }
 });
@@ -73,6 +82,11 @@ child.onExit(({ exitCode }) => {
   cleanup();
   if (!output.includes("fake-copilot-interrupted")) {
     process.stderr.write(`child did not receive forwarded interrupt (exit ${exitCode})\n${output}\n`);
+    setTimeout(() => process.exit(1), 50);
+    return;
+  }
+  if (exitCode !== 130) {
+    process.stderr.write(`forwarded interrupt produced exit ${exitCode}, want 130\n${output}\n`);
     setTimeout(() => process.exit(1), 50);
     return;
   }

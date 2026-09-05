@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "protocol": "afterburner.ui",
+  "revision": 1,
+  "bundleId": "bundle-opaque-1",
+  "metadataOnly": true,
+  "createdAt": "2026-09-04T20:21:10Z",
+  "artifacts": [
+    {
+      "id": "audit-summary",
+      "kind": "audit",
+      "sizeBytes": 0,
+      "redaction": "allowlist",
+      "allowedFields": ["type", "at", "decision"],
+      "excludedFields": ["payload", "prompt", "response", "token", "secret", "source"],
+      "metadataOnly": true
+    }
+  ],
+  "explanations": [
+    { "code": "audit-summary", "message": "Metadata-only audit summary; content payloads are excluded." }
+  ]
+}

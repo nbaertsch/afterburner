@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nbaertsch/afterburner/schemas/ui-event-v1.schema.json",
+  "title": "Afterburner UI event",
+  "type": "object",
+  "required": ["schemaVersion", "protocol", "revision", "id", "type", "surfaceId", "timestamp", "trusted"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "protocol": { "const": "afterburner.ui" },
+    "revision": { "const": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "type": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "surfaceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "componentId": { "type": "string", "maxLength": 128 },
+    "actionId": { "type": "string", "maxLength": 128 },
+    "phase": { "enum": ["capture", "target", "bubble"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "payload": true,
+    "trusted": { "type": "boolean" },
+    "preventDefault": { "type": "boolean" },
+    "stopPropagation": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

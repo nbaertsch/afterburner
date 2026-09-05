@@ -1,7 +1,12 @@
 package cli
 
 import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +20,7 @@ func TestClassify(t *testing.T) {
 		{"ordinary", []string{"--version"}, Route{Command: "run", Args: []string{"--version"}}},
 		{"unknown command", []string{"prompt", "hello"}, Route{Command: "run", Args: []string{"prompt", "hello"}}},
 		{"management", []string{"doctor", "--json"}, Route{Command: "doctor", Args: []string{"--json"}}},
+		{"ui", []string{"ui", "doctor"}, Route{Command: "ui", Args: []string{"doctor"}}},
 		{"explicit run", []string{"run", "install"}, Route{Command: "run", Args: []string{"install"}, ForcedPassthrough: true}},
 		{"terminator", []string{"--", "update", ""}, Route{Command: "run", Args: []string{"update", ""}, ForcedPassthrough: true}},
 	}
@@ -25,6 +31,37 @@ func TestClassify(t *testing.T) {
 				t.Fatalf("Classify(%q) = %#v, want %#v", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestUIValidateManifestCommand(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "extension.mjs"), []byte("export {};"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "afterburner.json")
+	manifest := `{"schemaVersion":1,"id":"sample-ui","displayName":"Sample UI","visibility":"private","requires":{"afterburner":"1"},"runtime":{"execution":"in-process","entrypoint":"extension.mjs"},"ui":{"protocol":"afterburner.ui","revision":1,"surfaces":[{"id":"panel","kind":"panel"}]}}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	code, err := Run(context.Background(), []string{"ui", "validate-manifest", manifestPath}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("Run returned code=%d err=%v output=%s", code, err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "OK") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestUIRenderFixtureCommand(t *testing.T) {
+	var stdout bytes.Buffer
+	code, err := Run(context.Background(), []string{"ui", "render-fixture", "black-box-certification"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("Run returned code=%d err=%v output=%s", code, err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Metadata-only Observability") {
+		t.Fatalf("unexpected fixture output: %q", stdout.String())
 	}
 }
 

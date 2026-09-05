@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "protocol": "afterburner.ui",
+  "revision": 1,
+  "id": "evt-001",
+  "type": "action.invoke",
+  "surfaceId": "surface-terminal-main",
+  "componentId": "terminal-main",
+  "actionId": "terminal.submit",
+  "phase": "target",
+  "timestamp": "2026-09-04T20:21:10Z",
+  "payload": {
+    "text": "/help"
+  },
+  "trusted": true
+}

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nbaertsch/afterburner/schemas/ui-component-v1.schema.json",
+  "title": "Afterburner UI component tree",
+  "type": "object",
+  "required": ["root", "revision", "surfaceId"],
+  "properties": {
+    "root": { "$ref": "#/$defs/node" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "surfaceId": { "type": "string", "minLength": 1 },
+    "themeId": { "type": "string" },
+    "locale": { "type": "string" },
+    "capabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "kind": { "$ref": "#/$defs/kind" },
+        "key": { "type": "string" },
+        "version": { "type": "integer", "minimum": 0 },
+        "props": { "type": "object", "additionalProperties": true },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+        "style": { "type": "object", "additionalProperties": true },
+        "accessibility": { "type": "object", "additionalProperties": true },
+        "localization": { "type": "object", "additionalProperties": true },
+        "dataBindings": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "actionBindings": { "type": "object", "additionalProperties": { "type": "string" } },
+        "extensionSlots": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "compatibility": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "kind": {
+      "enum": ["application", "window", "surface", "viewport", "stack", "row", "grid", "panel", "card", "separator", "spacer", "text", "markdown", "code", "icon", "badge", "button", "link", "textInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "progress", "spinner", "list", "table", "tree", "form", "toolbar", "tabs", "breadcrumb", "dialog", "toast", "terminal", "canvas", "image", "video", "chart", "commandPalette", "keybindingHint", "extensionOutlet"]
+    }
+  }
+}

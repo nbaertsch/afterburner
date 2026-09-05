@@ -16,6 +16,57 @@ import (
 	"github.com/nbaertsch/afterburner/internal/runtimepkg"
 )
 
+func TestValidateSelfTestOutputDistinguishesFallbackFromBrokerTransport(t *testing.T) {
+	output := []byte(`noise
+	{
+	  "projection": {"hasReasoningColumn": true, "hasContextColumn": true},
+	  "runtimeObservers": {"diagnostics": {}},
+	  "modal": {
+	    "fallbackAPIOK": true,
+	    "brokerExpected": false,
+	    "brokerTransportOK": false,
+	    "updateBeforeOpenRejected": true,
+	    "actionOK": true,
+	    "diagnostics": {"registered": 1, "closed": 1}
+	  }
+	}`)
+	if err := validateSelfTestOutput(output, false); err != nil {
+		t.Fatalf("fallback-only self-test should pass without broker expectation: %v", err)
+	}
+	if err := validateSelfTestOutput(output, true); err == nil {
+		t.Fatal("expected missing broker transport to fail when broker env is present")
+	}
+}
+
+func TestValidateSelfTestOutputRequiresFallbackAPIHealth(t *testing.T) {
+	output := []byte(`{
+	  "projection": {"hasReasoningColumn": true, "hasContextColumn": true},
+	  "runtimeObservers": {},
+	  "modal": {
+	    "fallbackAPIOK": false,
+	    "brokerTransportOK": true,
+	    "updateBeforeOpenRejected": true,
+	    "actionOK": true,
+	    "diagnostics": {"registered": 1, "closed": 1}
+	  }
+	}`)
+	if err := validateSelfTestOutput(output, true); err == nil {
+		t.Fatal("expected unhealthy fallback API to fail self-test")
+	}
+}
+
+func TestModalBrokerConfiguredRequiresBootstrapWithoutGlobalPipe(t *testing.T) {
+	if modalBrokerConfigured([]string{"AFTERBURNER_MODAL_PIPE=p"}) {
+		t.Fatal("pipe without bootstrap must not count as broker transport")
+	}
+	if modalBrokerConfigured([]string{"AFTERBURNER_MODAL_PIPE=p", "AFTERBURNER_MODAL_SECRET=s"}) {
+		t.Fatal("process-wide secret must not count as broker transport")
+	}
+	if !modalBrokerConfigured([]string{"AFTERBURNER_MODAL_BOOTSTRAP=b"}) {
+		t.Fatal("scoped bootstrap should enable broker transport expectation")
+	}
+}
+
 func TestFailedPreflightUsesValidLastKnownGood(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows executable fixture")

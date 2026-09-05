@@ -45,7 +45,12 @@ jobs:
 
       - run: go generate ./internal/assets
       - run: go test ./...
-      - run: go vet ./...
+      # -unsafeptr=false: internal/terminal/conpty_windows.go passes the HPCON
+      # handle by value to UpdateProcThreadAttribute per Microsoft's documented
+      # PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE contract; go vet's generic
+      # unsafe.Pointer(uintptr) heuristic flags this known-safe pattern with
+      # no per-line suppression available (golang/go#50134).
+      - run: go vet -unsafeptr=false ./...
 
       - name: Build unsigned release assets
         shell: pwsh

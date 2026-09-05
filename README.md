@@ -70,6 +70,11 @@ Afterburner preserves argument boundaries, empty arguments, repeated flags, Unic
 interactive terminal behavior, Ctrl+C, and child exit codes. It injects only the prepared runtime
 version required by Copilot's loader. Normal `copilot` remains untouched.
 
+An experimental production terminal broker foundation can be enabled for local interactive Windows
+launches with `AFTERBURNER_TERMINAL_BROKER=1`. The broker uses Windows ConPTY to forward Copilot
+input/output and hosts authenticated extension modal canvases. It is only used when both stdin and
+stdout are terminals; redirected and non-interactive launches keep the default direct process path.
+
 Recovery launch options:
 
 ```powershell
@@ -126,6 +131,22 @@ for `256K`, `512K`, `768K`, and `1.05M` where supported. See
 Black Box records bounded, metadata-only runtime diagnostics under
 `~\.afterburner\extension-data\black-box`. It does not copy prompts, responses, source, tool
 arguments/results, or summaries. See [`extensions/BlackBox/README.md`](extensions/BlackBox/README.md).
+
+## Enterprise UI architecture contract
+
+The supported UI foundation is the versioned `afterburner.ui` contract under `internal\ui` with
+JSON schemas in `schemas\ui-*-v1.schema.json`. These files define protocol revision constants,
+component/catalog types, semantic style tokens, accessibility/localization metadata,
+surface/action/data/stream lifecycles, capability and quota descriptors, error codes, SLO and
+compatibility identifiers, and implementation interfaces for renderers, terminal surfaces,
+reconcilers, policy/audit, SDK bridges, schema registries, and event sinks. Black Box is an optional
+`afterburner.ui` observability event sink extension; hosts and renderers must function when it is
+not installed or enabled.
+
+Enterprise UI tooling is available under `afterburn ui ...` for manifest validation, fixture
+rendering, surface simulation, metadata-only trace inspection, runtime grants, policy installation,
+and certification reports. See [`docs\extension-ui-authoring.md`](docs/extension-ui-authoring.md)
+and [`docs\enterprise-ui-admin.md`](docs/enterprise-ui-admin.md).
 
 ## Compatibility and recovery
 
@@ -188,9 +209,9 @@ Afterburner never registers its extensions in normal Copilot configuration.
 ```powershell
 go generate ./internal/assets
 go test ./...
-go vet ./...
+go vet -unsafeptr=false ./...
 npm test
 ```
 
-Windows CI also builds amd64/arm64 binaries and validates exact resume forwarding plus Ctrl+C under
-a real ConPTY. The interactive picker harness is `tests\native-conpty.mjs`.
+Windows CI also builds amd64/arm64 binaries and validates exact resume forwarding, Ctrl+C, and
+the modal broker under a real ConPTY. The interactive picker harness is `tests\native-conpty.mjs`.

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "protocol": "afterburner.ui",
+  "revision": 1,
+  "extensionId": "black-box",
+  "denyByDefault": true,
+  "grants": [
+    {
+      "id": "metadata-observation",
+      "effect": "allow",
+      "capabilities": ["ui.observability.black-box.sink"],
+      "resources": ["afterburner.ui/envelopes/metadata"]
+    }
+  ],
+  "audit": [
+    {
+      "id": "ui-observation-audit",
+      "events": ["afterburner.ui.observation"],
+      "sinkIds": ["black-box.ui.events"],
+      "redaction": "metadata-only"
+    }
+  ],
+  "quotas": [
+    {
+      "id": "observation-rate",
+      "quotaId": "ui.observation.events-per-minute",
+      "hardFail": false,
+      "auditEvent": "quota.soft-limit"
+    }
+  ]
+}

@@ -24,6 +24,7 @@ import (
 )
 
 var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+var validCapability = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 type Manager struct {
 	Layout home.Layout
@@ -39,20 +40,17 @@ type Manager struct {
 
 // BuiltinFetcher resolves a built-in extension ID to an extracted, verified
 // source directory. Implementations are responsible for any network fetch
-// and signature verification; InstallBuiltins itself does not perform any
-// trust decisions on the returned directory beyond the standard manifest
-// ID/visibility check it already applies to every source. FetchBuiltin
+// and signature verification; a successful result is treated as a signed
+// release built-in and bound to its source and package hashes. FetchBuiltin
 // should return an error for any ID it cannot resolve so InstallBuiltins can
 // fall back to the embedded release asset.
 type BuiltinFetcher interface {
 	FetchBuiltin(id string) (path string, cleanup func(), err error)
 }
 
-// builtinSourceOverrides parses AFTERBURNER_BUILTIN_SOURCE_OVERRIDE, a development-only escape
-// hatch that lets 'afterburn install <id>' materialize a built-in from a local source directory
-// instead of the embedded release asset. It is never consulted for signature or trust decisions;
-// it only changes which directory is hashed and copied into the managed extension package root.
-// Format: "id=path[,id2=path2,...]".
+// builtinSourceOverrides parses AFTERBURNER_BUILTIN_SOURCE_OVERRIDE. Local overrides are
+// intentionally not trusted as signed built-ins; syncBuiltins will reject them before
+// persisting a built-in identity. Format: "id=path[,id2=path2,...]".
 func builtinSourceOverrides() map[string]string {
 	raw := strings.TrimSpace(os.Getenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE"))
 	if raw == "" {
@@ -110,6 +108,7 @@ func (m Manager) syncBuiltins(ids []string, requireFetcher bool) error {
 				return fmt.Errorf("unknown built-in extension %q; available: %s", id, strings.Join(sortedKeys(catalog), ", "))
 			}
 			var source string
+			var sourceMetadata registry.Source
 			var cleanup func()
 			if hasOverride {
 				resolved, err := filepath.Abs(overridePath)
@@ -120,7 +119,7 @@ func (m Manager) syncBuiltins(ids []string, requireFetcher bool) error {
 				if err != nil || manifest.ID != id || manifest.Visibility != "builtin" {
 					return fmt.Errorf("built-in source override for %q at %s has an invalid or mismatched manifest", id, resolved)
 				}
-				source, cleanup = resolved, func() {}
+				source, sourceMetadata, cleanup = resolved, registry.Source{Type: "path", Value: resolved}, func() {}
 				fmt.Fprintf(m.Stdout, "Using development source override for built-in extension %q at %s.\n", id, resolved)
 			} else if m.BuiltinFetcher != nil {
 				fetched, fetchCleanup, err := m.BuiltinFetcher.FetchBuiltin(id)
@@ -134,14 +133,14 @@ func (m Manager) syncBuiltins(ids []string, requireFetcher bool) error {
 					if err != nil {
 						return err
 					}
-					source, cleanup = extracted, extractCleanup
+					source, sourceMetadata, cleanup = extracted, registry.Source{Type: "embedded", Value: id}, extractCleanup
 				} else {
 					manifest, err := readManifest(fetched)
 					if err != nil || manifest.ID != id || manifest.Visibility != "builtin" {
 						fetchCleanup()
 						return fmt.Errorf("fetched built-in extension %q has an invalid or mismatched manifest", id)
 					}
-					source, cleanup = fetched, fetchCleanup
+					source, sourceMetadata, cleanup = fetched, registry.Source{Type: "signed-release", Value: id}, fetchCleanup
 				}
 			} else {
 				if requireFetcher {
@@ -152,10 +151,11 @@ func (m Manager) syncBuiltins(ids []string, requireFetcher bool) error {
 				if err != nil {
 					return err
 				}
-				source, cleanup = extracted, extractCleanup
+				source, sourceMetadata, cleanup = extracted, registry.Source{Type: "embedded", Value: id}, extractCleanup
 			}
 			previous := value.Extensions[id]
-			entry, err := m.materialize(source, registry.Source{Type: "builtin", Value: id}, previous, true)
+			trustedBuiltin := !hasOverride
+			entry, err := m.materialize(source, sourceMetadata, previous, true, trustedBuiltin)
 			if err != nil {
 				cleanup()
 				return err
@@ -193,6 +193,13 @@ func (m Manager) SetBuiltinsEnabled(ids []string, enabled bool) error {
 				return fmt.Errorf("built-in extension %q is not installed; run 'afterburn install %s'", id, id)
 			}
 			entry.Enabled = enabled
+			if !entry.Identity.IsZero() {
+				sealed, err := registry.SealEntry(m.Layout.Root, entry)
+				if err != nil {
+					return err
+				}
+				entry = sealed
+			}
 			value.Extensions[id] = entry
 			fmt.Fprintf(m.Stdout, "%s built-in extension %q.\n", map[bool]string{true: "Enabled", false: "Disabled"}[enabled], id)
 		}
@@ -242,7 +249,7 @@ func (m Manager) Install(source string) error {
 	}
 	defer cleanup()
 	return m.withRegistry(func(value *registry.Registry) error {
-		entry, err := m.materialize(resolvedPath, sourceMetadata, registry.Entry{}, false)
+		entry, err := m.materialize(resolvedPath, sourceMetadata, registry.Entry{}, false, false)
 		if err != nil {
 			return err
 		}
@@ -260,6 +267,13 @@ func (m Manager) SetEnabled(id string, enabled bool) error {
 			return fmt.Errorf("unknown Afterburner extension %q", id)
 		}
 		entry.Enabled = enabled
+		if !entry.Identity.IsZero() {
+			sealed, err := registry.SealEntry(m.Layout.Root, entry)
+			if err != nil {
+				return err
+			}
+			entry = sealed
+		}
 		value.Extensions[id] = entry
 		fmt.Fprintf(m.Stdout, "%s %q.\n", map[bool]string{true: "Enabled", false: "Disabled"}[enabled], id)
 		return nil
@@ -281,7 +295,7 @@ func (m Manager) Update(id string) error {
 			return err
 		}
 		defer cleanup()
-		entry, err := m.materialize(resolvedPath, sourceMetadata, current, current.Enabled)
+		entry, err := m.materialize(resolvedPath, sourceMetadata, current, current.Enabled, false)
 		if err != nil {
 			return err
 		}
@@ -310,7 +324,7 @@ func (m Manager) UpdateAll() error {
 			if err := m.Update(id); err != nil {
 				return err
 			}
-		case "builtin":
+		case "embedded", "signed-release":
 			builtins = append(builtins, id)
 		}
 	}
@@ -345,11 +359,27 @@ func (m Manager) Rollback(id string) error {
 		if manifest.ID != id {
 			return fmt.Errorf("rollback package identity mismatch for %q", id)
 		}
+		manifestHash, err := registry.HashFile(filepath.Join(previous, "afterburner.json"))
+		if err != nil {
+			return fmt.Errorf("hash rollback manifest for %q: %w", id, err)
+		}
+		treeHash, err := registry.HashTree(previous)
+		if err != nil {
+			return fmt.Errorf("hash rollback package for %q: %w", id, err)
+		}
 		current := entry.ActivePath
 		entry.ActivePath = previous
 		entry.PreviousActivePath = &current
 		entry.Manifest = manifest
+		entry.Source.Version = filepath.Base(previous)
 		entry.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		trustedBuiltin := manifest.Visibility == "builtin" && registry.IsTrustedBuiltinSourceType(entry.Source.Type) && entry.Source.Value == manifest.ID && entry.Identity.BuiltinSigned
+		entry.Identity = identityBinding(manifest, entry.Source, manifestHash, treeHash, entry.Identity.GrantEpoch, entry.UpdatedAt, trustedBuiltin)
+		sealed, err := registry.SealEntry(m.Layout.Root, entry)
+		if err != nil {
+			return err
+		}
+		entry = sealed
 		value.Extensions[id] = entry
 		fmt.Fprintf(m.Stdout, "Rolled back %q to %s.\n", id, filepath.Base(previous))
 		return nil
@@ -402,13 +432,17 @@ func (m Manager) withRegistry(update func(*registry.Registry) error) error {
 	if err := update(&value); err != nil {
 		return err
 	}
+	if value.Epoch == 0 {
+		value.Epoch = 1
+	}
+	value.Epoch++
 	if err := registry.Save(m.Layout.Root, value); err != nil {
 		return err
 	}
 	return sessions.Reconcile(m.Layout, value)
 }
 
-func (m Manager) materialize(source string, sourceMetadata registry.Source, previous registry.Entry, enabled bool) (registry.Entry, error) {
+func (m Manager) materialize(source string, sourceMetadata registry.Source, previous registry.Entry, enabled bool, trustedBuiltin bool) (registry.Entry, error) {
 	source, err := filepath.Abs(source)
 	if err != nil {
 		return registry.Entry{}, err
@@ -417,11 +451,25 @@ func (m Manager) materialize(source string, sourceMetadata registry.Source, prev
 	if err != nil {
 		return registry.Entry{}, err
 	}
-	version, err := hashTree(source)
+	if registry.IsReservedBuiltinID(manifest.ID) && !trustedBuiltin {
+		return registry.Entry{}, fmt.Errorf("extension %q uses a reserved built-in ID and must come from a verified built-in source", manifest.ID)
+	}
+	if manifest.Visibility == "builtin" {
+		if !trustedBuiltin || !registry.IsTrustedBuiltinSourceType(sourceMetadata.Type) || sourceMetadata.Value != manifest.ID {
+			return registry.Entry{}, fmt.Errorf("extension %q declares built-in visibility but its source is not a verified built-in", manifest.ID)
+		}
+	} else if trustedBuiltin || registry.IsTrustedBuiltinSourceType(sourceMetadata.Type) {
+		return registry.Entry{}, fmt.Errorf("verified built-in source %q must declare built-in visibility", manifest.ID)
+	}
+	treeHash, err := registry.HashTree(source)
 	if err != nil {
 		return registry.Entry{}, err
 	}
-	version = "local-" + version[:16]
+	manifestHash, err := registry.HashFile(filepath.Join(source, "afterburner.json"))
+	if err != nil {
+		return registry.Entry{}, err
+	}
+	version := "local-" + treeHash[:16]
 	target := filepath.Join(m.Layout.Extensions, manifest.ID, version)
 	if !registry.Within(target, m.Layout.Extensions) {
 		return registry.Entry{}, fmt.Errorf("extension target escapes managed root")
@@ -456,14 +504,18 @@ func (m Manager) materialize(source string, sourceMetadata registry.Source, prev
 		previousPath = previous.PreviousActivePath
 	}
 	sourceMetadata.Version = version
-	return registry.Entry{
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	identity := identityBinding(manifest, sourceMetadata, manifestHash, treeHash, previous.Identity.GrantEpoch, now, trustedBuiltin)
+	entry := registry.Entry{
 		Enabled:            enabled,
 		ActivePath:         target,
 		PreviousActivePath: previousPath,
 		Manifest:           manifest,
 		Source:             sourceMetadata,
-		UpdatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
-	}, nil
+		Identity:           identity,
+		UpdatedAt:          now,
+	}
+	return registry.SealEntry(m.Layout.Root, entry)
 }
 
 func (m Manager) resolveSource(spec string) (string, registry.Source, func(), error) {
@@ -560,9 +612,21 @@ func readManifest(source string) (registry.Manifest, error) {
 		return registry.Manifest{}, fmt.Errorf("parse extension manifest: %w", err)
 	}
 	manifest.ID = canonicalID(manifest.ID)
-	if manifest.SchemaVersion != 1 || !validID.MatchString(manifest.ID) ||
+	registry.NormalizeManifest(&manifest)
+	if manifest.SchemaVersion != 1 || !validID.MatchString(manifest.ID) || manifest.DisplayName == "" ||
+		!registry.ValidVisibility(manifest.Visibility) || manifest.Requires.Afterburner == "" ||
 		manifest.Runtime.Execution != "in-process" || manifest.Runtime.Entrypoint == "" {
 		return registry.Manifest{}, fmt.Errorf("invalid afterburner.json manifest")
+	}
+	seenCapabilities := map[string]struct{}{}
+	for _, capability := range manifest.Capabilities {
+		if !validCapability.MatchString(capability) {
+			return registry.Manifest{}, fmt.Errorf("invalid afterburner.json capability %q", capability)
+		}
+		if _, ok := seenCapabilities[capability]; ok {
+			return registry.Manifest{}, fmt.Errorf("duplicate afterburner.json capability %q", capability)
+		}
+		seenCapabilities[capability] = struct{}{}
 	}
 	if manifest.SessionExtension != nil {
 		if err := validateEntrypoint(source, manifest.SessionExtension.Entrypoint); err != nil {
@@ -663,6 +727,46 @@ func (m Manager) extractBuiltin(id string, archive []byte) (string, func(), erro
 	return target, cleanup, nil
 }
 
+func hashFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func identityBinding(manifest registry.Manifest, source registry.Source, manifestHash, treeHash string, grantEpoch uint64, boundAt string, trustedBuiltin bool) registry.IdentityBinding {
+	if grantEpoch == 0 {
+		grantEpoch = 1
+	}
+	builtinSigned := trustedBuiltin && manifest.Visibility == "builtin" && registry.IsTrustedBuiltinSourceType(source.Type) && source.Value == manifest.ID
+	binding := registry.IdentityBinding{
+		ExtensionID:   manifest.ID,
+		ManifestHash:  "sha256:" + manifestHash,
+		TreeHash:      "sha256:" + treeHash,
+		SourceType:    source.Type,
+		SourceValue:   source.Value,
+		SourceVersion: source.Version,
+		SourceCommit:  source.Commit,
+		RegistryEpoch: uint64(time.Now().UTC().UnixNano()),
+		GrantEpoch:    grantEpoch,
+		BoundAt:       boundAt,
+		BuiltinSigned: builtinSigned,
+	}
+	if binding.BuiltinSigned {
+		binding.SignerID = "afterburner-core"
+		binding.SignerFingerprint = "builtin:" + manifest.ID
+	} else if source.Commit != "" {
+		binding.SignerID = "git"
+		binding.SignerFingerprint = source.Commit
+	} else {
+		binding.SignerID = "local"
+		binding.SignerFingerprint = binding.TreeHash
+	}
+	return binding
+}
+
 func hashTree(root string) (string, error) {
 	hash := sha256.New()
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
@@ -686,11 +790,13 @@ func hashTree(root string) (string, error) {
 			return nil
 		}
 		hash.Write([]byte(filepath.ToSlash(relative)))
+		hash.Write([]byte{0})
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
 		hash.Write(data)
+		hash.Write([]byte{0})
 		return nil
 	})
 	return hex.EncodeToString(hash.Sum(nil)), err

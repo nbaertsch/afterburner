@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "protocol": "afterburner.ui",
+  "compatibility": ["afterburner.ui.r1"],
+  "minimumRevision": 1,
+  "preferredRevision": 1,
+  "supportedRevisions": [1],
+  "sessionId": "session-001",
+  "extensionId": "black-box",
+  "epoch": 1,
+  "generation": 3,
+  "maxFrameBytes": 1048576,
+  "maxJsonDepth": 64,
+  "endpoint": {
+    "name": "afterburner-host",
+    "version": "1.0.83-3",
+    "locale": "en-US",
+    "theme": "dark",
+    "capabilities": [
+      { "id": "ui.render.components", "version": "1" },
+      { "id": "ui.stream.write", "version": "1" }
+    ],
+    "quotas": [
+      { "id": "ui.transport.frameBytes", "limit": 1048576, "unit": "bytes" }
+    ],
+    "metadata": {
+      "contract": "afterburner.ui.r1"
+    }
+  },
+  "sentAt": "2026-09-04T20:21:10Z"
+}

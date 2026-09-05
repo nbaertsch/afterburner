@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "protocol": "afterburner.ui",
+  "revision": 1,
+  "sessionId": "session-001",
+  "extensionId": "fixture-extension",
+  "messageId": "env-event-001",
+  "id": "env-event-001",
+  "epoch": 1,
+  "generation": 1,
+  "sequence": 3,
+  "timestamp": "2026-09-04T20:21:10.000Z",
+  "kind": "ui.event",
+  "source": {
+    "kind": "sdk",
+    "id": "fixture-extension"
+  },
+  "target": {
+    "kind": "renderer",
+    "id": "fixture-renderer"
+  },
+  "compatibility": [
+    "afterburner.ui.r1"
+  ],
+  "contentType": "application/json",
+  "payload": {
+    "schemaVersion": 1,
+    "protocol": "afterburner.ui",
+    "revision": 1,
+    "id": "evt-001",
+    "type": "action.invoke",
+    "surfaceId": "surface-main",
+    "componentId": "status-text",
+    "actionId": "refresh",
+    "phase": "target",
+    "timestamp": "2026-09-04T20:21:10.000Z",
+    "payload": {
+      "requested": true
+    },
+    "trusted": true
+  }
+}

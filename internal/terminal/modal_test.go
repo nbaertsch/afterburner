@@ -1,0 +1,642 @@
+package terminal
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+	"unicode/utf8"
+)
+
+type testModalRenderer struct {
+	shown  []ModalFrame
+	hidden int
+}
+
+func (r *testModalRenderer) ShowModal(frame ModalFrame) { r.shown = append(r.shown, frame) }
+func (r *testModalRenderer) HideModal()                 { r.hidden++ }
+
+func registerLegacyModalForTest(t *testing.T, server *ModalServer) ModalCapability {
+	t.Helper()
+	capability, err := server.RegisterModalCanvas(ModalRegistration{OwnerExtensionID: ModalLegacyOwnerExtensionID, CanvasID: ModalLegacyCanvasID, SurfaceID: ModalLegacySurfaceID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return capability
+}
+
+func TestModalServerAuthenticatesAndDrivesBrokerOwnership(t *testing.T) {
+	process := &fakeProcess{}
+	backend := &fakeBackend{process: process}
+	broker := NewBroker(backend, BrokerOptions{})
+	if err := broker.Start(t.Context(), Command{Path: "copilot"}); err != nil {
+		t.Fatal(err)
+	}
+	renderer := &testModalRenderer{}
+	server, err := NewModalServer(broker, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+
+	server.RequireAuthenticatedClients()
+	unauthorized := callModalServerAuthenticated(t, server, map[string]any{"operation": "open", "id": "black-box"}, 0)
+	if unauthorized.OK || unauthorized.Error != "modal-unauthorized" {
+		t.Fatalf("unauthorized response = %#v", unauthorized)
+	}
+	server.AuthorizeClientProcess(42)
+	missingIdentity := callModalServerRawAuthenticated(t, server, `{"operation":"open","id":"black-box","generation":1}`+"\n", 42)
+	if missingIdentity.OK || missingIdentity.Error != "modal-invalid-identity" {
+		t.Fatalf("missing identity response = %#v", missingIdentity)
+	}
+	response := callModalServer(t, server, map[string]any{
+		"operation": "open", "id": "black-box", "title": "Black Box", "body": "first",
+		"actions": []map[string]any{{"name": "submit", "label": "Submit", "key": "enter"}},
+	})
+	if !response.OK || broker.Owner() != OwnerModal || server.ActiveCount() != 1 {
+		t.Fatalf("open response=%#v owner=%s active=%d", response, broker.Owner(), server.ActiveCount())
+	}
+	if len(renderer.shown) != 1 || renderer.shown[0].Actions[0].Key != "enter" {
+		t.Fatalf("renderer frames = %#v", renderer.shown)
+	}
+	if _, err := server.HandleInput([]byte("q")); err != nil {
+		t.Fatal(err)
+	}
+	if broker.Owner() != OwnerCopilot || server.ActiveCount() != 0 || renderer.hidden != 1 {
+		t.Fatalf("fallback q close owner=%s active=%d hidden=%d", broker.Owner(), server.ActiveCount(), renderer.hidden)
+	}
+}
+
+func TestModalServerBlackBoxLiveIDIsRegistered(t *testing.T) {
+	server, err := NewModalServer(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err := server.RegisterModalCanvas(ModalRegistration{
+		OwnerExtensionID: ModalBlackBoxOwnerExtensionID,
+		CanvasID:         ModalBlackBoxCanvasID,
+		SurfaceID:        ModalBlackBoxSurfaceID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := callModalServer(t, server, modalRequestMap(capability, "open", int64(1)))
+	if !response.OK || server.ActiveCount() != 1 {
+		t.Fatalf("Black Box live open response=%#v active=%d", response, server.ActiveCount())
+	}
+}
+
+func TestModalServerScopedCapabilityRejectsImpersonation(t *testing.T) {
+	renderer := &testModalRenderer{}
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerACap, err := server.RegisterModalCanvas(ModalRegistration{OwnerExtensionID: "owner.alpha", CanvasID: "shared", SurfaceID: "alpha-modal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerBCap, err := server.RegisterModalCanvas(ModalRegistration{OwnerExtensionID: "owner.beta", CanvasID: "shared", SurfaceID: "beta-modal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	impersonation := callModalServer(t, server, map[string]any{
+		"operation":        "register",
+		"id":               ModalBlackBoxSurfaceID,
+		"ownerExtensionId": "attacker",
+		"canvasId":         ModalBlackBoxCanvasID,
+		"surfaceId":        ModalBlackBoxSurfaceID,
+	})
+	if impersonation.OK || impersonation.Error != "modal-registration-disabled" {
+		t.Fatalf("Black Box registration response = %#v", impersonation)
+	}
+	withOldRegistrationToken := callModalServerRaw(t, server, fmt.Sprintf(`{"operation":"register","id":"%s","ownerExtensionId":"attacker","canvasId":"%s","surfaceId":"%s","registrationToken":"old"}`+"\n", ModalBlackBoxSurfaceID, ModalBlackBoxCanvasID, ModalBlackBoxSurfaceID))
+	if withOldRegistrationToken.OK || withOldRegistrationToken.Error != "modal-invalid-request" {
+		t.Fatalf("legacy registration token response = %#v", withOldRegistrationToken)
+	}
+
+	server.RequireAuthenticatedClients()
+	wireImpersonation := callModalServerAuthenticated(t, server, modalRequestMap(ownerBCap, "open", int64(1)), 0)
+	if wireImpersonation.OK || wireImpersonation.Error != "modal-unauthorized" {
+		t.Fatalf("unauthenticated wire impersonation response = %#v", wireImpersonation)
+	}
+	unknown := callModalServer(t, server, map[string]any{
+		"type":             "open",
+		"id":               "missing-modal",
+		"ownerExtensionId": "owner.alpha",
+		"canvasId":         "missing",
+		"surfaceId":        "missing-modal",
+	})
+	if unknown.OK || unknown.Error != "modal-unknown-canvas" {
+		t.Fatalf("unknown canvas response = %#v", unknown)
+	}
+	collision := callModalServer(t, server, map[string]any{
+		"type":             "open",
+		"id":               "alpha-modal",
+		"ownerExtensionId": ownerBCap.OwnerExtensionID,
+		"canvasId":         ownerBCap.CanvasID,
+		"surfaceId":        "alpha-modal",
+	})
+	if collision.OK || collision.Error != "modal-unknown-canvas" {
+		t.Fatalf("canvas collision response = %#v", collision)
+	}
+	identityMismatch := callModalServer(t, server, map[string]any{
+		"type":             "open",
+		"id":               ownerACap.SurfaceID,
+		"ownerExtensionId": ownerACap.OwnerExtensionID,
+		"canvasId":         ownerACap.CanvasID,
+		"surfaceId":        ownerBCap.SurfaceID,
+	})
+	if identityMismatch.OK || identityMismatch.Error != "modal-identity-mismatch" {
+		t.Fatalf("identity mismatch response = %#v", identityMismatch)
+	}
+	open := callModalServer(t, server, modalRequestMap(ownerACap, "open", int64(1)))
+	if !open.OK || server.ActiveCount() != 1 {
+		t.Fatalf("scoped open response = %#v active=%d", open, server.ActiveCount())
+	}
+}
+
+func TestModalServerRejectsStaleReopenGeneration(t *testing.T) {
+	server, err := NewModalServer(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err := server.RegisterModalCanvas(ModalRegistration{OwnerExtensionID: "owner.alpha", CanvasID: "panel", SurfaceID: "alpha-panel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := callModalServer(t, server, modalRequestMap(capability, "open", int64(3)))
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	response = callModalServer(t, server, modalRequestMap(capability, "close", int64(3)))
+	if !response.OK {
+		t.Fatalf("close response = %#v", response)
+	}
+	response = callModalServer(t, server, modalRequestMap(capability, "open", int64(2)))
+	if response.OK || response.Error != "modal-stale-generation" {
+		t.Fatalf("stale reopen response = %#v", response)
+	}
+	response = callModalServer(t, server, modalRequestMap(capability, "open", int64(4)))
+	if !response.OK {
+		t.Fatalf("fresh reopen response = %#v", response)
+	}
+	response = callModalServer(t, server, modalRequestMap(capability, "poll", int64(3)))
+	if response.OK || response.Error != "modal-stale-generation" {
+		t.Fatalf("stale queued poll response = %#v", response)
+	}
+}
+
+func TestTerminalModalRendererRestoresCurrentScreenWithoutRawReplay(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 20, Rows: 4})
+	renderer.WriteCopilotOutput([]byte("before"))
+	renderer.ShowModal(ModalFrame{Title: "Modal", Body: "body"})
+	renderer.WriteCopilotOutput([]byte("\rraw-only\r\x1b[Kcurrent"))
+	renderer.HideModal()
+	text := output.String()
+	for _, want := range []string{"before", "Modal", "body", "current"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("output missing %q: %q", want, text)
+		}
+	}
+	if strings.Contains(text, "raw-only") {
+		t.Fatalf("modal close replayed raw overwritten output: %q", text)
+	}
+	if strings.Contains(text, "\x1b[?1049h") || strings.Contains(text, "\x1b[?1049l") {
+		t.Fatalf("renderer should not depend on alternate-screen replay: %q", text)
+	}
+}
+
+func TestTerminalModalRendererSanitizesExtensionANSI(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 20, Rows: 4})
+	renderer.ShowModal(ModalFrame{Title: "Title\x1b[31m", Body: "Body\x1b[32m"})
+	text := output.String()
+	if strings.Contains(text, "Title\x1b[31m") || strings.Contains(text, "Body\x1b[32m") {
+		t.Fatalf("extension ANSI was rendered verbatim: %q", text)
+	}
+}
+
+func TestTerminalModalRendererForwardsQueriesDuringModal(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 20, Rows: 4})
+	renderer.ShowModal(ModalFrame{Title: "Modal", Body: "body"})
+	renderer.WriteCopilotOutput([]byte("ordinary\x1b[31mred\x1b[6n\x1b[c\x1b[?25$p\x1b]10;?\x1b\\\x1bP$q q\x1b\\hidden"))
+	text := output.String()
+	for _, want := range []string{"\x1b[6n", "\x1b[c", "\x1b[?25$p", "\x1b]10;?\x1b\\", "\x1bP$q q\x1b\\"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("modal output did not forward terminal query %q: %q", want, text)
+		}
+	}
+	for _, blocked := range []string{"ordinary", "red", "hidden", "\x1b[31m"} {
+		if strings.Contains(text, blocked) {
+			t.Fatalf("modal output leaked suppressed Copilot rendering %q: %q", blocked, text)
+		}
+	}
+}
+
+func TestTerminalModalRendererForwardsSplitQueriesDuringModal(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 20, Rows: 4})
+	renderer.ShowModal(ModalFrame{Title: "Modal", Body: "body"})
+	output.Reset()
+
+	renderer.WriteCopilotOutput([]byte("ordinary\x1b["))
+	renderer.WriteCopilotOutput([]byte("6"))
+	renderer.WriteCopilotOutput([]byte("n\x1b]10"))
+	renderer.WriteCopilotOutput([]byte(";?\x1b\\\x1bP$q q"))
+	renderer.WriteCopilotOutput([]byte("\x1b\\hidden\x1b[31"))
+	renderer.WriteCopilotOutput([]byte("m"))
+	text := output.String()
+	for _, want := range []string{"\x1b[6n", "\x1b]10;?\x1b\\", "\x1bP$q q\x1b\\"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("modal output did not forward split terminal query %q: %q", want, text)
+		}
+	}
+	for _, blocked := range []string{"ordinary", "hidden", "\x1b[31m"} {
+		if strings.Contains(text, blocked) {
+			t.Fatalf("split modal output leaked suppressed Copilot rendering %q: %q", blocked, text)
+		}
+	}
+}
+
+func TestTerminalModalRendererResizeRepaintsActiveModal(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 20, Rows: 4})
+	renderer.ShowModal(ModalFrame{Title: "Modal", Body: "body"})
+	renderer.Resize(Size{Cols: 10, Rows: 2})
+	if count := strings.Count(output.String(), "Modal"); count != 2 {
+		t.Fatalf("active modal was not repainted on resize, title count=%d output=%q", count, output.String())
+	}
+	renderer.WriteCopilotOutput([]byte("1234567890"))
+	renderer.Resize(Size{Cols: 5, Rows: 2})
+	renderer.HideModal()
+	if !strings.Contains(output.String(), "12345") {
+		t.Fatalf("resized screen did not restore modeled Copilot output: %q", output.String())
+	}
+}
+
+func TestModalActionAndCloseEvents(t *testing.T) {
+	renderer := &testModalRenderer{}
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pollTimeout = 20 * time.Millisecond
+	response := callModalServer(t, server, map[string]any{
+		"type": "open", "id": "black-box", "title": "Black Box",
+		"actions": []map[string]any{{"name": "submit", "label": "Submit", "key": "enter"}, {"name": "quit", "label": "Quit", "key": "q"}},
+	})
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	if _, err := server.HandleInput([]byte("\r")); err != nil {
+		t.Fatal(err)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "action" || response.Event.ID != "black-box" || response.Event.Generation != 1 || response.Event.ActionName != "submit" || response.Event.Key != "enter" {
+		t.Fatalf("action poll response = %#v", response)
+	}
+	if _, err := server.HandleInput([]byte("q")); err != nil {
+		t.Fatal(err)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "action" || response.Event.ID != "black-box" || response.Event.Generation != 1 || response.Event.ActionName != "quit" || response.Event.Key != "q" {
+		t.Fatalf("q action poll response = %#v", response)
+	}
+	if server.ActiveCount() != 1 {
+		t.Fatalf("q action closed modal unexpectedly")
+	}
+	if _, err := server.HandleInput([]byte("\x1b")); err != nil {
+		t.Fatal(err)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "close" || response.Event.ID != "black-box" || response.Event.Generation != 1 || response.Event.Key != "escape" {
+		t.Fatalf("close poll response = %#v", response)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event != nil {
+		t.Fatalf("close generated duplicate event: %#v", response)
+	}
+	if server.ActiveCount() != 0 || renderer.hidden != 1 {
+		t.Fatalf("active=%d hidden=%d", server.ActiveCount(), renderer.hidden)
+	}
+}
+
+func TestModalServerGenerationProtocolAndReopenIsolation(t *testing.T) {
+	renderer := &testModalRenderer{}
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pollTimeout = 20 * time.Millisecond
+
+	response := callModalServer(t, server, map[string]any{"type": "open", "id": "black-box", "generation": int64(7), "title": "first"})
+	if !response.OK {
+		t.Fatalf("open gen 7 response = %#v", response)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "update", "id": "black-box", "generation": int64(6), "body": "stale"})
+	if response.OK || response.Error != "modal-stale-generation" || renderer.shown[len(renderer.shown)-1].Body == "stale" {
+		t.Fatalf("stale update response=%#v frames=%#v", response, renderer.shown)
+	}
+	if _, err := server.HandleInput([]byte("q")); err != nil {
+		t.Fatal(err)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box", "generation": int64(7)})
+	if response.Event == nil || response.Event.Type != "close" || response.Event.ID != "black-box" || response.Event.Generation != 7 || response.Event.Key != "q" {
+		t.Fatalf("gen 7 close event = %#v", response)
+	}
+
+	response = callModalServer(t, server, map[string]any{"type": "open", "id": "black-box", "generation": int64(8), "title": "second"})
+	if !response.OK || server.ActiveCount() != 1 {
+		t.Fatalf("open gen 8 response = %#v active=%d", response, server.ActiveCount())
+	}
+	response = callModalServer(t, server, map[string]any{"type": "close", "id": "black-box", "generation": int64(7)})
+	if response.OK || response.Error != "modal-stale-generation" || server.ActiveCount() != 1 {
+		t.Fatalf("stale close response=%#v active=%d", response, server.ActiveCount())
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box", "generation": int64(7)})
+	if response.OK || response.Error != "modal-stale-generation" {
+		t.Fatalf("stale poll response = %#v", response)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "close", "id": "black-box", "generation": int64(8)})
+	if !response.OK {
+		t.Fatalf("close gen 8 response = %#v", response)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box", "generation": int64(8)})
+	if response.Event == nil || response.Event.Type != "closed" || response.Event.ID != "black-box" || response.Event.Generation != 8 {
+		t.Fatalf("closed event = %#v", response)
+	}
+}
+
+func TestModalServerRejectsMalformedOversizedUnknownAndSecondOpen(t *testing.T) {
+	server, err := NewModalServer(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"malformed", "{not-json}\n", "modal-invalid-request"},
+		{"unknown-field", `{"operation":"open","id":"black-box","ownerExtensionId":"black-box","canvasId":"black-box","surfaceId":"black-box","generation":1,"extra":true}` + "\n", "modal-invalid-request"},
+		{"unknown-type", `{"operation":"bogus","id":"black-box","ownerExtensionId":"black-box","canvasId":"black-box","surfaceId":"black-box","generation":1}` + "\n", "modal-unknown-type"},
+		{"missing-operation", `{"id":"black-box","ownerExtensionId":"black-box","canvasId":"black-box","surfaceId":"black-box","generation":1}` + "\n", "modal-invalid-operation"},
+		{"missing-generation", `{"operation":"open","id":"black-box","ownerExtensionId":"black-box","canvasId":"black-box","surfaceId":"black-box"}` + "\n", "modal-invalid-generation"},
+		{"oversized-field", fmt.Sprintf(`{"operation":"open","id":"black-box","ownerExtensionId":"black-box","canvasId":"black-box","surfaceId":"black-box","generation":1,"title":%q}`+"\n", strings.Repeat("x", modalMaxFieldBytes+1)), "modal-field-too-large"},
+		{"too-many-actions", fmt.Sprintf(`{"operation":"open","id":"black-box","ownerExtensionId":"black-box","canvasId":"black-box","surfaceId":"black-box","generation":1,"actions":%s}`+"\n", tooManyActionsJSON(t)), "modal-too-many-actions"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			response := callModalServerRaw(t, server, tt.raw)
+			if response.OK || response.Error != tt.want {
+				t.Fatalf("response = %#v, want error %s", response, tt.want)
+			}
+		})
+	}
+	response := callModalServer(t, server, map[string]any{"type": "open", "id": "black-box"})
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	response = callModalServer(t, server, map[string]any{"operation": "open", "id": "other-box", "ownerExtensionId": ModalLegacyOwnerExtensionID, "canvasId": "other-box", "surfaceId": "other-box"})
+	if response.OK || response.Error != "modal-unknown-canvas" {
+		t.Fatalf("unregistered canvas response = %#v", response)
+	}
+}
+
+func TestModalServerCloseAllRestoresOwnerAndCleansActiveModal(t *testing.T) {
+	process := &fakeProcess{}
+	backend := &fakeBackend{process: process}
+	broker := NewBroker(backend, BrokerOptions{})
+	if err := broker.Start(t.Context(), Command{Path: "copilot"}); err != nil {
+		t.Fatal(err)
+	}
+	renderer := &testModalRenderer{}
+	server, err := NewModalServer(broker, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	response := callModalServer(t, server, map[string]any{"type": "open", "id": "black-box"})
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	server.CloseAll()
+	if broker.Owner() != OwnerCopilot || server.ActiveCount() != 0 || renderer.hidden != 1 {
+		t.Fatalf("owner=%s active=%d hidden=%d", broker.Owner(), server.ActiveCount(), renderer.hidden)
+	}
+}
+
+func TestModalServerRejectsOversizedFrame(t *testing.T) {
+	server, err := NewModalServer(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := callModalServerRaw(t, server, strings.Repeat("x", modalMaxMessageBytes+1)+"\n")
+	if response.OK || response.Error != "modal-message-too-large" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestVTScreenModelsCurrentScreen(t *testing.T) {
+	screen := newVTScreen(Size{Cols: 10, Rows: 3})
+	screen.Consume([]byte("one\r\ntwo\r\nthree\r\nfour"))
+	repaint := screen.Repaint()
+	if strings.Contains(repaint, "one") || !strings.Contains(repaint, "two") || !strings.Contains(repaint, "four") {
+		t.Fatalf("unexpected repaint after scroll: %q", repaint)
+	}
+	screen.Consume([]byte("\x1b[2J\x1b[Hfresh"))
+	repaint = screen.Repaint()
+	if strings.Contains(repaint, "two") || !strings.Contains(repaint, "fresh") {
+		t.Fatalf("unexpected repaint after clear: %q", repaint)
+	}
+}
+
+func TestVTScreenFullWidthEraseAtRightEdge(t *testing.T) {
+	for _, seq := range []string{"\x1b[1J", "\x1b[1K", "\x1b[J", "\x1b[K", "\x1b[1X", "\x1b[1P", "\x1b[1@"} {
+		t.Run(fmt.Sprintf("%q", seq), func(t *testing.T) {
+			screen := newVTScreen(Size{Cols: 5, Rows: 2})
+			screen.Consume([]byte("abc界\x1b[5G" + seq + "z"))
+			repaint := screen.Repaint()
+			if !strings.Contains(repaint, "z") {
+				t.Fatalf("screen did not continue after full-width edge erase %q: %q", seq, repaint)
+			}
+		})
+	}
+}
+
+func TestVTScreenFullWidthContinuationBoundaries(t *testing.T) {
+	t.Run("erase", func(t *testing.T) {
+		screen := newVTScreen(Size{Cols: 6, Rows: 1})
+		screen.Consume([]byte("a界bc\x1b[3G\x1b[1X"))
+		assertVTRowCells(t, screen, []rune{'a', ' ', ' ', 'b', 'c', ' '})
+	})
+	t.Run("delete", func(t *testing.T) {
+		screen := newVTScreen(Size{Cols: 6, Rows: 1})
+		screen.Consume([]byte("a界bc\x1b[3G\x1b[1P"))
+		assertVTRowCells(t, screen, []rune{'a', 'b', 'c', ' ', ' ', ' '})
+	})
+	t.Run("insert", func(t *testing.T) {
+		screen := newVTScreen(Size{Cols: 6, Rows: 1})
+		screen.Consume([]byte("a界bc\x1b[3G\x1b[1@"))
+		assertVTRowCells(t, screen, []rune{'a', ' ', '界', vtWideContinuation, 'b', 'c'})
+	})
+	t.Run("right-edge-cursor-continuation", func(t *testing.T) {
+		screen := newVTScreen(Size{Cols: 5, Rows: 1})
+		screen.Consume([]byte("abc界\x1b[5G\x1b[1Xz"))
+		assertVTRowCells(t, screen, []rune{'a', 'b', 'c', ' ', 'z'})
+	})
+}
+
+func assertVTRowCells(t *testing.T, screen *vtScreen, want []rune) {
+	t.Helper()
+	got := screen.active().cells[0]
+	if len(got) != len(want) {
+		t.Fatalf("row width = %d, want %d", len(got), len(want))
+	}
+	for i := range got {
+		if vtCellRune(got[i]) != want[i] {
+			t.Fatalf("row cells = %q, want %q", formatVTCellRow(got), formatRuneRow(want))
+		}
+	}
+}
+
+func vtCellRune(cell vtCell) rune {
+	if cell.continuation {
+		return vtWideContinuation
+	}
+	r, _ := utf8.DecodeRuneInString(cell.cluster)
+	return r
+}
+
+func formatVTCellRow(row []vtCell) string {
+	var out strings.Builder
+	for _, cell := range row {
+		if cell.continuation {
+			out.WriteRune('·')
+			continue
+		}
+		out.WriteString(cell.cluster)
+	}
+	return out.String()
+}
+
+func formatRuneRow(row []rune) string {
+	var out strings.Builder
+	for _, r := range row {
+		if r == vtWideContinuation {
+			out.WriteRune('·')
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
+func modalRequestMap(capability ModalCapability, requestType string, generation int64) map[string]any {
+	return map[string]any{
+		"operation":        requestType,
+		"id":               capability.SurfaceID,
+		"ownerExtensionId": capability.OwnerExtensionID,
+		"canvasId":         capability.CanvasID,
+		"surfaceId":        capability.SurfaceID,
+		"generation":       generation,
+	}
+}
+
+func addLegacyModalIdentity(request map[string]any) {
+	if _, ok := request["operation"]; !ok {
+		if requestType, ok := request["type"]; ok {
+			request["operation"] = requestType
+		}
+	}
+	if request["id"] == ModalLegacySurfaceID {
+		if _, ok := request["ownerExtensionId"]; !ok {
+			request["ownerExtensionId"] = ModalLegacyOwnerExtensionID
+		}
+		if _, ok := request["canvasId"]; !ok {
+			request["canvasId"] = ModalLegacyCanvasID
+		}
+		if _, ok := request["surfaceId"]; !ok {
+			request["surfaceId"] = ModalLegacySurfaceID
+		}
+	}
+}
+
+func callModalServer(t *testing.T, server *ModalServer, request map[string]any) modalResponse {
+	t.Helper()
+	addLegacyModalIdentity(request)
+	if _, ok := request["generation"]; !ok {
+		request["generation"] = int64(1)
+	}
+	var conn bytes.Buffer
+	if err := json.NewEncoder(&conn).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	return decodeModalResponse(t, server, &conn)
+}
+
+func callModalServerAuthenticated(t *testing.T, server *ModalServer, request map[string]any, pid uint32) modalResponse {
+	t.Helper()
+	addLegacyModalIdentity(request)
+	if _, ok := request["generation"]; !ok {
+		request["generation"] = int64(1)
+	}
+	var conn bytes.Buffer
+	if err := json.NewEncoder(&conn).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	server.HandleAuthenticatedConnection(&conn, pid)
+	var response modalResponse
+	if err := json.NewDecoder(&conn).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func callModalServerRaw(t *testing.T, server *ModalServer, raw string) modalResponse {
+	t.Helper()
+	conn := bytes.NewBufferString(raw)
+	return decodeModalResponse(t, server, conn)
+}
+
+func callModalServerRawAuthenticated(t *testing.T, server *ModalServer, raw string, pid uint32) modalResponse {
+	t.Helper()
+	conn := bytes.NewBufferString(raw)
+	server.HandleAuthenticatedConnection(conn, pid)
+	var response modalResponse
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func decodeModalResponse(t *testing.T, server *ModalServer, conn *bytes.Buffer) modalResponse {
+	t.Helper()
+	server.HandleConnection(conn)
+	var response modalResponse
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func tooManyActionsJSON(t *testing.T) string {
+	t.Helper()
+	actions := make([]map[string]string, modalMaxActions+1)
+	for i := range actions {
+		actions[i] = map[string]string{"name": fmt.Sprintf("a%d", i), "label": "A"}
+	}
+	data, err := json.Marshal(actions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}

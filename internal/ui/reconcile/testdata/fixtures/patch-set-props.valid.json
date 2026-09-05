@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "protocol": "afterburner.ui",
+  "revision": 1,
+  "surfaceId": "s1",
+  "baseRevision": 1,
+  "nextRevision": 2,
+  "operations": [
+    {
+      "op": "setProps",
+      "path": "/id/name",
+      "value": {
+        "value": "fixture"
+      }
+    }
+  ]
+}

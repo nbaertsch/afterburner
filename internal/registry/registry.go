@@ -1,6 +1,8 @@
 package registry
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,10 +15,20 @@ import (
 type Manifest struct {
 	SchemaVersion    int               `json:"schemaVersion"`
 	ID               string            `json:"id"`
-	Name             string            `json:"name"`
+	Name             string            `json:"name,omitempty"`
+	DisplayName      string            `json:"displayName,omitempty"`
+	Description      string            `json:"description,omitempty"`
 	Visibility       string            `json:"visibility"`
+	Requires         Requirements      `json:"requires"`
 	Runtime          RuntimeManifest   `json:"runtime"`
+	Capabilities     []string          `json:"capabilities,omitempty"`
 	SessionExtension *SessionExtension `json:"sessionExtension,omitempty"`
+	UI               json.RawMessage   `json:"ui,omitempty"`
+}
+
+type Requirements struct {
+	Afterburner string   `json:"afterburner"`
+	CopilotCLI  []string `json:"copilotCli,omitempty"`
 }
 
 type RuntimeManifest struct {
@@ -37,16 +49,19 @@ type Source struct {
 }
 
 type Entry struct {
-	Enabled            bool     `json:"enabled"`
-	ActivePath         string   `json:"activePath"`
-	PreviousActivePath *string  `json:"previousActivePath"`
-	Manifest           Manifest `json:"manifest"`
-	Source             Source   `json:"source"`
-	UpdatedAt          string   `json:"updatedAt"`
+	Enabled            bool            `json:"enabled"`
+	ActivePath         string          `json:"activePath"`
+	PreviousActivePath *string         `json:"previousActivePath"`
+	Manifest           Manifest        `json:"manifest"`
+	Source             Source          `json:"source"`
+	Identity           IdentityBinding `json:"identity,omitempty"`
+	UpdatedAt          string          `json:"updatedAt"`
+	Verified           bool            `json:"-"`
 }
 
 type Registry struct {
 	SchemaVersion int              `json:"schemaVersion"`
+	Epoch         uint64           `json:"epoch,omitempty"`
 	Extensions    map[string]Entry `json:"extensions"`
 }
 
@@ -70,18 +85,150 @@ func Load(root string) (Registry, error) {
 	if value.SchemaVersion != 1 {
 		return Registry{}, fmt.Errorf("unsupported extension registry schema %d", value.SchemaVersion)
 	}
+	if value.Epoch == 0 {
+		value.Epoch = 1
+	}
 	if value.Extensions == nil {
 		value.Extensions = map[string]Entry{}
 	}
 	for id, entry := range value.Extensions {
+		normalizeManifestNames(&entry.Manifest)
 		if entry.Manifest.ID != id {
 			return Registry{}, fmt.Errorf("registry key %q does not match manifest ID %q", id, entry.Manifest.ID)
+		}
+		if !validVisibility(entry.Manifest.Visibility) {
+			return Registry{}, fmt.Errorf("extension %q has invalid visibility %q", id, entry.Manifest.Visibility)
 		}
 		if entry.ActivePath == "" || !Within(entry.ActivePath, filepath.Join(root, "extensions")) {
 			return Registry{}, fmt.Errorf("extension %q active path escapes the managed package root", id)
 		}
+		if entry.Manifest.Visibility == "builtin" && entry.Identity.IsZero() {
+			return Registry{}, fmt.Errorf("extension %q built-in visibility requires a signed identity binding", id)
+		}
+		if !entry.Identity.IsZero() {
+			manifestHash, treeHash, err := VerifyActivePackage(entry)
+			if err != nil {
+				return Registry{}, fmt.Errorf("extension %q active package integrity: %w", id, err)
+			}
+			if err := entry.Identity.ValidateForContent(root, entry, manifestHash, treeHash); err != nil {
+				return Registry{}, fmt.Errorf("extension %q %w", id, err)
+			}
+			entry.Verified = true
+		}
+		if IsReservedBuiltinID(id) && !IsTrustedBuiltinEntry(entry) {
+			return Registry{}, fmt.Errorf("extension %q uses a reserved built-in ID without verified built-in identity", id)
+		}
+		value.Extensions[id] = entry
 	}
 	return value, nil
+}
+
+func NormalizeManifest(manifest *Manifest) {
+	normalizeManifestNames(manifest)
+}
+
+func normalizeManifestNames(manifest *Manifest) {
+	manifest.Name = strings.TrimSpace(manifest.Name)
+	manifest.DisplayName = strings.TrimSpace(manifest.DisplayName)
+	if manifest.DisplayName == "" {
+		manifest.DisplayName = manifest.Name
+	}
+	if manifest.Name == "" {
+		manifest.Name = manifest.DisplayName
+	}
+}
+
+func ValidVisibility(visibility string) bool {
+	return validVisibility(visibility)
+}
+
+func IsReservedBuiltinID(id string) bool {
+	switch id {
+	case "black-box", "byo-models":
+		return true
+	default:
+		return false
+	}
+}
+
+func IsTrustedBuiltinSourceType(sourceType string) bool {
+	switch sourceType {
+	case "embedded", "signed-release":
+		return true
+	default:
+		return false
+	}
+}
+
+func IsTrustedBuiltinEntry(entry Entry) bool {
+	return entry.Verified && entry.Manifest.Visibility == "builtin" && entry.Identity.IsTrustedBuiltinFor(entry.Manifest.ID) &&
+		IsTrustedBuiltinSourceType(entry.Source.Type) && entry.Source.Type == entry.Identity.SourceType &&
+		entry.Source.Value == entry.Manifest.ID && entry.Identity.SourceValue == entry.Manifest.ID
+}
+
+func validVisibility(visibility string) bool {
+	switch visibility {
+	case "builtin", "public", "private":
+		return true
+	default:
+		return false
+	}
+}
+
+func VerifyActivePackage(entry Entry) (manifestHash, treeHash string, err error) {
+	manifestHash, err = HashFile(filepath.Join(entry.ActivePath, "afterburner.json"))
+	if err != nil {
+		return "", "", fmt.Errorf("hash manifest: %w", err)
+	}
+	treeHash, err = HashTree(entry.ActivePath)
+	if err != nil {
+		return "", "", fmt.Errorf("hash package tree: %w", err)
+	}
+	return "sha256:" + manifestHash, "sha256:" + treeHash, nil
+}
+
+func HashFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func HashTree(root string) (string, error) {
+	hash := sha256.New()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("extension packages may not contain symbolic links: %s", relative)
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" || entry.Name() == "node_modules" || entry.Name() == "bin" || entry.Name() == "obj" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		hash.Write([]byte(filepath.ToSlash(relative)))
+		hash.Write([]byte{0})
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		hash.Write(data)
+		hash.Write([]byte{0})
+		return nil
+	})
+	return hex.EncodeToString(hash.Sum(nil)), err
 }
 
 func Save(root string, value Registry) error {

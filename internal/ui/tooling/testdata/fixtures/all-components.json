@@ -1,0 +1,19 @@
+{
+  "name": "all-components",
+  "description": "Full deterministic component support fixture. The in-code fixture expands this compact fixture to every supported kind.",
+  "tree": {
+    "root": {
+      "id": "all-components-root",
+      "kind": "application",
+      "props": { "title": "Afterburner UI Fixture" },
+      "children": [
+        { "id": "fixture-overview", "kind": "text", "props": { "text": "Use `afterburn ui render-fixture all-components` for the generated complete catalog." } }
+      ]
+    },
+    "revision": 1,
+    "surfaceId": "fixture-all-components",
+    "themeId": "afterburner.dark",
+    "locale": "en-US",
+    "capabilities": ["ui.render.components", "ui.accessibility.inspect"]
+  }
+}

@@ -16,7 +16,13 @@ const STRING_FIELDS = new Map([
     ["contextTier", "contextTier"], ["reasoningEffort", "reasoningEffort"],
     ["previousReasoningEffort", "previousReasoningEffort"],
     ["shutdownType", "shutdownType"], ["errorType", "errorType"], ["warningType", "warningType"],
-    ["infoType", "infoType"], ["initiator", "initiator"], ["transport", "transport"]
+    ["infoType", "infoType"], ["initiator", "initiator"], ["transport", "transport"],
+    ["surfaceId", "surfaceId"], ["instanceId", "instanceId"], ["hostId", "hostId"],
+    ["sinkId", "sinkId"], ["envelopeId", "envelopeId"], ["envelopeKind", "envelopeKind"],
+    ["uiEventType", "uiEventType"], ["lifecycleState", "lifecycleState"],
+    ["recoveryState", "recoveryState"], ["securityDecision", "securityDecision"],
+    ["policyDecision", "policyDecision"], ["grantId", "grantId"], ["reason", "reason"],
+    ["kind", "kind"]
 ]);
 const BOOLEAN_FIELDS = new Set(["success", "rte", "alreadyInUse", "remoteSteerable"]);
 const NUMBER_FIELDS = new Set([

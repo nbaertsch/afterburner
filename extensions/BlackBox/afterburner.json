@@ -17,9 +17,81 @@
     "runtime-observer",
     "metadata-timeline",
     "sanitized-export",
-    "canvas"
+    "canvas",
+    "modal-canvas",
+    "enterprise-surface"
   ],
   "sessionExtension": {
     "entrypoint": "com.github.copilot/extensions/BlackBox/extension.mjs"
+  },
+  "ui": {
+    "protocol": "afterburner.ui",
+    "revision": 1,
+    "surfaces": [
+      {
+        "id": "afterburner-black-box-live",
+        "kind": "panel",
+        "title": "Afterburner Black Box",
+        "requiredCapabilities": [
+          "ui.render.components",
+          "ui.surface.panel",
+          "ui.action.invoke",
+          "ui.data.read",
+          "ui.stream.read",
+          "ui.localization.read",
+          "ui.accessibility.inspect"
+        ]
+      }
+    ],
+    "capabilities": [
+      "ui.render.components",
+      "ui.surface.panel",
+      "ui.action.invoke",
+      "ui.data.read",
+      "ui.stream.read",
+      "ui.localization.read",
+      "ui.accessibility.inspect",
+      "ui.observability.black-box.sink"
+    ],
+    "grantPolicy": {
+      "schemaVersion": 1,
+      "protocol": "afterburner.ui",
+      "revision": 1,
+      "extensionId": "black-box",
+      "denyByDefault": true,
+      "grants": [
+        {
+          "id": "black-box-panel-render",
+          "effect": "allow",
+          "capabilities": ["ui.render.components", "ui.surface.panel", "ui.action.invoke", "ui.data.read", "ui.stream.read", "ui.localization.read", "ui.accessibility.inspect"],
+          "resources": ["afterburner-black-box-live"]
+        },
+        {
+          "id": "black-box-metadata-observability",
+          "effect": "allow",
+          "capabilities": ["ui.observability.black-box.sink"],
+          "resources": ["afterburner.ui/envelopes/metadata"]
+        }
+      ],
+      "audit": [
+        {
+          "id": "black-box-ui-observability-redaction",
+          "events": ["ui.host.lifecycle", "ui.host.patch", "ui.host.recovery", "ui.host.quota", "ui.host.arbitration"],
+          "sinkIds": ["black-box.ui.events"],
+          "redaction": "metadata-only"
+        }
+      ]
+    },
+    "observability": {
+      "eventSinks": [
+        {
+          "id": "black-box.ui.events",
+          "extensionId": "black-box",
+          "requirement": "optional",
+          "capability": "ui.observability.black-box.sink",
+          "failureBehavior": "ignore-when-absent"
+        }
+      ]
+    }
   }
 }

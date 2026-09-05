@@ -23,6 +23,8 @@ import (
 	"github.com/nbaertsch/afterburner/internal/runtimepkg"
 	"github.com/nbaertsch/afterburner/internal/sessions"
 	"github.com/nbaertsch/afterburner/internal/telemetry"
+	"github.com/nbaertsch/afterburner/internal/ui/render"
+	"github.com/nbaertsch/afterburner/internal/ui/tooling"
 	"github.com/nbaertsch/afterburner/internal/updater"
 )
 
@@ -32,6 +34,7 @@ var reserved = map[string]struct{}{
 	"rollback": {}, "version": {}, "help": {}, "run": {},
 	"compatibility": {},
 	"core":          {},
+	"ui":            {},
 }
 
 type Options struct {
@@ -88,6 +91,8 @@ func Run(ctx context.Context, args []string, opts Options) (int, error) {
 		return runExtensionCommand(route, opts)
 	case "core":
 		return runCoreCommand(route.Args, opts)
+	case "ui":
+		return runUICommand(ctx, route.Args, opts)
 	default:
 		return 2, fmt.Errorf("native command %q is not implemented yet", route.Command)
 	}
@@ -423,12 +428,13 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	traceStartup("telemetry")
 	started := time.Now()
 	exitCode, launchErr := launch.Run(ctx, launch.Options{
-		Executable: executable,
-		Args:       childArgs,
-		Env:        env,
-		Stdin:      opts.Stdin,
-		Stdout:     opts.Stdout,
-		Stderr:     opts.Stderr,
+		Executable:        executable,
+		Args:              childArgs,
+		Env:               env,
+		Stdin:             opts.Stdin,
+		Stdout:            opts.Stdout,
+		Stderr:            opts.Stderr,
+		ExtensionRegistry: &effectiveRegistry,
 	})
 	attributes := map[string]any{
 		"exitCode":             exitCode,
@@ -542,6 +548,328 @@ func runCompatibility(args []string, opts Options) (int, error) {
 	return 0, nil
 }
 
+func runUICommand(ctx context.Context, args []string, opts Options) (int, error) {
+	if len(args) == 0 {
+		return 2, fmt.Errorf("usage: afterburn ui doctor|inspect|trace|validate-manifest|render-fixture|simulate|certify|grant|revoke|policy")
+	}
+	subcommand := args[0]
+	args = args[1:]
+	switch subcommand {
+	case "doctor":
+		if len(args) != 0 && !(len(args) == 1 && args[0] == "--json") {
+			return 2, fmt.Errorf("usage: afterburn ui doctor [--json]")
+		}
+		layout, err := home.Initialize()
+		if err != nil {
+			return 1, err
+		}
+		report := tooling.Doctor(layout.Root)
+		if len(args) == 1 {
+			return writeToolingJSON(opts.Stdout, report)
+		}
+		io.WriteString(opts.Stdout, tooling.HumanReport(report))
+		return statusExit(report), nil
+	case "inspect":
+		if len(args) != 1 && !(len(args) == 2 && args[0] == "--json") {
+			return 2, fmt.Errorf("usage: afterburn ui inspect [--json] <extension>")
+		}
+		asJSON := len(args) == 2 && args[0] == "--json"
+		extensionID := args[len(args)-1]
+		layout, err := home.Initialize()
+		if err != nil {
+			return 1, err
+		}
+		report, brief, err := tooling.InspectInstalled(layout.Root, extensionID)
+		if err != nil {
+			return 1, err
+		}
+		if asJSON {
+			return writeToolingJSON(opts.Stdout, struct {
+				Report   tooling.Report         `json:"report"`
+				Manifest *tooling.ManifestBrief `json:"manifest,omitempty"`
+			}{report, brief})
+		}
+		if brief != nil {
+			fmt.Fprintf(opts.Stdout, "%s (%s) enabled=%t\n", brief.DisplayName, brief.ID, brief.Enabled)
+		}
+		io.WriteString(opts.Stdout, tooling.HumanReport(report))
+		return statusExit(report), nil
+	case "trace":
+		extensionID, redacted, asJSON, err := parseTraceArgs(args)
+		if err != nil {
+			return 2, err
+		}
+		layout, err := home.Initialize()
+		if err != nil {
+			return 1, err
+		}
+		view, err := tooling.Trace(tooling.TraceOptions{HomeRoot: layout.Root, ExtensionID: extensionID, Redacted: redacted})
+		if err != nil {
+			return 1, err
+		}
+		if asJSON {
+			return writeToolingJSON(opts.Stdout, view)
+		}
+		io.WriteString(opts.Stdout, tooling.FormatTrace(view))
+		return 0, nil
+	case "validate-manifest":
+		if len(args) != 1 && !(len(args) == 2 && args[0] == "--json") {
+			return 2, fmt.Errorf("usage: afterburn ui validate-manifest [--json] <path>")
+		}
+		asJSON := len(args) == 2 && args[0] == "--json"
+		result := tooling.ValidateManifest(args[len(args)-1])
+		if asJSON {
+			code, err := writeToolingJSON(opts.Stdout, result)
+			if err != nil || !result.Valid {
+				return 1, err
+			}
+			return code, nil
+		}
+		if result.Valid {
+			fmt.Fprintf(opts.Stdout, "OK  %s\n", result.Path)
+			return 0, nil
+		}
+		for _, message := range result.Errors {
+			fmt.Fprintf(opts.Stdout, "ERR %s\n", message)
+		}
+		return 1, nil
+	case "render-fixture":
+		fixture, asJSON, err := parseRenderArgs(args)
+		if err != nil {
+			return 2, err
+		}
+		result, err := tooling.RenderFixture(ctx, fixture, tooling.RenderOptions{Width: 96, Height: 40, ColorMode: render.ColorModeMono, Plain: true, Unicode: false})
+		if err != nil {
+			return 1, err
+		}
+		if asJSON {
+			return writeToolingJSON(opts.Stdout, result)
+		}
+		fmt.Fprintln(opts.Stdout, result.Frame.Plain)
+		return 0, nil
+	case "simulate":
+		simOpts, asJSON, err := parseSimulateArgs(args)
+		if err != nil {
+			return 2, err
+		}
+		layout, err := home.Initialize()
+		if err != nil {
+			return 1, err
+		}
+		simOpts.HomeRoot = layout.Root
+		result, err := tooling.Simulate(ctx, simOpts)
+		if err != nil {
+			return 1, err
+		}
+		if asJSON {
+			return writeToolingJSON(opts.Stdout, result)
+		}
+		io.WriteString(opts.Stdout, tooling.HumanReport(result.Report))
+		return statusExit(result.Report), nil
+	case "certify", "certification":
+		certOpts, asJSON, err := parseCertifyArgs(args)
+		if err != nil {
+			return 2, err
+		}
+		layout, err := home.Initialize()
+		if err != nil {
+			return 1, err
+		}
+		certOpts.HomeRoot = layout.Root
+		result, err := tooling.Certify(ctx, certOpts)
+		if err != nil {
+			return 1, err
+		}
+		if asJSON {
+			return writeToolingJSON(opts.Stdout, result)
+		}
+		io.WriteString(opts.Stdout, result.Human)
+		return statusExit(result.Report), nil
+	case "grant":
+		if len(args) < 2 || len(args) > 3 {
+			return 2, fmt.Errorf("usage: afterburn ui grant <extension> <capability> [resource]")
+		}
+		layout, err := home.Initialize()
+		if err != nil {
+			return 1, err
+		}
+		resource := "*"
+		if len(args) == 3 {
+			resource = args[2]
+		}
+		record, err := tooling.Grant(layout.Root, args[0], args[1], resource, "")
+		if err != nil {
+			return 1, err
+		}
+		fmt.Fprintf(opts.Stdout, "Granted %s to %s as %s\n", record.Capability, record.ExtensionID, record.ID)
+		return 0, nil
+	case "revoke":
+		if len(args) != 2 {
+			return 2, fmt.Errorf("usage: afterburn ui revoke <extension> <grant-id>")
+		}
+		layout, err := home.Initialize()
+		if err != nil {
+			return 1, err
+		}
+		record, ok, err := tooling.Revoke(layout.Root, args[0], args[1], "")
+		if err != nil {
+			return 1, err
+		}
+		if !ok {
+			return 1, fmt.Errorf("grant %q for extension %q was not found", args[1], args[0])
+		}
+		fmt.Fprintf(opts.Stdout, "Revoked %s for %s\n", record.ID, record.ExtensionID)
+		return 0, nil
+	case "policy":
+		if len(args) != 1 && !(len(args) == 2 && args[0] == "set") {
+			return 2, fmt.Errorf("usage: afterburn ui policy show|set <path>")
+		}
+		layout, err := home.Initialize()
+		if err != nil {
+			return 1, err
+		}
+		if args[0] == "show" {
+			policy, err := tooling.ShowEnterprisePolicy(layout.Root)
+			if err != nil {
+				return 1, err
+			}
+			return writeToolingJSON(opts.Stdout, policy)
+		}
+		if args[0] == "set" {
+			policy, err := tooling.SetEnterprisePolicy(layout.Root, args[1])
+			if err != nil {
+				return 1, err
+			}
+			fmt.Fprintf(opts.Stdout, "Installed UI enterprise policy %s\n", policy.Version)
+			return 0, nil
+		}
+		return 2, fmt.Errorf("usage: afterburn ui policy show|set <path>")
+	default:
+		return 2, fmt.Errorf("native ui subcommand %q is not implemented yet", subcommand)
+	}
+}
+
+func parseTraceArgs(args []string) (string, bool, bool, error) {
+	var extensionID string
+	redacted := false
+	asJSON := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--extension":
+			if i+1 >= len(args) {
+				return "", false, false, fmt.Errorf("usage: afterburn ui trace --extension <id> [--redacted] [--json]")
+			}
+			i++
+			extensionID = args[i]
+		case "--redacted":
+			redacted = true
+		case "--json":
+			asJSON = true
+		default:
+			return "", false, false, fmt.Errorf("usage: afterburn ui trace --extension <id> [--redacted] [--json]")
+		}
+	}
+	if extensionID == "" {
+		return "", false, false, fmt.Errorf("usage: afterburn ui trace --extension <id> [--redacted] [--json]")
+	}
+	return extensionID, redacted, asJSON, nil
+}
+
+func parseRenderArgs(args []string) (string, bool, error) {
+	asJSON := false
+	var fixture string
+	for _, arg := range args {
+		if arg == "--json" {
+			asJSON = true
+		} else if fixture == "" {
+			fixture = arg
+		} else {
+			return "", false, fmt.Errorf("usage: afterburn ui render-fixture [--json] <fixture>")
+		}
+	}
+	if fixture == "" {
+		return "", false, fmt.Errorf("usage: afterburn ui render-fixture [--json] <fixture>")
+	}
+	return fixture, asJSON, nil
+}
+
+func parseSimulateArgs(args []string) (tooling.SimulationOptions, bool, error) {
+	var opts tooling.SimulationOptions
+	asJSON := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--extension":
+			if i+1 >= len(args) {
+				return opts, false, fmt.Errorf("usage: afterburn ui simulate --extension <id> --surface <surface> [--json]")
+			}
+			i++
+			opts.ExtensionID = args[i]
+		case "--surface":
+			if i+1 >= len(args) {
+				return opts, false, fmt.Errorf("usage: afterburn ui simulate --extension <id> --surface <surface> [--json]")
+			}
+			i++
+			opts.SurfaceID = args[i]
+		case "--json":
+			asJSON = true
+		default:
+			return opts, false, fmt.Errorf("usage: afterburn ui simulate --extension <id> --surface <surface> [--json]")
+		}
+	}
+	if opts.ExtensionID == "" || opts.SurfaceID == "" {
+		return opts, false, fmt.Errorf("usage: afterburn ui simulate --extension <id> --surface <surface> [--json]")
+	}
+	return opts, asJSON, nil
+}
+
+func parseCertifyArgs(args []string) (tooling.CertificationOptions, bool, error) {
+	var opts tooling.CertificationOptions
+	asJSON := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--extension":
+			if i+1 >= len(args) {
+				return opts, false, fmt.Errorf("usage: afterburn ui certify --extension <id> [--surface <surface>] [--json]")
+			}
+			i++
+			opts.ExtensionID = args[i]
+		case "--surface":
+			if i+1 >= len(args) {
+				return opts, false, fmt.Errorf("usage: afterburn ui certify --extension <id> [--surface <surface>] [--json]")
+			}
+			i++
+			opts.SurfaceID = args[i]
+		case "--json":
+			asJSON = true
+		default:
+			return opts, false, fmt.Errorf("usage: afterburn ui certify --extension <id> [--surface <surface>] [--json]")
+		}
+	}
+	if opts.ExtensionID == "" {
+		return opts, false, fmt.Errorf("usage: afterburn ui certify --extension <id> [--surface <surface>] [--json]")
+	}
+	return opts, asJSON, nil
+}
+
+func writeToolingJSON(writer io.Writer, value any) (int, error) {
+	data, err := tooling.MarshalDeterministic(value)
+	if err != nil {
+		return 1, err
+	}
+	_, err = writer.Write(data)
+	if err != nil {
+		return 1, err
+	}
+	return 0, nil
+}
+
+func statusExit(report tooling.Report) int {
+	if report.Summary.Status == tooling.StatusFail {
+		return 1
+	}
+	return 0
+}
+
 func setEnv(env []string, key, value string) []string {
 	prefix := strings.ToUpper(key) + "="
 	result := make([]string, 0, len(env)+1)
@@ -570,6 +898,16 @@ Usage:
   afterburn uninstall <id...>
   afterburn extension <command>
   afterburn core install
+  afterburn ui doctor [--json]
+  afterburn ui inspect [--json] <extension>
+  afterburn ui trace --extension <id> --redacted [--json]
+  afterburn ui validate-manifest [--json] <path>
+  afterburn ui render-fixture [--json] <fixture>
+  afterburn ui simulate --extension <id> --surface <surface> [--json]
+  afterburn ui certify --extension <id> [--surface <surface>] [--json]
+  afterburn ui grant <extension> <capability> [resource]
+  afterburn ui revoke <extension> <grant-id>
+  afterburn ui policy show|set <path>
   afterburn doctor
   afterburn repair
   afterburn update [--check|--version <version>]

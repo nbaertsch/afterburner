@@ -3,9 +3,14 @@ import { access, readFile, readdir, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createConnection } from "node:net";
+import * as afterburnerUI from "./runtime/afterburner-ui.mjs";
 
 const require = createRequire(import.meta.url);
 const { createHash } = require("node:crypto");
+const { readFileSync, unlinkSync } = require("node:fs");
+const safeJSONParse = JSON.parse.bind(JSON);
+const safeJSONStringify = JSON.stringify.bind(JSON);
 const wrapperDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(wrapperDir, "..");
 const wrapperPackageName = wrapperDir.split(/[\\/]/).at(-1);
@@ -24,6 +29,35 @@ const blockedMetadataWords = new Set([
 let runtimeEventSequence = 0;
 let runtimeBootstrapDropped = 0;
 let runtimeBootstrapSealed = false;
+const modalCanvasLimit = 16;
+const modalActionLimit = 16;
+const modalSubscriptionLimit = 32;
+const modalTextLimit = 64 * 1024;
+const modalBlackBoxOwnerExtensionId = "black-box";
+const modalBlackBoxLiveSurfaceId = "afterburner-black-box-live";
+const modalReservedBlackBoxSurfaceIds = new Set(["black-box", modalBlackBoxLiveSurfaceId]);
+const trustedBuiltinSourceTypes = new Set(["embedded", "signed-release"]);
+const modalCanvases = new Map();
+const modalInstances = new Map();
+const modalSubscribers = new Map();
+const modalFallbacks = new Map();
+const modalNativeSurfaces = new Map();
+let modalInstanceSequence = 0;
+let modalBrokerConfig = loadModalBrokerConfig();
+seedModalNativeSurfaces(modalBrokerConfig);
+const modalDiagnostics = {
+    registered: 0,
+    active: 0,
+    opened: 0,
+    updated: 0,
+    closed: 0,
+    actionInvocations: 0,
+    subscriptionCount: 0,
+    fallbackCount: 0,
+    pipeFailures: 0,
+    quotaFailures: 0,
+    lastFailureKind: null
+};
 
 function runtimeMetadataKeyAllowed(key) {
     if (!/^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(key)) return false;
@@ -136,6 +170,7 @@ function normalizeRuntimeEventTypes(eventTypes) {
 function runtimeObserverDiagnostics(observer) {
     return immutableRuntimeCopy({
         id: observer.id,
+        ownerExtensionId: observer.ownerExtensionId,
         eventTypes: observer.eventTypes === null ? null : [...observer.eventTypes].sort(),
         active: observer.active,
         queueDepth: observer.queue.length,
@@ -150,7 +185,7 @@ function disposeRuntimeObserver(observer) {
     if (!observer?.active) return;
     observer.active = false;
     observer.queue.length = 0;
-    runtimeObservers.delete(observer.id);
+    runtimeObservers.delete(observer.key ?? observer.id);
     if (typeof observer.dispose === "function") {
         try {
             const result = observer.dispose();
@@ -165,10 +200,10 @@ function disposeRuntimeObserver(observer) {
             reportRuntimeObserverFailure(observer, "dispose", error);
         }
     }
-    emitRuntimeEvent("runtime.observer.disposed", { observerId: observer.id });
+    emitRuntimeEvent("runtime.observer.disposed", { observerId: observer.id, ownerExtensionId: observer.ownerExtensionId });
 }
 
-function registerRuntimeObserver(definition) {
+function registerRuntimeObserver(definition, options = {}) {
     if (!definition || typeof definition !== "object") {
         throw new Error("A runtime observer definition is required.");
     }
@@ -180,9 +215,13 @@ function registerRuntimeObserver(definition) {
     if (dispose !== undefined && typeof dispose !== "function") {
         throw new Error(`Runtime observer '${id}' dispose must be a function.`);
     }
-    if (runtimeObservers.has(id)) throw new Error(`Runtime observer '${id}' is already registered.`);
+    const ownerExtensionId = validateModalOwnerExtensionId(options.ownerExtensionId);
+    const observerKey = ownerExtensionId ? ownerExtensionId + ":" + id : id;
+    if (runtimeObservers.has(observerKey)) throw new Error(`Runtime observer '${id}' is already registered.`);
     const observer = {
+        key: observerKey,
         id,
+        ownerExtensionId,
         eventTypes: normalizeRuntimeEventTypes(definition.eventTypes),
         onEvent,
         dispose,
@@ -196,10 +235,11 @@ function registerRuntimeObserver(definition) {
         failures: 0,
         disposeFailures: 0
     };
-    runtimeObservers.set(id, observer);
+    runtimeObservers.set(observerKey, observer);
     for (const event of runtimeBootstrapEvents) enqueueRuntimeObserver(observer, event);
     emitRuntimeEvent("runtime.observer.registered", {
         observerId: id,
+        ownerExtensionId,
         filtered: observer.eventTypes !== null,
         eventTypeCount: observer.eventTypes?.size ?? 0
     });
@@ -233,7 +273,10 @@ function emitRuntimeEvent(type, metadata = {}) {
     return event;
 }
 
-function getRuntimeObserverDiagnostics() {
+function getRuntimeObserverDiagnostics(options = {}) {
+    const ownerExtensionId = validateModalOwnerExtensionId(options.ownerExtensionId);
+    const observers = [...runtimeObservers.values()]
+        .filter((observer) => !ownerExtensionId || observer.ownerExtensionId === ownerExtensionId);
     return immutableRuntimeCopy({
         schemaVersion: runtimeEventSchemaVersion,
         lastSequence: runtimeEventSequence,
@@ -244,7 +287,7 @@ function getRuntimeObserverDiagnostics() {
             limit: runtimeBootstrapLimit
         },
         queueLimit: runtimeObserverQueueLimit,
-        observers: [...runtimeObservers.values()].map(runtimeObserverDiagnostics)
+        observers: observers.map(runtimeObserverDiagnostics)
     });
 }
 
@@ -259,6 +302,711 @@ async function flushRuntimeObservers() {
     }
 }
 
+function loadModalBrokerConfig() {
+    const bootstrapPaths = [process.env.AFTERBURNER_NATIVE_BOOTSTRAP, process.env.AFTERBURNER_MODAL_BOOTSTRAP]
+        .filter((value, index, values) => typeof value === "string" && value && values.indexOf(value) === index);
+    delete process.env.AFTERBURNER_NATIVE_BOOTSTRAP;
+    delete process.env.AFTERBURNER_MODAL_BOOTSTRAP;
+    delete process.env.AFTERBURNER_MODAL_SECRET;
+    delete process.env.AFTERBURNER_MODAL_OWNER_EXTENSION_ID;
+    delete process.env.AFTERBURNER_MODAL_CANVAS_ID;
+    delete process.env.AFTERBURNER_MODAL_SURFACE_ID;
+    delete process.env.AFTERBURNER_MODAL_PIPE;
+    if (bootstrapPaths.length === 0) return Object.freeze({ modalSurfaces: Object.freeze([]), verifiedExtensions: Object.freeze([]) });
+    const modalSurfaces = [];
+    const verifiedExtensions = [];
+    let legacyPipe;
+    for (const bootstrapPath of bootstrapPaths) {
+        try {
+            const parsed = safeJSONParse(readFileSync(bootstrapPath, "utf8"));
+            try { unlinkSync(bootstrapPath); } catch {}
+            if (typeof parsed.pipe === "string" && parsed.pipe) legacyPipe = parsed.pipe;
+            modalSurfaces.push(...normalizeModalBootstrapSurfaces(parsed.modalSurfaces, parsed.pipe));
+            verifiedExtensions.push(...normalizeNativeIdentityAssertions(parsed.verifiedExtensions));
+        } catch {}
+    }
+    return Object.freeze({
+        pipe: legacyPipe,
+        modalSurfaces: Object.freeze(modalSurfaces),
+        verifiedExtensions: Object.freeze(verifiedExtensions)
+    });
+}
+
+function normalizeModalBootstrapSurfaces(values, legacyPipe) {
+    if (!Array.isArray(values)) return Object.freeze([]);
+    const surfaces = [];
+    const seen = new Set();
+    for (const value of values) {
+        if (!value || typeof value !== "object") continue;
+        try {
+            const ownerExtensionId = validateModalOwnerExtensionId(value.ownerExtensionId);
+            const canvasId = validateModalId(value.canvasId, "modal canvas id");
+            const surfaceId = validateModalId(value.surfaceId, "modal surface id");
+            const pipe = typeof value.pipe === "string" && value.pipe ? value.pipe : legacyPipe;
+            if (!ownerExtensionId || !pipe) continue;
+            const key = modalNativeSurfaceKey(ownerExtensionId, canvasId, surfaceId);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            surfaces.push(Object.freeze({ ownerExtensionId, canvasId, surfaceId, pipe }));
+        } catch {}
+    }
+    return Object.freeze(surfaces);
+}
+
+function normalizeNativeIdentityAssertions(values) {
+    if (!Array.isArray(values)) return Object.freeze([]);
+    const assertions = [];
+    const seen = new Set();
+    for (const value of values) {
+        if (!value || typeof value !== "object") continue;
+        const extensionId = ownerRuntimeIdentifier(value.extensionId);
+        const activePath = typeof value.activePath === "string" && value.activePath ? resolve(value.activePath) : undefined;
+        if (!extensionId || !activePath) continue;
+        const key = extensionId + "\0" + activePath.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        assertions.push(Object.freeze({
+            extensionId,
+            activePath,
+            manifestHash: typeof value.manifestHash === "string" ? value.manifestHash : undefined,
+            treeHash: typeof value.treeHash === "string" ? value.treeHash : undefined,
+            sourceType: value.sourceType,
+            sourceValue: value.sourceValue,
+            trustedBuiltin: value.trustedBuiltin === true
+        }));
+    }
+    return Object.freeze(assertions);
+}
+
+function seedModalNativeSurfaces(config) {
+    for (const surface of config?.modalSurfaces ?? []) {
+        modalNativeSurfaces.set(modalNativeSurfaceKey(surface.ownerExtensionId, surface.canvasId, surface.surfaceId), surface);
+    }
+}
+
+function currentModalBrokerConfig() {
+    return typeof modalBrokerConfig !== "undefined" ? modalBrokerConfig : null;
+}
+
+function modalBrokerPipe(surface) {
+    return surface?.pipe ?? currentModalBrokerConfig()?.pipe;
+}
+
+function truncateModalText(value, limit = modalTextLimit) {
+    const text = value === undefined || value === null ? "" : String(value);
+    return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
+}
+
+function modalHasBroker() {
+    const config = currentModalBrokerConfig();
+    seedModalNativeSurfaces(config);
+    return [...modalNativeSurfaces.values()].some((surface) => typeof surface.pipe === "string" && surface.pipe);
+}
+
+function freezeModalValue(value) {
+    if (value === null || typeof value !== "object") return value;
+    if (Array.isArray(value)) return Object.freeze(value.map(freezeModalValue));
+    const result = {};
+    for (const [key, entry] of Object.entries(value)) result[key] = freezeModalValue(entry);
+    return Object.freeze(result);
+}
+
+function modalPublicCopy(value) {
+    return freezeModalValue(value === undefined ? undefined : safeJSONParse(safeJSONStringify(value)));
+}
+
+function validateModalId(id, noun = "modal canvas") {
+    if (typeof id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(id)) {
+        throw new Error(`${noun} requires a stable lowercase id.`);
+    }
+    return id;
+}
+
+function validateModalOwnerExtensionId(ownerExtensionId) {
+    if (ownerExtensionId === undefined || ownerExtensionId === null || ownerExtensionId === "") return undefined;
+    if (typeof ownerExtensionId !== "string" || !/^[a-z0-9][a-z0-9._:-]{0,127}$/.test(ownerExtensionId)) {
+        const error = new Error("ownerExtensionId requires a stable lowercase id.");
+        error.code = "ui.invalidEnvelope";
+        throw error;
+    }
+    return ownerExtensionId;
+}
+
+function modalAuthorizationError(message, details = {}) {
+    const error = new Error(message);
+    error.code = "ui.authorizationDenied";
+    error.details = details;
+    return error;
+}
+
+function assertModalOwner(canvas, callerOwnerExtensionId, operation) {
+    const ownerExtensionId = canvas?.ownerExtensionId;
+    const caller = validateModalOwnerExtensionId(callerOwnerExtensionId);
+    if (ownerExtensionId && caller !== ownerExtensionId) {
+        throw modalAuthorizationError(`Modal canvas '${canvas.id}' ${operation} is owned by another extension.`, {
+            modalId: canvas.id,
+            ownerExtensionId: caller,
+            expectedOwnerExtensionId: ownerExtensionId
+        });
+    }
+}
+
+function validateModalAction(action) {
+    if (!action || typeof action !== "object") throw new Error("Modal actions must be objects.");
+    if (typeof action.name !== "string" || !/^[a-z][a-z0-9._-]{0,63}$/.test(action.name)) {
+        throw new Error("Modal actions require a stable lowercase name.");
+    }
+    if (action.handler !== undefined && typeof action.handler !== "function") {
+        throw new Error(`Modal action '${action.name}' handler must be a function.`);
+    }
+    return Object.freeze({
+        name: action.name,
+        label: truncateModalText(action.label ?? action.name, 64),
+        key: action.key === undefined ? undefined : truncateModalText(action.key, 16),
+        description: action.description === undefined ? undefined : truncateModalText(action.description, 256),
+        handler: action.handler
+    });
+}
+
+function modalActionPublic(action) {
+    return {
+        name: action.name,
+        label: action.label,
+        ...(action.key ? { key: action.key } : {}),
+        ...(action.description ? { description: action.description } : {})
+    };
+}
+
+function modalTextFromValue(value) {
+    if (typeof value === "string") return value;
+    if (Array.isArray(value?.lines)) return value.lines.map((line) => String(line)).join("\n");
+    if (typeof value?.text === "string") return value.text;
+    if (typeof value?.markdown === "string") return value.markdown;
+    if (value && typeof value === "object") return JSON.stringify(value, null, 2);
+    return "";
+}
+
+function normalizeModalFrame(canvas, value, previous = {}) {
+    const frame = typeof value === "string" ? { body: value } : (value && typeof value === "object" ? value : {});
+    const bodyValue = frame.body !== undefined ? frame.body :
+        frame.text !== undefined || frame.markdown !== undefined || frame.lines !== undefined ? frame : previous.body ?? "";
+    const normalized = {
+        id: canvas.id,
+        title: truncateModalText(frame.title ?? previous.title ?? canvas.displayName ?? canvas.id, 256),
+        status: truncateModalText(frame.status ?? previous.status ?? "", 2048),
+        body: truncateModalText(modalTextFromValue(bodyValue)),
+        footer: truncateModalText(frame.footer ?? previous.footer ?? "Esc/q closes · Copilot keeps running in the background", 2048),
+        actions: canvas.actions.map(modalActionPublic)
+    };
+    try {
+        if (typeof afterburnerUI !== "undefined" && typeof afterburnerUI.modalFrameToUIDocument === "function") {
+            normalized.document = afterburnerUI.modalFrameToUIDocument(canvas, normalized, { revision: previous.document?.revision ? previous.document.revision + 1 : 1 });
+        }
+    } catch {}
+    return normalized;
+}
+
+async function sendModalPipeMessage(message, timeoutMs = 5000, surface = null) {
+    const pipe = modalBrokerPipe(surface);
+    if (!pipe) return { ok: false, fallback: true, error: "modal-pipe-unavailable" };
+    return new Promise((resolve) => {
+        let settled = false;
+        let buffered = "";
+        const finish = (response) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            socket.destroy();
+            resolve(response);
+        };
+        const socket = createConnection(pipe);
+        const timeout = setTimeout(() => finish({ ok: false, error: "modal-pipe-timeout" }), timeoutMs);
+        socket.setEncoding("utf8");
+        socket.once("connect", () => socket.write(`${safeJSONStringify(message)}\n`));
+        socket.on("data", (chunk) => {
+            buffered += chunk;
+            const newline = buffered.indexOf("\n");
+            if (newline >= 0) {
+                try { finish(safeJSONParse(buffered.slice(0, newline))); }
+                catch { finish({ ok: false, error: "modal-pipe-invalid-response" }); }
+            }
+        });
+        socket.once("error", (error) => finish({ ok: false, error: error?.code ?? error?.name ?? "modal-pipe-error" }));
+        socket.once("close", () => finish({ ok: false, error: "modal-pipe-closed" }));
+    });
+}
+
+function notifyModalSubscribers(id, event) {
+    const subscribers = modalSubscribers.get(id);
+    if (!subscribers) return;
+    const copy = modalPublicCopy(event);
+    for (const subscriber of subscribers) {
+        try { Promise.resolve(subscriber(copy)).catch(() => {}); }
+        catch {}
+    }
+}
+
+function formatModalFallback(frame) {
+    return [
+        `# ${frame.title}`,
+        frame.status ? `_${frame.status}_` : "",
+        frame.body,
+        frame.footer ? `(${frame.footer})` : ""
+    ].filter(Boolean).join("\n\n");
+}
+
+function recordModalFallback(frame, error) {
+    const fallback = {
+        id: frame.id,
+        text: formatModalFallback(frame),
+        frame: modalPublicCopy(frame),
+        error,
+        updatedAt: new Date().toISOString()
+    };
+    modalFallbacks.set(frame.id, fallback);
+    return fallback;
+}
+
+function getModalFallback(id, options = {}) {
+    id = validateModalId(id);
+    const canvas = modalCanvases.get(id);
+    if (canvas) assertModalOwner(canvas, options.ownerExtensionId, "fallback");
+    return modalPublicCopy(modalFallbacks.get(id) ?? null);
+}
+
+function modalGenerationMessage(generation) {
+    return Number.isSafeInteger(generation) ? { generation } : {};
+}
+
+function modalNativeSurfaceKey(ownerExtensionId, canvasId, surfaceId) {
+    return String(ownerExtensionId) + ":" + String(canvasId) + ":" + String(surfaceId);
+}
+
+function modalWireIdentity(surface) {
+    return {
+        ownerExtensionId: surface.ownerExtensionId,
+        canvasId: surface.canvasId,
+        surfaceId: surface.surfaceId
+    };
+}
+
+async function ensureModalNativeSurface(canvas) {
+    const config = currentModalBrokerConfig();
+    seedModalNativeSurfaces(config);
+    if (!canvas?.ownerExtensionId) return { ok: false, fallback: true, error: "modal-owner-required" };
+    const key = modalNativeSurfaceKey(canvas.ownerExtensionId, canvas.canvasId, canvas.surfaceId);
+    const cached = modalNativeSurfaces.get(key);
+    if (cached?.pipe) return { ok: true, surface: cached };
+    return { ok: false, fallback: true, error: "modal-surface-unavailable" };
+}
+
+function modalActionWireProjection(action) {
+    return {
+        name: action.name,
+        label: action.label,
+        ...(action.key ? { key: action.key } : {}),
+        ...(action.description ? { description: action.description } : {})
+    };
+}
+
+function modalFrameWireProjection(operation, frame, generation, surface) {
+    return {
+        operation,
+        id: surface.surfaceId,
+        ...modalWireIdentity(surface),
+        ...modalGenerationMessage(generation),
+        title: frame.title ?? "",
+        status: frame.status ?? "",
+        body: frame.body ?? "",
+        footer: frame.footer ?? "",
+        actions: Array.isArray(frame.actions) ? frame.actions.map(modalActionWireProjection) : []
+    };
+}
+
+function modalControlWireProjection(operation, generation, surface) {
+    return { operation, id: surface.surfaceId, ...modalWireIdentity(surface), ...modalGenerationMessage(generation) };
+}
+
+async function presentModalFrame(type, frame, options = {}) {
+    const surfaceResult = await ensureModalNativeSurface(options.canvas);
+    if (!surfaceResult.ok) {
+        modalDiagnostics.fallbackCount++;
+        if (!surfaceResult.fallback) modalDiagnostics.pipeFailures++;
+        modalDiagnostics.lastFailureKind = surfaceResult.error ?? "modal-unavailable";
+        const fallback = recordModalFallback(frame, modalDiagnostics.lastFailureKind);
+        return { ok: false, fallback: true, text: fallback.text, error: fallback.error };
+    }
+    const response = await sendModalPipeMessage(modalFrameWireProjection(type, frame, options.generation, surfaceResult.surface), 5000, surfaceResult.surface);
+    if (!response?.ok) {
+        modalDiagnostics.fallbackCount++;
+        if (!response?.fallback) modalDiagnostics.pipeFailures++;
+        modalDiagnostics.lastFailureKind = response?.error ?? "modal-unavailable";
+        const fallback = recordModalFallback(frame, modalDiagnostics.lastFailureKind);
+        return { ok: false, fallback: true, text: fallback.text, error: fallback.error };
+    }
+    modalFallbacks.delete(frame.id);
+    return { ok: true };
+}
+
+function normalizeModalEventType(type) {
+    const normalized = typeof type === "string" ? type.toLowerCase().replace(/_/g, "-") : "";
+    if (["action", "modal-action", "ui.modal-canvas.action"].includes(normalized)) return "action";
+    if (["close", "modal-close", "ui.modal-canvas.close"].includes(normalized)) return "close";
+    if (["closed", "modal-closed", "ui.modal-canvas.closed"].includes(normalized)) return "closed";
+    return normalized;
+}
+
+function modalEventActionName(event) {
+    return [event?.actionName, event?.action, event?.name].find((value) => typeof value === "string") ?? "";
+}
+
+function modalEventGeneration(event) {
+    const value = event?.generation;
+    if (value === undefined || value === null) return null;
+    const generation = Number(value);
+    return Number.isSafeInteger(generation) ? generation : NaN;
+}
+
+function modalEventMatchesGeneration(event, generation) {
+    const eventGeneration = modalEventGeneration(event);
+    if (!Number.isSafeInteger(generation)) return eventGeneration === null;
+    return eventGeneration === generation;
+}
+
+async function drainModalClosedEvent(id, generation, canvas) {
+    const surfaceResult = await ensureModalNativeSurface(canvas);
+    if (!surfaceResult.ok) return false;
+    const response = await sendModalPipeMessage(modalControlWireProjection("poll", generation, surfaceResult.surface), 250, surfaceResult.surface);
+    return response?.ok === true &&
+        response.event?.id === id &&
+        normalizeModalEventType(response.event?.type) === "closed" &&
+        modalEventMatchesGeneration(response.event, generation);
+}
+
+async function closeModalCanvasInstance(id, options = {}) {
+    const { sendHostClose = true, drainClosed = true, reason = "api", generation: expectedGeneration, ownerExtensionId } = options;
+    const instance = modalInstances.get(id);
+    const canvas = modalCanvases.get(id) ?? instance?.canvas;
+    if (canvas) assertModalOwner(canvas, ownerExtensionId, "close");
+    if (!instance || (expectedGeneration !== undefined && instance.generation !== expectedGeneration)) {
+        return { ok: true, fallback: !modalHasBroker(), alreadyClosed: true };
+    }
+    const hostGeneration = instance.generation;
+    const closingGeneration = ++modalInstanceSequence;
+    modalInstances.set(id, { ...instance, generation: closingGeneration, closing: true });
+    if (modalInstances.get(id)?.generation === closingGeneration) {
+        modalInstances.delete(id);
+        modalFallbacks.delete(id);
+        modalDiagnostics.active = modalInstances.size;
+    }
+    if (instance.unsubscribe) {
+        try { await instance.unsubscribe(); } catch {}
+    }
+    let response = { ok: true, fallback: false };
+    if (sendHostClose && !instance.fallback) {
+        const surfaceResult = await ensureModalNativeSurface(canvas);
+        response = surfaceResult.ok
+            ? await sendModalPipeMessage(modalControlWireProjection("close", hostGeneration, surfaceResult.surface), 5000, surfaceResult.surface)
+            : { ok: false, fallback: surfaceResult.fallback === true, error: surfaceResult.error };
+        if (!response?.ok && !response?.fallback) {
+            modalDiagnostics.pipeFailures++;
+            modalDiagnostics.lastFailureKind = response?.error ?? "modal-close-failed";
+        } else if (response?.ok && drainClosed) {
+            await drainModalClosedEvent(id, hostGeneration, canvas);
+        }
+    }
+    modalDiagnostics.closed++;
+    modalDiagnostics.active = modalInstances.size;
+    emitRuntimeEvent("ui.modal_canvas.closed", { modalId: id, fallback: instance.fallback === true, reason, generation: hostGeneration });
+    notifyModalSubscribers(id, { type: "closed", reason, generation: hostGeneration });
+    return {
+        ok: response?.ok === true || instance.fallback === true,
+        fallback: response?.fallback === true || instance.fallback === true
+    };
+}
+
+async function pollModalCanvasEvents(id, canvas, generation) {
+    for (;;) {
+        const instance = modalInstances.get(id);
+        if (!instance || instance.generation !== generation || instance.fallback || instance.closing) return;
+        const surfaceResult = await ensureModalNativeSurface(canvas);
+        if (!surfaceResult.ok) {
+            modalDiagnostics.pipeFailures++;
+            modalDiagnostics.lastFailureKind = surfaceResult.error ?? "modal-poll-failed";
+            return;
+        }
+        const response = await sendModalPipeMessage(modalControlWireProjection("poll", generation, surfaceResult.surface), 35000, surfaceResult.surface);
+        const current = modalInstances.get(id);
+        if (!current || current.generation !== generation || current.fallback || current.closing) return;
+        if (!response?.ok) {
+            if (response?.error !== "modal-pipe-timeout") {
+                modalDiagnostics.pipeFailures++;
+                modalDiagnostics.lastFailureKind = response?.error ?? "modal-poll-failed";
+                return;
+            }
+            continue;
+        }
+        const event = response.event;
+        if (!event) continue;
+        if (event.id !== id || !modalEventMatchesGeneration(event, generation)) continue;
+        const eventType = normalizeModalEventType(event.type);
+        if (eventType === "closed") {
+            await closeModalCanvasInstance(id, { sendHostClose: false, drainClosed: false, reason: "host", generation, ownerExtensionId: canvas.ownerExtensionId });
+            return;
+        }
+        if (eventType === "close") {
+            await closeModalCanvasInstance(id, { sendHostClose: false, drainClosed: false, reason: event.key === "escape" ? "escape" : "host-request", generation, ownerExtensionId: canvas.ownerExtensionId });
+            return;
+        }
+        if (eventType === "action") {
+            const actionName = modalEventActionName(event);
+            const action = canvas.actions.find(candidate => candidate.name === actionName);
+            if (!action) continue;
+            try { await invokeModalAction(id, action.name, { source: "terminal", key: event.key }, { generation, ownerExtensionId: canvas.ownerExtensionId }); }
+            catch (error) {
+                modalDiagnostics.lastFailureKind = error?.name ?? "modal-action-failed";
+            }
+        }
+    }
+}
+
+function startModalEventPolling(id, canvas, generation) {
+    const instance = modalInstances.get(id);
+    if (!instance || instance.generation !== generation || instance.fallback) return;
+    const pollPromise = pollModalCanvasEvents(id, canvas, generation).catch((error) => {
+        modalDiagnostics.pipeFailures++;
+        modalDiagnostics.lastFailureKind = error?.name ?? "modal-poll-failed";
+    });
+    modalInstances.set(id, { ...instance, pollPromise });
+}
+
+function modalControls(id, generation, ownerExtensionId) {
+    const ownerOptions = ownerExtensionId ? { ownerExtensionId } : {};
+    return Object.freeze({
+        update: (next) => updateModalCanvas(id, next, { generation, ...ownerOptions }),
+        close: () => closeModalCanvas(id, { generation, ...ownerOptions }),
+        invoke: (name, input) => invokeModalAction(id, name, input, { generation, ...ownerOptions }),
+        fallback: () => getModalFallback(id, ownerOptions),
+        diagnostics: () => getModalDiagnostics(ownerOptions)
+    });
+}
+
+async function openModalCanvas(id, input = {}, options = {}) {
+    id = validateModalId(id);
+    const canvas = modalCanvases.get(id);
+    if (!canvas) throw new Error(`Unknown modal canvas '${id}'.`);
+    assertModalOwner(canvas, options.ownerExtensionId, "open");
+    const opened = typeof canvas.open === "function" ? await canvas.open(input) : {};
+    const rendered = typeof canvas.render === "function" ? await canvas.render({ input, state: opened }) : opened;
+    const frame = normalizeModalFrame(canvas, rendered);
+    const previous = modalInstances.get(id);
+    try { await previous?.unsubscribe?.(); } catch {}
+    const generation = ++modalInstanceSequence;
+    modalInstances.set(id, { frame, canvas, openedAt: new Date().toISOString(), fallback: false, generation });
+    let unsubscribe;
+    try {
+        if (typeof canvas.subscribe === "function") {
+            unsubscribe = await canvas.subscribe(modalControls(id, generation, canvas.ownerExtensionId));
+            if (unsubscribe !== undefined && typeof unsubscribe !== "function") {
+                throw new Error(`Modal canvas '${id}' subscribe() must return a function or undefined.`);
+            }
+        }
+    } catch (error) {
+        const current = modalInstances.get(id);
+        if (current?.generation === generation) modalInstances.delete(id);
+        modalDiagnostics.active = modalInstances.size;
+        throw error;
+    }
+    if (unsubscribe) modalInstances.set(id, { ...(modalInstances.get(id) ?? {}), unsubscribe });
+    const presentation = await presentModalFrame("open", frame, { generation, canvas });
+    const current = modalInstances.get(id);
+    if (current?.generation === generation) {
+        modalInstances.set(id, { ...current, frame, fallback: presentation.fallback === true });
+        if (presentation.ok === true && presentation.fallback !== true) startModalEventPolling(id, canvas, generation);
+    }
+    modalDiagnostics.opened++;
+    modalDiagnostics.active = modalInstances.size;
+    emitRuntimeEvent("ui.modal_canvas.opened", { modalId: id, fallback: presentation.fallback === true, actionCount: canvas.actions.length, generation });
+    notifyModalSubscribers(id, { type: "opened", frame, generation });
+    return { ...presentation, frame: modalPublicCopy(frame) };
+}
+
+async function updateModalCanvas(id, next = {}, options = {}) {
+    id = validateModalId(id);
+    const canvas = modalCanvases.get(id);
+    if (!canvas) throw new Error(`Unknown modal canvas '${id}'.`);
+    assertModalOwner(canvas, options.ownerExtensionId, "update");
+    const instance = modalInstances.get(id);
+    if (!instance || (options.generation !== undefined && instance.generation !== options.generation)) {
+        throw new Error(`Modal canvas '${id}' is not open.`);
+    }
+    const generation = instance.generation;
+    const rendered = typeof canvas.render === "function" ? await canvas.render({ input: next, state: next }) : next;
+    const frame = normalizeModalFrame(canvas, rendered, instance.frame ?? {});
+    const presentation = await presentModalFrame("update", frame, { generation, canvas });
+    const current = modalInstances.get(id);
+    if (current?.generation === generation) {
+        modalInstances.set(id, { ...current, frame, fallback: current.fallback === true || presentation.fallback === true });
+        modalDiagnostics.updated++;
+        modalDiagnostics.active = modalInstances.size;
+        emitRuntimeEvent("ui.modal_canvas.updated", { modalId: id, fallback: presentation.fallback === true, generation });
+        notifyModalSubscribers(id, { type: "updated", frame, generation });
+    }
+    return { ...presentation, frame: modalPublicCopy(frame) };
+}
+
+async function closeModalCanvas(id, options = {}) {
+    id = validateModalId(id);
+    return closeModalCanvasInstance(id, options);
+}
+
+async function invokeModalAction(id, name, input = {}, options = {}) {
+    id = validateModalId(id);
+    if (typeof name !== "string") throw new Error("Modal action name is required.");
+    const canvas = modalCanvases.get(id);
+    if (!canvas) throw new Error(`Unknown modal canvas '${id}'.`);
+    assertModalOwner(canvas, options.ownerExtensionId, "action");
+    const instance = modalInstances.get(id);
+    if (options.generation !== undefined && instance?.generation !== options.generation) {
+        return { ok: false, stale: true };
+    }
+    const action = canvas.actions.find((candidate) => candidate.name === name);
+    if (!action) throw new Error(`Unknown modal action '${name}' for '${id}'.`);
+    modalDiagnostics.actionInvocations++;
+    emitRuntimeEvent("ui.modal_canvas.action_started", { modalId: id, actionName: name, generation: options.generation });
+    try {
+        const result = action.handler ? await action.handler(input, modalControls(id, options.generation, canvas.ownerExtensionId)) : null;
+        emitRuntimeEvent("ui.modal_canvas.action_completed", { modalId: id, actionName: name, generation: options.generation });
+        return result;
+    } catch (error) {
+        emitRuntimeEvent("ui.modal_canvas.action_failed", { modalId: id, actionName: name, failureKind: error?.name ?? "Error", generation: options.generation });
+        throw error;
+    }
+}
+
+function subscribeModalCanvas(id, listener, options = {}) {
+    id = validateModalId(id);
+    const canvas = modalCanvases.get(id);
+    if (!canvas) throw new Error(`Unknown modal canvas '${id}'.`);
+    assertModalOwner(canvas, options.ownerExtensionId, "subscription");
+    if (typeof listener !== "function") throw new Error("Modal canvas subscriber must be a function.");
+    const subscribers = modalSubscribers.get(id) ?? new Set();
+    if (subscribers.size >= modalSubscriptionLimit) {
+        modalDiagnostics.quotaFailures++;
+        throw new Error(`Modal canvas '${id}' exceeded the subscriber quota.`);
+    }
+    subscribers.add(listener);
+    modalSubscribers.set(id, subscribers);
+    modalDiagnostics.subscriptionCount++;
+    return () => {
+        if (subscribers.delete(listener)) modalDiagnostics.subscriptionCount--;
+        if (subscribers.size === 0) modalSubscribers.delete(id);
+    };
+}
+
+async function disposeModalCanvas(id, options = {}) {
+    id = validateModalId(id);
+    const canvas = modalCanvases.get(id);
+    if (canvas) assertModalOwner(canvas, options.ownerExtensionId, "dispose");
+    await closeModalCanvas(id, options);
+    modalCanvases.delete(id);
+    modalDiagnostics.registered = modalCanvases.size;
+    modalDiagnostics.active = modalInstances.size;
+    emitRuntimeEvent("ui.modal_canvas.disposed", { modalId: id });
+}
+
+function registerModalCanvas(definition, options = {}) {
+    if (!definition || typeof definition !== "object") throw new Error("A modal canvas definition is required.");
+    if (modalCanvases.size >= modalCanvasLimit) {
+        modalDiagnostics.quotaFailures++;
+        throw new Error("Modal canvas registration quota exceeded.");
+    }
+    const id = validateModalId(definition.id);
+    const ownerExtensionId = validateModalOwnerExtensionId(options.ownerExtensionId ?? definition.ownerExtensionId);
+    if (id === modalBlackBoxLiveSurfaceId && ownerExtensionId !== modalBlackBoxOwnerExtensionId) {
+        throw modalAuthorizationError(`Modal canvas '${id}' is reserved for Black Box.`, { ownerExtensionId });
+    }
+    const canvasId = validateModalId(definition.canvasId ?? id, "modal canvas id");
+    const surfaceId = validateModalId(definition.surfaceId ?? id, "modal surface id");
+    if (surfaceId !== id) throw new Error("Modal canvas id must match surfaceId for legacy handle registration.");
+    const existing = modalCanvases.get(id);
+    if (existing) {
+        assertModalOwner(existing, ownerExtensionId, "registration");
+        throw new Error(`Modal canvas '${id}' is already registered.`);
+    }
+    const actions = (definition.actions ?? []).map(validateModalAction);
+    if (actions.length > modalActionLimit) {
+        modalDiagnostics.quotaFailures++;
+        throw new Error(`Modal canvas '${id}' exceeded the action quota.`);
+    }
+    const actionNames = new Set();
+    for (const action of actions) {
+        if (actionNames.has(action.name)) throw new Error(`Modal canvas '${id}' has duplicate action '${action.name}'.`);
+        actionNames.add(action.name);
+    }
+    const canvas = Object.freeze({
+        id,
+        ownerExtensionId,
+        canvasId,
+        surfaceId,
+        displayName: truncateModalText(definition.displayName ?? id, 128),
+        description: truncateModalText(definition.description ?? "", 512),
+        open: definition.open,
+        render: definition.render,
+        subscribe: definition.subscribe,
+        actions
+    });
+    if (canvas.open !== undefined && typeof canvas.open !== "function") throw new Error(`Modal canvas '${id}' open must be a function.`);
+    if (canvas.render !== undefined && typeof canvas.render !== "function") throw new Error(`Modal canvas '${id}' render must be a function.`);
+    if (canvas.subscribe !== undefined && typeof canvas.subscribe !== "function") throw new Error(`Modal canvas '${id}' subscribe must be a function.`);
+    modalCanvases.set(id, canvas);
+    modalDiagnostics.registered = modalCanvases.size;
+    emitRuntimeEvent("ui.modal_canvas.registered", { modalId: id, actionCount: actions.length, hasBroker: modalHasBroker() });
+    const ownerOptions = ownerExtensionId ? { ownerExtensionId } : {};
+    return Object.freeze({
+        id,
+        ownerExtensionId,
+        open: (input) => openModalCanvas(id, input, ownerOptions),
+        update: (next) => updateModalCanvas(id, next, ownerOptions),
+        close: () => closeModalCanvas(id, ownerOptions),
+        invoke: (name, input) => invokeModalAction(id, name, input, ownerOptions),
+        subscribe: (listener) => subscribeModalCanvas(id, listener, ownerOptions),
+        fallback: () => getModalFallback(id, ownerOptions),
+        diagnostics: () => getModalDiagnostics(ownerOptions),
+        dispose: () => disposeModalCanvas(id, ownerOptions)
+    });
+}
+
+function getModalDiagnostics(options = {}) {
+    const ownerExtensionId = validateModalOwnerExtensionId(options.ownerExtensionId);
+    const canvases = [...modalCanvases.values()].filter((canvas) => !ownerExtensionId || canvas.ownerExtensionId === ownerExtensionId);
+    return immutableRuntimeCopy({
+        schemaVersion: 1,
+        hasBroker: modalHasBroker(),
+        registered: modalDiagnostics.registered,
+        active: modalDiagnostics.active,
+        opened: modalDiagnostics.opened,
+        updated: modalDiagnostics.updated,
+        closed: modalDiagnostics.closed,
+        actionInvocations: modalDiagnostics.actionInvocations,
+        subscriptionCount: modalDiagnostics.subscriptionCount,
+        fallbackCount: modalDiagnostics.fallbackCount,
+        pipeFailures: modalDiagnostics.pipeFailures,
+        quotaFailures: modalDiagnostics.quotaFailures,
+        lastFailureKind: modalDiagnostics.lastFailureKind,
+        canvases: canvases.map((canvas) => ({
+            id: canvas.id,
+            ownerExtensionId: canvas.ownerExtensionId,
+            canvasId: canvas.canvasId,
+            surfaceId: canvas.surfaceId,
+            displayName: canvas.displayName,
+            actionCount: canvas.actions.length,
+            active: modalInstances.has(canvas.id),
+            fallback: modalInstances.get(canvas.id)?.fallback === true,
+            generation: modalInstances.get(canvas.id)?.generation ?? null
+        }))
+    });
+}
 function disposeRuntimeObservers() {
     for (const observer of [...runtimeObservers.values()]) disposeRuntimeObserver(observer);
 }
@@ -1271,18 +2019,215 @@ function parseJsonc(text) {
             output += current;
         }
     }
-    return JSON.parse(output.replace(/,\s*([}\]])/g, "$1"));
+    return safeJSONParse(output.replace(/,\s*([}\]])/g, "$1"));
 }
 
-function runtimeExtensionApi(pluginRoot) {
+function runtimeHostGrantResolver(context) {
+    return (request) => {
+        const resolver = globalThis.__afterburnerUiGrantResolver ?? globalThis.__afterburnerRuntimeGrantResolver;
+        if (typeof resolver !== "function") return null;
+        return resolver({ ...request, pluginRoot: context.pluginRoot, extensionId: context.extensionId, manifest: context.manifest });
+    };
+}
+
+function ownerRuntimeIdentifier(value) {
+    const text = String(value ?? "extension").toLowerCase();
+    if (/^[a-z0-9][a-z0-9._:-]{0,127}$/.test(text)) return text;
+    return `ext-${createHash("sha256").update(String(value ?? "extension")).digest("hex").slice(0, 20)}`;
+}
+
+function runtimeManifestWithoutBuiltinPrivileges(manifest) {
+    if (!manifest || typeof manifest !== "object") return manifest;
+    const sanitized = { ...manifest, visibility: manifest.visibility === "builtin" ? "private" : manifest.visibility };
+    if (Array.isArray(manifest.capabilities)) {
+        sanitized.capabilities = manifest.capabilities.filter((capability) => !["modal-canvas", "runtime-observer"].includes(capability));
+    }
+    if (manifest.ui && typeof manifest.ui === "object") {
+        sanitized.ui = { ...manifest.ui };
+        if (Array.isArray(manifest.ui.capabilities)) {
+            sanitized.ui.capabilities = manifest.ui.capabilities.filter((capability) => !String(capability).startsWith("ui.observability.black-box"));
+        }
+        delete sanitized.ui.grantPolicy;
+    }
+    return sanitized;
+}
+
+function runtimeExtensionContext(pluginRoot, options = {}) {
+    const rawManifest = options.manifest;
+    const extensionId = ownerRuntimeIdentifier(options.extensionId ?? rawManifest?.id ?? pluginRoot?.split(/[\\/]/).filter(Boolean).at(-1));
+    const baseContext = Object.freeze({
+        pluginRoot,
+        manifest: rawManifest,
+        rawManifest,
+        extensionId,
+        manifestHash: options.manifestHash,
+        packageTreeHash: options.packageTreeHash,
+        registrySource: options.registrySource,
+        nativeIdentityAssertion: options.nativeIdentityAssertion ?? null,
+        nativeTrustedBuiltin: options.nativeIdentityAssertion?.trustedBuiltin === true
+    });
+    const isReservedBuiltin = extensionId === modalBlackBoxOwnerExtensionId || rawManifest?.id === modalBlackBoxOwnerExtensionId;
+    if (!isReservedBuiltin || trustedRuntimeIdentity(baseContext, modalBlackBoxOwnerExtensionId)) return baseContext;
+    return Object.freeze({ ...baseContext, manifest: runtimeManifestWithoutBuiltinPrivileges(rawManifest), untrustedReservedBuiltin: true });
+}
+
+function normalizeRuntimeAuthorizationDecision(decision) {
+    if (decision === undefined || decision === null) return null;
+    if (decision === true || decision === "allow") return { allowed: true };
+    if (decision === false || decision === "deny") return { allowed: false, reason: "grant-denied" };
+    if (typeof decision === "object") {
+        if (decision.allowed === true || decision.granted === true || decision.effect === "allow") return { allowed: true, reason: decision.reason, grantId: decision.grantId ?? decision.id };
+        if (decision.allowed === false || decision.granted === false || decision.effect === "deny") {
+            return { allowed: false, reason: decision.reason ?? decision.code ?? "grant-denied", grantId: decision.grantId ?? decision.id };
+        }
+    }
+    return null;
+}
+
+function manifestDeclaresRuntimeCapability(manifest, capability) {
+    return (Array.isArray(manifest?.capabilities) && manifest.capabilities.includes(capability)) ||
+        (Array.isArray(manifest?.ui?.capabilities) && manifest.ui.capabilities.includes(capability));
+}
+
+function nativeIdentityAssertionFor(extensionId, activePath) {
+    const normalizedId = ownerRuntimeIdentifier(extensionId);
+    const normalizedPath = typeof activePath === "string" && activePath ? resolve(activePath).toLowerCase() : undefined;
+    if (!normalizedId || !normalizedPath || typeof currentModalBrokerConfig !== "function") return null;
+    return (currentModalBrokerConfig()?.verifiedExtensions ?? []).find((entry) =>
+        entry.extensionId === normalizedId &&
+        typeof entry.activePath === "string" && resolve(entry.activePath).toLowerCase() === normalizedPath) ?? null;
+}
+
+function nativeIdentityVerified(context) {
+    const assertion = context.nativeIdentityAssertion;
+    return assertion?.extensionId === context.extensionId &&
+        typeof assertion.activePath === "string" && resolve(assertion.activePath).toLowerCase() === resolve(context.pluginRoot).toLowerCase();
+}
+
+function nativeTrustedBuiltinAssertion(context, expectedId) {
+    const assertion = context.nativeIdentityAssertion;
+    return nativeIdentityVerified(context) && context.nativeTrustedBuiltin === true && assertion?.extensionId === expectedId &&
+        assertion.trustedBuiltin === true && assertion.sourceValue === expectedId &&
+        trustedBuiltinSourceTypes.has(assertion.sourceType) &&
+        typeof assertion.manifestHash === "string" && assertion.manifestHash === context.manifestHash &&
+        typeof assertion.treeHash === "string" && assertion.treeHash === context.packageTreeHash;
+}
+
+function runtimeObserverGrantDecision(context, grantResolver) {
+    const request = {
+        operation: "runtimeObserver",
+        ownerExtensionId: context.extensionId,
+        capability: "runtime-observer",
+        resource: "afterburner.runtime/events"
+    };
+    if (context.manifest?.id && context.manifest.id !== context.extensionId) {
+        return { allowed: false, reason: "manifest-owner-mismatch" };
+    }
+    if (!manifestDeclaresRuntimeCapability(context.manifest, "runtime-observer")) {
+        return { allowed: false, reason: "capability-not-declared" };
+    }
+    if (!nativeIdentityVerified(context)) {
+        return { allowed: false, reason: "native-identity-unverified" };
+    }
+    const hostDecision = normalizeRuntimeAuthorizationDecision(grantResolver?.(request));
+    if (hostDecision?.allowed === false) return hostDecision;
+    return { allowed: true, reason: hostDecision?.reason, grantId: hostDecision?.grantId };
+}
+
+function assertRuntimeObserverGrant(context, grantResolver) {
+    const decision = runtimeObserverGrantDecision(context, grantResolver);
+    if (decision.allowed) return decision;
+    throw modalAuthorizationError("Runtime observer registration was denied by extension policy.", {
+        ownerExtensionId: context.extensionId,
+        capability: "runtime-observer",
+        resource: "afterburner.runtime/events",
+        reason: decision.reason
+    });
+}
+
+function trustedRuntimeIdentity(context, expectedId = context.extensionId) {
+    const manifest = context.rawManifest ?? context.manifest;
+    return context.extensionId === expectedId && manifest?.id === expectedId && manifest?.visibility === "builtin" &&
+        nativeTrustedBuiltinAssertion(context, expectedId);
+}
+
+function ensureLegacyModalGrant(context, id) {
+    const capabilities = new Set(Array.isArray(context.manifest?.capabilities) ? context.manifest.capabilities : []);
+    if (nativeIdentityVerified(context) && (capabilities.has("modal-canvas") || trustedRuntimeIdentity(context, modalBlackBoxOwnerExtensionId))) return;
+    const error = new Error(`Modal canvas '${id}' was denied by UI authorization policy.`);
+    error.code = "ui.authorizationDenied";
+    throw error;
+}
+
+function runtimeExtensionApi(pluginRoot, options = {}) {
+    const context = runtimeExtensionContext(pluginRoot, options);
+    const grantResolver = runtimeHostGrantResolver(context);
+    const uiRuntime = afterburnerUI.createRuntime({ ownerExtensionId: context.extensionId, manifest: context.manifest, grantResolver });
+    const uiCompatibility = afterburnerUI.createModalCanvasCompatibility({ runtime: uiRuntime, ownerExtensionId: context.extensionId, manifest: context.manifest, grantResolver });
+    const bridge = afterburnerUI.createExtensionBridge({ ownerExtensionId: context.extensionId, manifest: context.manifest, grantResolver });
+    const ownerOptions = Object.freeze({ ownerExtensionId: context.extensionId });
+    const runtimeObserverAllowed = runtimeObserverGrantDecision(context, grantResolver).allowed === true;
+    const scopedRegisterRuntimeObserver = (definition) => {
+        assertRuntimeObserverGrant(context, grantResolver);
+        return registerRuntimeObserver(definition, ownerOptions);
+    };
+    const scopedRegisterModalCanvas = (definition) => {
+        ensureLegacyModalGrant(context, definition?.id);
+        if (modalReservedBlackBoxSurfaceIds.has(definition?.id) && !trustedRuntimeIdentity(context, modalBlackBoxOwnerExtensionId)) {
+            const error = new Error(`Modal canvas '${definition.id}' is reserved for Black Box.`);
+            error.code = "ui.authorizationDenied";
+            throw error;
+        }
+        return registerModalCanvas({ ...definition, ownerExtensionId: context.extensionId }, ownerOptions);
+    };
     return {
         runtime,
         pluginRoot,
+        extensionId: context.extensionId,
+        ui: Object.freeze({
+            ...afterburnerUI,
+            runtime: uiRuntime,
+            defineSurface: uiRuntime.defineSurface.bind(uiRuntime),
+            open: (id, input, callOptions = {}) => uiRuntime.open(id, input, { ...callOptions, ...ownerOptions }),
+            close: (id, callOptions = {}) => uiRuntime.close(id, { ...callOptions, ...ownerOptions }),
+            update: (id, next, callOptions = {}) => uiRuntime.update(id, next, { ...callOptions, ...ownerOptions }),
+            patch: (id, patchDoc, callOptions = {}) => uiRuntime.patch(id, patchDoc, { ...callOptions, ...ownerOptions }),
+            invoke: (id, actionId, parameters, callOptions = {}) => uiRuntime.invoke(id, actionId, parameters, { ...callOptions, ...ownerOptions }),
+            subscribe: (id, listener, callOptions = {}) => uiRuntime.subscribe(id, listener, { ...callOptions, ...ownerOptions }),
+            fallback: (id, callOptions = {}) => uiRuntime.fallback(id, { ...callOptions, ...ownerOptions }),
+            diagnostics: () => uiRuntime.diagnostics(ownerOptions),
+            registerModalCanvas: uiCompatibility.registerModalCanvas,
+            registerSurface: bridge.registerSurface,
+            renderSurface: bridge.renderSurface,
+            patchSurface: bridge.patchSurface,
+            closeSurface: bridge.closeSurface,
+            registerObservabilitySink: bridge.registerObservabilitySink,
+            subscribeObservability: bridge.subscribeObservability
+        }),
         registerModelPickerAdapter,
         registerAppSourceTransform,
         registerExternalTaskProvider,
-        registerRuntimeObserver,
-        getRuntimeObserverDiagnostics,
+        ...(runtimeObserverAllowed ? {
+            registerRuntimeObserver: scopedRegisterRuntimeObserver,
+            getRuntimeObserverDiagnostics: () => getRuntimeObserverDiagnostics(ownerOptions)
+        } : {}),
+        registerModalCanvas: scopedRegisterModalCanvas,
+        openModalCanvas: (id, input) => openModalCanvas(id, input, ownerOptions),
+        updateModalCanvas: (id, next) => updateModalCanvas(id, next, ownerOptions),
+        closeModalCanvas: (id) => closeModalCanvas(id, ownerOptions),
+        invokeModalAction: (id, name, input) => invokeModalAction(id, name, input, ownerOptions),
+        subscribeModalCanvas: (id, listener) => subscribeModalCanvas(id, listener, ownerOptions),
+        getModalDiagnostics: () => getModalDiagnostics(ownerOptions),
+        getModalFallback: (id) => getModalFallback(id, ownerOptions),
+        registerSurface: bridge.registerSurface,
+        renderSurface: bridge.renderSurface,
+        patchSurface: bridge.patchSurface,
+        closeSurface: bridge.closeSurface,
+        registerObservabilitySink: bridge.registerObservabilitySink,
+        subscribeObservability: bridge.subscribeObservability,
+        diagnostics: bridge.diagnostics,
+        requestCapabilities: bridge.requestCapabilities,
+        hasCapability: bridge.hasCapability,
         externalTaskSnapshot,
         invokeExternalTask,
         getContextCapabilityOverride: (selectionId) => contextCapabilityOverride(null, selectionId)
@@ -1310,7 +2255,7 @@ async function loadRuntimeExtensions() {
         };
         let afterburnerManifest;
         try {
-            afterburnerManifest = JSON.parse(await readFile(join(plugin.cache_path, "afterburner.json"), "utf8"));
+            afterburnerManifest = safeJSONParse(await readFile(join(plugin.cache_path, "afterburner.json"), "utf8"));
         } catch (error) {
             if (error?.code !== "ENOENT") {
                 emitRuntimeEvent("extension.discovery.failed", {
@@ -1328,7 +2273,7 @@ async function loadRuntimeExtensions() {
             emitRuntimeEvent("extension.activation.started", metadata);
             const module = await import(pathToFileURL(entrypoint).href);
             if (typeof module.activate !== "function") throw new Error("runtime/extension.mjs must export activate().");
-            await module.activate(runtimeExtensionApi(plugin.cache_path));
+            await module.activate(runtimeExtensionApi(plugin.cache_path, { ...metadata, manifest: afterburnerManifest }));
             emitRuntimeEvent("extension.activated", metadata);
             if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
                 process.stderr.write(`[runtime-extension-host] activated '${plugin.name}'\n`);
@@ -1347,7 +2292,7 @@ async function loadRuntimeExtensions() {
         "registry.json");
     let registry;
     try {
-        registry = JSON.parse(await readFile(registryPath, "utf8"));
+        registry = safeJSONParse(await readFile(registryPath, "utf8"));
     } catch (error) {
         if (error?.code !== "ENOENT") {
             emitRuntimeEvent("extension.failed", {
@@ -1368,7 +2313,15 @@ async function loadRuntimeExtensions() {
             extensionKind: "afterburner"
         };
         try {
-            const manifest = JSON.parse(await readFile(join(entry.activePath, "afterburner.json"), "utf8"));
+            const manifestData = await readFile(join(entry.activePath, "afterburner.json"), "utf8");
+            const manifest = safeJSONParse(manifestData);
+            const assertion = nativeIdentityAssertionFor(id, entry.activePath);
+            const identityMetadata = {
+                manifestHash: assertion?.manifestHash,
+                packageTreeHash: assertion?.treeHash,
+                registrySource: assertion ? { type: assertion.sourceType, value: assertion.sourceValue } : undefined,
+                nativeIdentityAssertion: assertion
+            };
             metadata = {
                 ...metadata,
                 version: typeof manifest.version === "string" ? manifest.version : undefined
@@ -1379,7 +2332,7 @@ async function loadRuntimeExtensions() {
             const module = await import(pathToFileURL(entrypoint).href);
             if (typeof module.activate !== "function")
                 throw new Error(`Afterburner extension '${id}' must export activate().`);
-            await module.activate(runtimeExtensionApi(entry.activePath));
+            await module.activate(runtimeExtensionApi(entry.activePath, { ...metadata, ...identityMetadata, manifest }));
             emitRuntimeEvent("extension.activated", metadata);
             if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1")
                 process.stderr.write(`[runtime-extension-host] activated Afterburner extension '${id}'\n`);
@@ -1517,6 +2470,62 @@ if (process.env.COPILOT_RUNTIME_EXTENSION_SELF_TEST === "1") {
         bootstrapReplayCount: observerEvents.filter((event) =>
             event.sequence <= runtimeBootstrapLastSequence).length
     };
+    let modalSubscriberEvents = 0;
+    let modalActionCount = 0;
+    const savedModalPipe = process.env.AFTERBURNER_MODAL_PIPE;
+    const savedModalConfig = modalBrokerConfig;
+    delete process.env.AFTERBURNER_MODAL_PIPE;
+    modalBrokerConfig = Object.freeze({});
+    const fallbackProbe = registerModalCanvas({
+        id: "afterburner-self-test-fallback",
+        displayName: "Afterburner self-test fallback",
+        open: async () => ({ body: "fallback body" })
+    });
+    let updateBeforeOpenRejected = false;
+    try { await fallbackProbe.update({ body: "should not open" }); }
+    catch { updateBeforeOpenRejected = true; }
+    const fallbackOpen = await fallbackProbe.open();
+    const fallbackSnapshot = fallbackProbe.fallback();
+    await fallbackProbe.close();
+    await fallbackProbe.dispose();
+    if (savedModalPipe === undefined) delete process.env.AFTERBURNER_MODAL_PIPE;
+    else process.env.AFTERBURNER_MODAL_PIPE = savedModalPipe;
+    modalBrokerConfig = savedModalConfig;
+    const brokerAvailable = modalHasBroker();
+    const selfTestOwnerOptions = { ownerExtensionId: "afterburner-self-test" };
+    const modalHandle = registerModalCanvas({
+        id: "afterburner-self-test-modal",
+        displayName: "Afterburner self-test modal",
+        actions: [{
+            name: "refresh",
+            label: "Refresh",
+            handler: async (_input, controls) => {
+                modalActionCount++;
+                await controls.update({ body: "updated from action" });
+                return { ok: true };
+            }
+        }],
+        open: async () => ({ body: "opened" })
+    }, selfTestOwnerOptions);
+    const unsubscribeModal = modalHandle.subscribe(() => { modalSubscriberEvents++; });
+    const modalOpen = await modalHandle.open();
+    const modalUpdate = await modalHandle.update({ body: "updated" });
+    const modalAction = await modalHandle.invoke("refresh", {});
+    const modalClose = await modalHandle.close();
+    unsubscribeModal();
+    const modal = {
+        fallbackAPIOK: fallbackOpen.fallback === true && typeof fallbackOpen.text === "string" &&
+            fallbackOpen.text.includes("fallback body") && fallbackSnapshot?.text === fallbackOpen.text,
+        brokerExpected: brokerAvailable,
+        brokerTransportOK: brokerAvailable && modalOpen.ok === true && modalUpdate.ok === true &&
+            modalClose.ok === true && modalOpen.fallback !== true && modalUpdate.fallback !== true,
+        updateBeforeOpenRejected,
+        openFallback: modalOpen.fallback === true,
+        actionOK: modalAction?.ok === true && modalActionCount === 1,
+        subscriberEvents: modalSubscriberEvents,
+        diagnostics: getModalDiagnostics()
+    };
+    await modalHandle.dispose();
     unregisterBackpressureObserver();
     unregisterCopyObserver();
     unregisterFailingObserver();
@@ -1538,13 +2547,23 @@ if (process.env.COPILOT_RUNTIME_EXTENSION_SELF_TEST === "1") {
             probe: observerProbe,
             disposedSelfTestObserver,
             disposeCount: observerDisposeCount
-        }
+        },
+        modal
     }, null, 2)}\n`);
     process.exit(0);
-}globalThis.__copilotRuntimeAddon__ = {
-    addon: runtime,
-    processStateInitialized: false,
-    registerRuntimeObserver,
-    getRuntimeObserverDiagnostics
-};
+}
+
+Object.defineProperty(globalThis, "__copilotRuntimeAddon__", {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: {
+        addon: runtime,
+        processStateInitialized: false,
+        diagnostics: Object.freeze({
+            getRuntimeObserverDiagnostics: () => getRuntimeObserverDiagnostics(),
+            getModalDiagnostics: () => getModalDiagnostics()
+        })
+    }
+});
 await import(pathToFileURL(await transformedAppPath()).href);

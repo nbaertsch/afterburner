@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "afterburner-black-box",
-  "description": "Session commands and canvas for the built-in Afterburner Black Box timeline.",
+  "description": "Session commands, legacy canvas, and enterprise @afterburner/ui surface for the built-in Black Box timeline.",
   "version": "0.1.0",
   "author": {
     "name": "Afterburner"

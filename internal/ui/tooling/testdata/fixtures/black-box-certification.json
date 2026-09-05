@@ -1,0 +1,61 @@
+{
+  "name": "black-box-certification",
+  "description": "Black Box public-contract certification fixture. It references only metadata-only afterburner.ui observability contracts.",
+  "tree": {
+    "root": {
+      "id": "black-box-cert-root",
+      "kind": "application",
+      "props": { "title": "Black Box Certification" },
+      "children": [
+        {
+          "id": "metadata-panel",
+          "kind": "panel",
+          "props": { "title": "Metadata-only Observability" },
+          "children": [
+            {
+              "id": "privacy",
+              "kind": "text",
+              "props": { "value": "Prompts, responses, tool arguments, and source bodies are excluded." }
+            },
+            {
+              "id": "events",
+              "kind": "table",
+              "props": {
+                "columns": [
+                  { "id": "eventType", "title": "Event Type" },
+                  { "id": "severity", "title": "Severity" },
+                  { "id": "durationMs", "title": "Duration" }
+                ],
+                "rows": [
+                  {
+                    "id": "event-1",
+                    "cells": {
+                      "eventType": "ui.observation",
+                      "severity": { "display": { "kind": "badge", "props": { "label": "info" } }, "plain": "info" },
+                      "durationMs": { "value": 12, "plain": "12 ms" }
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "retention",
+              "kind": "progress",
+              "props": { "label": "Retention policy", "value": 100, "min": 0, "max": 100 }
+            },
+            {
+              "id": "export",
+              "kind": "button",
+              "props": { "label": "Export sanitized bundle", "actionId": "black-box.export" },
+              "actionBindings": { "press": "black-box.export" }
+            }
+          ]
+        }
+      ]
+    },
+    "revision": 1,
+    "surfaceId": "fixture-black-box",
+    "themeId": "afterburner.highContrast",
+    "capabilities": ["ui.observability.black-box.sink", "ui.accessibility.inspect"]
+  }
+}

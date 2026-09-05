@@ -34,7 +34,12 @@ jobs:
             throw "Embedded built-in archives are stale. Run 'go generate ./internal/assets'."
           }
       - run: go test ./...
-      - run: go vet ./...
+      # -unsafeptr=false: internal/terminal/conpty_windows.go passes the HPCON
+      # handle by value to UpdateProcThreadAttribute per Microsoft's documented
+      # PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE contract; go vet's generic
+      # unsafe.Pointer(uintptr) heuristic flags this known-safe pattern with
+      # no per-line suppression available (golang/go#50134).
+      - run: go vet -unsafeptr=false ./...
       - run: npm test
       - name: Validate native ConPTY signal forwarding
         shell: pwsh
@@ -43,6 +48,9 @@ jobs:
           go build -o artifacts/afterburn.exe ./cmd/afterburn
           go build -o artifacts/fakecopilot.exe ./internal/testutil/fakecopilot
           node tests/native-signal-conpty.mjs artifacts/afterburn.exe artifacts/fakecopilot.exe
+      - name: Validate native modal ConPTY broker
+        shell: pwsh
+        run: node tests/native-modal-conpty.mjs artifacts/afterburn.exe artifacts/fakecopilot.exe
       - name: Build Windows binaries
         shell: pwsh
         run: |
