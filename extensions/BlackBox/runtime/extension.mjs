@@ -201,6 +201,22 @@ export async function activate(api = {}) {
             return null;
         });
         const modal = registerLiveModal(api, service);
+        let activationTimer = null;
+        const pollActivationRequests = async () => {
+            if (!modal) return;
+            let requests = [];
+            try { requests = await service.consumeModalOpenRequests(); }
+            catch { return; }
+            for (const request of requests) {
+                if (request.surfaceId !== "afterburner-black-box-live") continue;
+                await modal.open(request.input ?? {}).catch(() => isolatedWarning("modal-canvas-open-failed"));
+            }
+        };
+        if (modal) {
+            activationTimer = setInterval(pollActivationRequests, 500);
+            activationTimer.unref?.();
+            await pollActivationRequests();
+        }
         if (enterprise && process.env.AFTERBURNER_BLACK_BOX_OPEN_SURFACE_ON_START === "1") {
             await enterprise.open({}).catch(() => isolatedWarning("enterprise-surface-open-failed"));
         } else if (modal && process.env.AFTERBURNER_BLACK_BOX_OPEN_MODAL_ON_START === "1") {
@@ -221,6 +237,7 @@ export async function activate(api = {}) {
                     if (typeof observability === "function") await observability();
                     else if (typeof observability?.dispose === "function") await observability.dispose();
                 } catch {}
+                try { if (activationTimer) clearInterval(activationTimer); } catch {}
                 try { await enterprise?.dispose?.(); } catch {}
                 try { await modal?.close?.(); } catch {}
                 try { modal?.dispose?.(); } catch {}

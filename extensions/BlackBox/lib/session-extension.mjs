@@ -186,8 +186,12 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
         catch { await session?.log("Black Box operation failed without affecting the session."); }
     };
     const openRuntimeModal = async () => {
+        try {
+            const queued = await service.requestModalOpen({ surfaceId: "afterburner-black-box-live", input: {} });
+            if (queued?.ok === true) return { opened: true, queued: true };
+        } catch {}
         if (typeof openModalCanvas !== "function") {
-            return { opened: false, reason: "modal open API is unavailable in this session" };
+            return { opened: false, reason: "modal activation queue and canvas API are unavailable in this session" };
         }
         try {
             const result = await openModalCanvas("afterburner-black-box", {});

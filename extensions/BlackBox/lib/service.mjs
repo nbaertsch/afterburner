@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TimelineAnalytics } from "./analytics.mjs";
 import { loadBlackBoxConfig, resolveDataRoot, resolveNativeEventsPath } from "./config.mjs";
@@ -156,6 +156,7 @@ export async function startBlackBoxService(options = {}) {
         if (options.startTailer !== false) tailer.start();
     }
 
+    const activationPath = join(root, "state", "modal-activation.jsonl");
     const service = {
         root,
         config,
@@ -221,9 +222,34 @@ export async function startBlackBoxService(options = {}) {
             const kinds = Array.isArray(input.kinds) ? new Set(input.kinds) : null;
             return store.readRecent(limit, record => !kinds || kinds.has(record.kind));
         },
+        async requestModalOpen(input = {}) {
+            await mkdir(join(root, "state"), { recursive: true });
+            const request = {
+                schemaVersion: 1,
+                requestId: randomBytes(12).toString("hex"),
+                surfaceId: String(input.surfaceId ?? "afterburner-black-box-live"),
+                createdAt: new Date().toISOString(),
+                input: input.input && typeof input.input === "object" ? input.input : {}
+            };
+            await writeFile(activationPath, `${JSON.stringify(request)}\n`, { flag: "a" });
+            return { ok: true, requestId: request.requestId, surfaceId: request.surfaceId };
+        },
+        async consumeModalOpenRequests() {
+            let body = "";
+            try { body = await readFile(activationPath, "utf8"); }
+            catch (error) {
+                if (error?.code === "ENOENT") return [];
+                throw error;
+            }
+            try { await unlink(activationPath); } catch {}
+            return body.split(/\r?\n/).filter(Boolean).map(line => {
+                try { return JSON.parse(line); }
+                catch { return null; }
+            }).filter(request => request?.schemaVersion === 1 && typeof request.surfaceId === "string");
+        },
         async exportBundle(input = {}) {
             await store.flush();
-            return exportSanitizedBundle({
+            return exportSanitizedBundle({ 
                 root,
                 store,
                 maxRecords: safeLimit(input.maxRecords, config.export.maxRecords, config.export.maxRecords),
