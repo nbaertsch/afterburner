@@ -184,11 +184,15 @@ test("session registration renders the visible panel without canvas support", as
 });
 
 test("session extension uses the real session canvas RPC to open Black Box", async () => {
+    const wrapper = await readFile(new URL("../com.github.copilot/extensions/BlackBox/extension.mjs", import.meta.url), "utf8");
+    assert.match(wrapper, /extensions\/BlackBox\/extension\.mjs/);
     const source = await readFile(new URL("../extensions/BlackBox/extension.mjs", import.meta.url), "utf8");
-    assert.match(source, /joinedSession\?\.rpc\?\.canvas\?\.open/);
+    assert.match(source, /joinedSession\?\.rpc\?\.canvas/);
+    assert.match(source, /canvasRpc\.list/);
+    assert.match(source, /canvasRpc\.open/);
     assert.doesNotMatch(source, /copilotSdk\.openModalCanvas/);
-    assert.match(source, /extensionId:\s*"black-box"/);
-    assert.match(source, /canvasId/);
+    assert.match(source, /candidate\.extensionId/);
+    assert.match(source, /candidate\.canvasId/);
 });
 
 test("black-box-modal command opens the registered runtime modal when available", async () => {
@@ -200,7 +204,18 @@ test("black-box-modal command opens the registered runtime modal when available"
         }
     });
     await command(registration, "black-box-modal").handler();
-    assert.deepEqual(opens, [{ id: "afterburner-black-box-live", input: {} }]);
+    assert.deepEqual(opens, [{ id: "afterburner-black-box", input: {} }]);
+    assert.deepEqual(logs, ["Black Box live modal opened."]);
+});
+
+test("black-box-modal treats Copilot canvas open snapshots as success", async () => {
+    const { registration, logs } = await captureSessionRegistration({
+        openModalCanvas: async () => ({
+            instanceId: "afterburner-black-box-session",
+            canvasId: "afterburner-black-box"
+        })
+    });
+    await command(registration, "black-box-modal").handler();
     assert.deepEqual(logs, ["Black Box live modal opened."]);
 });
 

@@ -10,11 +10,18 @@ try {
         return joinedSession;
     };
     const openModalCanvas = async (canvasId, input = {}) => {
-        const open = joinedSession?.rpc?.canvas?.open;
-        if (typeof open !== "function") throw new Error("canvas open API unavailable");
-        return open({
-            extensionId: "black-box",
-            canvasId,
+        const canvasRpc = joinedSession?.rpc?.canvas;
+        if (typeof canvasRpc?.open !== "function") throw new Error("canvas open API unavailable");
+        const catalog = typeof canvasRpc.list === "function" ? await canvasRpc.list() : { canvases: [] };
+        const declared = Array.isArray(catalog?.canvases) ? catalog.canvases : [];
+        const candidate = declared.find(canvas => canvas?.canvasId === canvasId || canvas?.id === canvasId);
+        if (!candidate) {
+            throw new Error(`canvas not declared: ${canvasId}; available=${declared.map(canvas =>
+                `${canvas?.extensionId ?? canvas?.providerId ?? "?"}/${canvas?.canvasId ?? canvas?.id ?? "?"}`).join(",")}`);
+        }
+        return canvasRpc.open({
+            extensionId: candidate.extensionId ?? candidate.providerId,
+            canvasId: candidate.canvasId ?? candidate.id,
             instanceId: `${canvasId}-session`,
             input
         });

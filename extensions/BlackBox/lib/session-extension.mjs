@@ -74,7 +74,8 @@ function formatTimeline(records) {
 }
 
 function modalOpenSucceeded(result) {
-    return result === undefined || typeof result === "string" || result?.ok === true || result?.opened === true || result?.frame;
+    return result === undefined || typeof result === "string" || result?.ok === true || result?.opened === true ||
+        result?.frame || (typeof result?.canvasId === "string" && typeof result?.instanceId === "string");
 }
 
 function renderReturnedFrame(frame) {
@@ -189,7 +190,7 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
             return { opened: false, reason: "modal open API is unavailable in this session" };
         }
         try {
-            const result = await openModalCanvas("afterburner-black-box-live", {});
+            const result = await openModalCanvas("afterburner-black-box", {});
             if (modalOpenSucceeded(result)) {
                 return {
                     opened: true,
@@ -198,8 +199,9 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
                 };
             }
             return { opened: false, reason: "the registered runtime modal did not open" };
-        } catch {
-            return { opened: false, reason: "the registered runtime modal is unavailable" };
+        } catch (error) {
+            const detail = String(error?.message ?? error ?? "unknown error").replace(/[\r\n\t]+/g, " ").slice(0, 500);
+            return { opened: false, reason: `the registered runtime modal is unavailable (${detail})` };
         }
     };
 
