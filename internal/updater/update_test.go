@@ -16,11 +16,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/nbaertsch/afterburner/internal/platform"
 )
 
 func TestChecksumAndArchiveExtraction(t *testing.T) {
@@ -307,34 +304,6 @@ func TestStageRequiresManifestSignature(t *testing.T) {
 	}
 }
 
-func TestWaitForOtherAfterburnersReportsBlockingProcess(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("process enumeration is Windows-specific")
-	}
-	homeRoot := filepath.Join(t.TempDir(), "home")
-	blocker := buildNamedFixtureExecutableInDir(t, filepath.Join(homeRoot, "bin"), "afterburn.exe", "blocker", true)
-	command := exec.Command(blocker)
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		_ = command.Process.Kill()
-		_, _ = command.Process.Wait()
-	}()
-	processes, err := platform.RunningExecutables([]string{"afterburn.exe"}, command.Process.Pid+1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	processes = filterManagedProcesses(processes, filepath.Dir(blocker))
-	if len(processes) == 0 {
-		t.Fatalf("expected blocking process PID %d to be detected", command.Process.Pid)
-	}
-	err = waitForOtherAfterburners(command.Process.Pid+1, homeRoot, 0)
-	if err == nil || !strings.Contains(err.Error(), "afterburn.exe PID") || !strings.Contains(err.Error(), strconv.Itoa(command.Process.Pid)) {
-		t.Fatalf("error = %v, pid = %d", err, command.Process.Pid)
-	}
-}
-
 func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("replacement semantics are validated on Windows")
@@ -346,6 +315,27 @@ func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 		source := filepath.Join(root, "update-staging", "fixture", "afterburn.exe")
 		copyFile(t, buildFixtureExecutable(t, "old", true), target)
 		copyFile(t, buildFixtureExecutable(t, "new", true), source)
+		if err := ApplyReplacement(0, source, target, previous); err != nil {
+			t.Fatal(err)
+		}
+		assertVersion(t, target, "new")
+		assertVersion(t, previous, "old")
+	})
+	t.Run("running old executable", func(t *testing.T) {
+		root := t.TempDir()
+		target := filepath.Join(root, "bin", "afterburn.exe")
+		previous := filepath.Join(root, "bin", "afterburn.previous.exe")
+		source := filepath.Join(root, "update-staging", "fixture", "afterburn.exe")
+		copyFile(t, buildFixtureExecutable(t, "old", true), target)
+		copyFile(t, buildFixtureExecutable(t, "new", true), source)
+		running := exec.Command(target, "block")
+		if err := running.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			_ = running.Process.Kill()
+			_, _ = running.Process.Wait()
+		}()
 		if err := ApplyReplacement(0, source, target, previous); err != nil {
 			t.Fatal(err)
 		}

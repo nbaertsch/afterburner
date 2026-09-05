@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/nbaertsch/afterburner/internal/platform"
-	"github.com/nbaertsch/afterburner/internal/registry"
 	"github.com/nbaertsch/afterburner/internal/releasesign"
 )
 
@@ -381,35 +380,6 @@ func StageRollback(root, previous string) (string, error) {
 	return candidate, nil
 }
 
-func waitForOtherAfterburners(parentPID int, root string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	binRoot := filepath.Join(root, "bin")
-	for {
-		processes, err := platform.RunningExecutables([]string{"afterburn.exe"}, parentPID)
-		if err != nil {
-			return fmt.Errorf("enumerate running Afterburner processes: %w", err)
-		}
-		processes = filterManagedProcesses(processes, binRoot)
-		if len(processes) == 0 {
-			return nil
-		}
-		if !deadline.After(time.Now()) {
-			return fmt.Errorf("timed out waiting for other running Afterburner processes to exit: %s", platform.FormatProcessList(processes))
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-}
-
-func filterManagedProcesses(processes []platform.ProcessInfo, binRoot string) []platform.ProcessInfo {
-	filtered := processes[:0]
-	for _, process := range processes {
-		if process.Path == "" || registry.Within(process.Path, binRoot) {
-			filtered = append(filtered, process)
-		}
-	}
-	return filtered
-}
-
 func ApplyReplacement(parentPID int, source, target, previous string) (resultErr error) {
 	root := filepath.Dir(filepath.Dir(target))
 	defer func() {
@@ -418,9 +388,10 @@ func ApplyReplacement(parentPID int, source, target, previous string) (resultErr
 	if err := platform.WaitForPID(parentPID, 2*time.Minute); err != nil {
 		return fmt.Errorf("wait for updater parent PID %d: %w", parentPID, err)
 	}
-	if err := waitForOtherAfterburners(parentPID, root, 2*time.Minute); err != nil {
-		return err
-	}
+	// Running Afterburner processes keep their executable image mapped, so
+	// replacing the on-disk path is safe: existing sessions continue on the
+	// old image and new launches use the replacement. The transaction lock
+	// serializes competing updates without unnecessarily stopping sessions.
 	release, err := platform.AcquireDirectoryLock(filepath.Join(root, ".core.lock"), 2*time.Minute)
 	if err != nil {
 		return err
