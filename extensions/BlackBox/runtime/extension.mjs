@@ -1,5 +1,5 @@
 import { startBlackBoxService } from "../lib/service.mjs";
-import { registerEnterpriseSurface, subscribeObservability } from "../lib/ui-surface.mjs";
+import { buildEnterpriseModalFrame, registerEnterpriseSurface, subscribeObservability } from "../lib/ui-surface.mjs";
 
 const INSTANCE = Symbol.for("afterburner.black-box.runtime");
 const LIVE_MODAL_ID = "afterburner-black-box-live";
@@ -11,13 +11,6 @@ function isolatedWarning(code) {
     }
 }
 
-function formatLine(record) {
-    const attributes = record?.attributes ?? {};
-    const duration = Number.isFinite(attributes.durationMs) ? ` ${attributes.durationMs}ms` : "";
-    const outcome = typeof attributes.success === "boolean" ? ` success=${attributes.success}` : "";
-    return `${record?.timestamp ?? "unknown"} ${record?.kind ?? "event"} ${record?.eventType ?? "unknown"}${duration}${outcome}`;
-}
-
 function unavailableFrame() {
     return {
         title: "Afterburner Black Box Live",
@@ -27,19 +20,25 @@ function unavailableFrame() {
     };
 }
 
-async function renderLiveModal(service) {
+async function modalState(service, overrides = {}) {
     const status = await service.status();
     const records = await service.tail({ limit: 12 });
     return {
-        title: "Afterburner Black Box Live",
-        status: `${status.storage.segmentCount} segment(s), ${status.analytics.totalRecords} record(s), ${status.queue.droppedRecords} dropped`,
-        body: records.length > 0 ? records.map(formatLine).join("\n") : "No metadata events recorded yet.",
-        footer: "Esc/q closes · /black-box-tail keeps text fallback available"
+        status,
+        records,
+        view: { offset: 0, limit: 12 },
+        sort: { field: "timestamp", direction: "desc" },
+        lifecycle: { stream: "open", queueDepth: status.queue?.records ?? 0, backpressure: false, reconnectCount: 0 },
+        ...overrides
     };
 }
 
-async function safeRenderLiveModal(service) {
-    try { return await renderLiveModal(service); }
+async function renderLiveModal(service, ui, overrides = {}) {
+    return buildEnterpriseModalFrame(ui, await modalState(service, overrides));
+}
+
+async function safeRenderLiveModal(service, ui, overrides = {}) {
+    try { return await renderLiveModal(service, ui, overrides); }
     catch {
         isolatedWarning("modal-canvas-render-failed");
         return unavailableFrame();
@@ -64,13 +63,13 @@ async function closeControls(controls) {
     }
 }
 
-async function doctorFrame(service) {
+async function doctorFrame(service, ui) {
     try {
-        return {
-            title: "Afterburner Black Box Doctor",
-            body: JSON.stringify(await service.doctor(), null, 2),
-            footer: "Metadata-only diagnostics · r refreshes live view"
-        };
+        return await renderLiveModal(service, ui, {
+            activeTab: "doctor",
+            doctor: await service.doctor(),
+            title: "Afterburner Black Box Doctor"
+        });
     } catch {
         isolatedWarning("modal-canvas-doctor-failed");
         return {
@@ -82,7 +81,7 @@ async function doctorFrame(service) {
     }
 }
 
-function subscribeLiveModal(service, controls) {
+function subscribeLiveModal(service, controls, ui) {
     if (typeof service.subscribeRecords !== "function" || typeof controls?.update !== "function") return () => {};
     let disposed = false;
     let timer = null;
@@ -109,7 +108,7 @@ function subscribeLiveModal(service, controls) {
         }
         refreshing = true;
         lastRefreshAt = Date.now();
-        try { await updateControls(controls, await safeRenderLiveModal(service)); }
+        try { await updateControls(controls, await safeRenderLiveModal(service, ui)); }
         finally {
             refreshing = false;
             if (pending && !disposed) {
@@ -134,6 +133,7 @@ function modalCanvasRegistrar(api = {}) {
 
 function registerLiveModal(api, service) {
     const register = modalCanvasRegistrar(api);
+    const ui = api?.ui;
     if (!register) {
         isolatedWarning("modal-canvas-unavailable");
         return null;
@@ -148,13 +148,13 @@ function registerLiveModal(api, service) {
                     name: "refresh",
                     label: "Refresh",
                     key: "r",
-                    handler: async (_input, controls) => updateControls(controls, await safeRenderLiveModal(service))
+                    handler: async (_input, controls) => updateControls(controls, await safeRenderLiveModal(service, ui))
                 },
                 {
                     name: "doctor",
                     label: "Doctor",
                     key: "d",
-                    handler: async (_input, controls) => updateControls(controls, await doctorFrame(service))
+                    handler: async (_input, controls) => updateControls(controls, await doctorFrame(service, ui))
                 },
                 {
                     name: "close",
@@ -163,8 +163,9 @@ function registerLiveModal(api, service) {
                     handler: async (_input, controls) => closeControls(controls)
                 }
             ],
-            open: async () => safeRenderLiveModal(service),
-            subscribe: async controls => subscribeLiveModal(service, controls)
+            open: async () => safeRenderLiveModal(service, ui),
+            render: async context => context.state,
+            subscribe: async controls => subscribeLiveModal(service, controls, ui)
         });
     } catch {
         isolatedWarning("modal-canvas-registration-failed");

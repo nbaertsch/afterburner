@@ -486,6 +486,18 @@ function modalTextFromValue(value) {
     return "";
 }
 
+function normalizeModalDocument(canvas, frame, normalized, previous = {}) {
+    const revision = previous.document?.revision ? previous.document.revision + 1 : 1;
+    if (frame.document && typeof afterburnerUI !== "undefined" && typeof afterburnerUI.validateUIDocument === "function") {
+        try { return afterburnerUI.validateUIDocument({ ...frame.document, surfaceId: canvas.id, revision }); }
+        catch {}
+    }
+    if (typeof afterburnerUI !== "undefined" && typeof afterburnerUI.modalFrameToUIDocument === "function") {
+        return afterburnerUI.modalFrameToUIDocument(canvas, normalized, { revision });
+    }
+    return undefined;
+}
+
 function normalizeModalFrame(canvas, value, previous = {}) {
     const frame = typeof value === "string" ? { body: value } : (value && typeof value === "object" ? value : {});
     const bodyValue = frame.body !== undefined ? frame.body :
@@ -499,9 +511,8 @@ function normalizeModalFrame(canvas, value, previous = {}) {
         actions: canvas.actions.map(modalActionPublic)
     };
     try {
-        if (typeof afterburnerUI !== "undefined" && typeof afterburnerUI.modalFrameToUIDocument === "function") {
-            normalized.document = afterburnerUI.modalFrameToUIDocument(canvas, normalized, { revision: previous.document?.revision ? previous.document.revision + 1 : 1 });
-        }
+        const document = normalizeModalDocument(canvas, frame, normalized, previous);
+        if (document) normalized.document = document;
     } catch {}
     return normalized;
 }

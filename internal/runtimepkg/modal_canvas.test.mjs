@@ -184,17 +184,32 @@ test("broker wire messages omit rich local document", async () => {
     }
     return { ok: true };
   }, modalBrokerConfigFor("test-owner", "wire-document-test"));
+  const richDocument = {
+    schemaVersion: 1,
+    protocol: "afterburner.ui",
+    revision: 7,
+    surfaceId: "wire-document-test",
+    root: {
+      kind: "dialog",
+      props: { title: "Wire Document Test", modal: true },
+      children: [
+        { kind: "table", props: { label: "Rich local table", columns: [{ id: "status", title: "Status" }], rows: [{ id: "row-1", cells: { status: "metadata" } }] }, children: [], id: "rich-local-table" }
+      ],
+      id: "rich-local-root"
+    }
+  };
   const handle = runtime.registerModalCanvas({
     id: "wire-document-test",
     displayName: "Wire Document Test",
     actions: [{ name: "refresh", label: "Refresh", key: "r", description: "Refresh document" }],
-    open: () => ({ status: "opening", body: { markdown: "**rich** body" }, footer: "footer" })
+    open: () => ({ status: "opening", body: { markdown: "**rich** body" }, footer: "footer", document: richDocument })
   }, { ownerExtensionId: "test-owner" });
 
   const opened = await handle.open();
   assert.equal(opened.ok, true);
   assert.equal(opened.fallback, undefined);
   assert.equal(opened.frame.document.surfaceId, "wire-document-test");
+  assert.equal(opened.frame.document.root.children[0].kind, "table");
   assert.equal(messages.at(-1).operation, "poll");
   const openMessage = messages.find((message) => message.operation === "open");
   assert.deepEqual(Object.keys(openMessage).sort(), ["actions", "body", "canvasId", "footer", "generation", "id", "operation", "ownerExtensionId", "status", "surfaceId", "title"]);

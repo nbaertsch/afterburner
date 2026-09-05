@@ -1336,6 +1336,9 @@ function removePointer(root, pointer) {
 export function modalFrameToUIDocument(canvasOrDescriptor, frame = {}, options = {}) {
   const descriptor = typeof canvasOrDescriptor === "string" ? { id: canvasOrDescriptor, title: canvasOrDescriptor } : (canvasOrDescriptor ?? {});
   const surfaceId = descriptor.id ?? frame.id ?? "modal";
+  if (isUIDocument(frame?.document)) {
+    return validateUIDocument({ ...frame.document, surfaceId, revision: options.revision ?? frame.document.revision ?? 1 });
+  }
   const title = truncate(frame.title ?? descriptor.displayName ?? descriptor.title ?? surfaceId, 256);
   const status = truncate(frame.status ?? "", 2048);
   const body = modalText(frame.body ?? frame.text ?? frame.markdown ?? frame.lines ?? "");

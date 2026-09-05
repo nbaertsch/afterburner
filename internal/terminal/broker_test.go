@@ -182,6 +182,59 @@ func TestBrokerRoutesArrowKeysToModal(t *testing.T) {
 	}
 }
 
+func TestBrokerRoutesFastEscapeToModalClose(t *testing.T) {
+	process := &fakeProcess{}
+	backend := &fakeBackend{process: process}
+	var server *ModalServer
+	broker := NewBroker(backend, BrokerOptions{
+		TerminalQueryReplyTimeout: 500 * time.Millisecond,
+		InputRouter: InputRouterFunc(func(owner Owner, data []byte, process Process) (int, error) {
+			if owner == OwnerModal && server != nil {
+				return server.HandleInput(data)
+			}
+			return process.WriteInput(data)
+		}),
+	})
+	if err := broker.Start(context.Background(), Command{Path: "copilot"}); err != nil {
+		t.Fatal(err)
+	}
+	renderer := &testModalRenderer{}
+	var err error
+	server, err = NewModalServer(broker, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	response := callModalServer(t, server, map[string]any{
+		"type": "open", "id": "black-box", "title": "Black Box",
+		"actions": []map[string]any{{"name": "refresh", "label": "Refresh", "key": "r"}},
+	})
+	if !response.OK {
+		t.Fatalf("open response=%#v", response)
+	}
+	if _, err := broker.WriteInput([]byte("r")); err != nil {
+		t.Fatal(err)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "action" || response.Event.ActionName != "refresh" || response.Event.Key != "r" {
+		t.Fatalf("refresh action response = %#v", response)
+	}
+	if _, err := broker.WriteInput([]byte("\x1b")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := broker.WriteInput([]byte("q")); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, time.Second, func() bool { return server.ActiveCount() == 0 })
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "close" || response.Event.Key != "escape" {
+		t.Fatalf("escape close response = %#v", response)
+	}
+	if len(process.input) != 0 || broker.PendingTerminalQueryReplyBytes() != 0 {
+		t.Fatalf("modal input leaked or remained pending: process=%q pending=%d", process.input, broker.PendingTerminalQueryReplyBytes())
+	}
+}
+
 func TestBrokerAllowsTerminalQueryRepliesDuringModalOwnership(t *testing.T) {
 	process := &fakeProcess{}
 	backend := &fakeBackend{process: process}

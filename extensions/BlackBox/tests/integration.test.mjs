@@ -648,6 +648,7 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
     let handleCloseCount = 0;
     let handleDisposeCount = 0;
     const instance = await activate({
+        ui: createFakeRuntimeUI(),
         registerRuntimeObserver: value => { observer = value; return () => {}; },
         registerModalCanvas: definition => {
             modalDefinition = definition;
@@ -666,7 +667,15 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
 
     const openFrame = await modalDefinition.open();
     assert.equal(openFrame.title, "Afterburner Black Box Live");
+    assert.match(openFrame.body, /Status cards/);
+    assert.match(openFrame.body, /Metadata timeline table/);
+    assert.match(openFrame.body, /Details/);
     assert.match(openFrame.body, /No metadata events recorded yet/);
+    assert.equal(openFrame.document.surfaceId, "afterburner-black-box-live");
+    assert.equal(openFrame.document.root.kind, "dialog");
+    assert.match(JSON.stringify(openFrame.document), /bb-modal-status-cards/);
+    assert.match(JSON.stringify(openFrame.document), /bb-modal-timeline-table/);
+    assert.match(JSON.stringify(openFrame.document), /bb-modal-detail-panel/);
 
     const updates = [];
     let closeCount = 0;
@@ -677,8 +686,10 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
     const [refresh, doctor, close] = modalDefinition.actions;
     await refresh.handler({}, controls);
     assert.equal(updates.at(-1).title, "Afterburner Black Box Live");
+    assert.equal(updates.at(-1).document.root.kind, "dialog");
     await doctor.handler({}, controls);
     assert.equal(updates.at(-1).title, "Afterburner Black Box Doctor");
+    assert.match(updates.at(-1).body, /Doctor/);
     assert.match(updates.at(-1).body, /"healthy"/);
     await close.handler({}, controls);
     assert.equal(closeCount, 1);
@@ -702,7 +713,8 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
         }
     });
     assert.equal(accepted, true);
-    await waitFor(() => updates.some(frame => /model\.request\.completed 42ms success=true/.test(frame.body)));
+    await waitFor(() => updates.some(frame => /model\.request\.completed[\s\S]*42ms[\s\S]*true/.test(frame.body)));
+    assert.ok(updates.some(frame => JSON.stringify(frame.document ?? {}).includes("bb-modal-timeline-table")));
     assert.doesNotMatch(JSON.stringify(updates), /PROMPT SECRET|RUNTIME SECRET|TOOL SECRET/);
     const updateCount = updates.length;
     unsubscribe();

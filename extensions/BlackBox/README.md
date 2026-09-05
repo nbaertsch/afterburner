@@ -51,8 +51,9 @@ platform lifecycle, performance/quota, security/policy, patch, backpressure, and
 prompt bodies, assistant/tool payloads, secrets, and raw paths are excluded before storage or display.
 When the UI bridge, observability sink, or required grants are absent or denied, the recorder remains
 operational and falls back to text status/timeline output. When `registerModalCanvas` is also
-available, the previous live modal adapter remains registered with refresh, doctor, and close actions
-until the enterprise surface is certified.
+available, the live modal uses the same metadata-only enterprise layout model: an action bar, status
+cards, timeline table, selected-record details, and doctor view. Native terminal overlays still receive
+a deterministic text projection with refresh, doctor, and close actions.
 
 The Copilot session component uses `@github/copilot-sdk` and resolves the native event log from, in
 order: `AFTERBURNER_BLACK_BOX_EVENTS`, `COPILOT_SESSION_STATE_DIR\events.jsonl`, or

@@ -715,6 +715,163 @@ async function evaluateObservabilityGrant(api = {}) {
     return observabilityGrantState();
 }
 
+export function buildEnterpriseModalFrame(ui, state = {}, options = {}) {
+    const status = state.status ?? emptyStatus();
+    const records = filterAndSortRecords(state.records ?? [], state.filter, state.sort).slice(0, state.view?.limit ?? 12);
+    const selected = records.find(record => record.recordId === state.selectedRecordId) ?? records[0] ?? null;
+    const healthTone = healthToneFor(status, state.lifecycle);
+    const title = options.title ?? state.title ?? "Afterburner Black Box Live";
+    const frame = {
+        title,
+        status: `${status.storage?.segmentCount ?? 0} segment(s), ${status.analytics?.totalRecords ?? records.length} record(s), ${status.queue?.droppedRecords ?? 0} dropped · metadata-only`,
+        body: modalTextBody({ status, records, selected, state, healthTone }),
+        footer: "Esc/q closes · [r] refresh · [d] doctor · metadata-only fallback remains /black-box-tail",
+        actions: [
+            { name: "refresh", label: "Refresh", key: "r", description: "Refresh status cards, timeline, and details." },
+            { name: "doctor", label: "Doctor", key: "d", description: "Run metadata-only diagnostics." },
+            { name: "close", label: "Close", key: "q", description: "Close the Black Box live modal." }
+        ]
+    };
+    const document = buildEnterpriseModalDocument(ui, { status, records, selected, state, healthTone, title, frame });
+    if (document) frame.document = document;
+    return frame;
+}
+
+function buildEnterpriseModalDocument(ui, { status, records, selected, state, healthTone, title, frame }) {
+    if (!ui?.createUIDocument) return null;
+    const c = ui.components ?? ui;
+    if (!c?.dialog || !c?.toolbar || !c?.grid || !c?.panel || !c?.table) return null;
+    try {
+        const root = c.dialog({ title, status: frame.status, modal: true }, [
+            c.toolbar({ label: "Black Box action bar" }, frame.actions.map(action =>
+                c.button({ label: action.label, actionId: action.name, keybinding: action.key, description: action.description }, [], {
+                    id: `bb-modal-action-${action.name}`,
+                    actionBindings: { activate: action.name }
+                })
+            ), { id: "bb-modal-action-bar", accessibility: { role: "toolbar", name: "Black Box action bar" } }),
+            c.grid({ label: "Black Box modal status cards", columns: ["recorder", "storage", "signals", "queue"] }, [
+                metricCard(c, "bb-modal-card-recorder", "Recorder", status.enabled ? "Enabled" : "Disabled", `${status.mode ?? "unknown"} · ${status.analytics?.totalRecords ?? records.length} records`, status.enabled ? "success" : "warning"),
+                metricCard(c, "bb-modal-card-storage", "Storage", `${status.storage?.segmentCount ?? 0} segment(s)`, `${formatBytes(status.storage?.segmentBytes)} used`, healthTone),
+                metricCard(c, "bb-modal-card-signals", "Signals", `${status.analytics?.anomalyCount ?? 0} anomalies`, `${status.analytics?.milestoneCount ?? 0} milestones`, status.analytics?.anomalyCount ? "warning" : "success"),
+                metricCard(c, "bb-modal-card-queue", "Queue", `${status.queue?.records ?? 0} queued`, `${status.queue?.droppedRecords ?? 0} dropped`, status.queue?.droppedRecords ? "warning" : "info")
+            ], { id: "bb-modal-status-cards" }),
+            c.row({ label: "Timeline and detail split", responsive: { collapseBelowColumns: 100, orientation: "vertical" } }, [
+                c.panel({ title: "Metadata timeline", width: "58%" }, [
+                    c.table({
+                        label: "Timeline table",
+                        columns: timelineColumns(),
+                        rows: records.map(record => timelineRow(record, selected?.recordId)),
+                        selection: { selectedRowId: selected?.recordId ?? null, persistKey: "black-box.modal.timeline.selection" },
+                        virtualization: { enabled: records.length > 8, rowHeight: 1, overscan: 4, totalRows: records.length, offset: 0, limit: records.length }
+                    }, [], {
+                        id: "bb-modal-timeline-table",
+                        actionBindings: { select: "select" },
+                        accessibility: { role: "table", name: "Sanitized Black Box modal timeline" },
+                        localization: { key: "timeline" }
+                    })
+                ], { id: "bb-modal-timeline-panel" }),
+                c.panel({ title: "Details", width: "42%" }, [
+                    c.markdown({ markdown: selected ? detailMarkdown(selected) : "No metadata record selected." }, [], { id: "bb-modal-detail-summary" }),
+                    c.code({ language: "json", code: selected ? JSON.stringify(redactForDisplay(selected), null, 2) : "{}" }, [], { id: "bb-modal-detail-json" })
+                ], { id: "bb-modal-detail-panel", accessibility: { role: "region", name: "Selected metadata details" }, localization: { key: "details" } })
+            ], { id: "bb-modal-main-split" }),
+            ...(state.activeTab === "doctor" ? [c.panel({ title: "Doctor" }, [
+                c.code({ language: "json", code: JSON.stringify(redactForDisplay(state.doctor ?? { status: "Doctor unavailable" }), null, 2) }, [], { id: "bb-modal-doctor-json" })
+            ], { id: "bb-modal-doctor-panel" })] : []),
+            c.text({ value: fallbackFooter(state), tone: "muted" }, [], { id: "bb-modal-footer", accessibility: { role: "status", name: "Black Box modal status" } })
+        ], { id: "bb-modal-root", accessibility: { role: "dialog", name: title }, metadata: surfaceMetadata() });
+        return ui.createUIDocument(root, {
+            surfaceId: ENTERPRISE_SURFACE_ID,
+            revision: nextRevision(state),
+            locale: "en-US",
+            capabilities: ENTERPRISE_SURFACE_CAPABILITIES
+        });
+    } catch {
+        return null;
+    }
+}
+
+function modalTextBody({ status, records, selected, state, healthTone }) {
+    const lines = [
+        "Action bar: [r] Refresh  [d] Doctor  [q] Close",
+        "",
+        "Status cards",
+        `  Recorder │ ${status.enabled ? "Enabled" : "Disabled"} │ ${status.mode ?? "unknown"} │ ${status.analytics?.totalRecords ?? records.length} records`,
+        `  Storage  │ ${status.storage?.segmentCount ?? 0} segment(s) │ ${formatBytes(status.storage?.segmentBytes)} used │ ${healthTone}`,
+        `  Signals  │ ${status.analytics?.anomalyCount ?? 0} anomalies │ ${status.analytics?.milestoneCount ?? 0} milestones │ ${status.queue?.droppedRecords ?? 0} dropped`,
+        `  Queue    │ ${status.queue?.records ?? 0} queued │ ${formatBytes(status.queue?.bytes ?? 0)} │ ${status.queue?.writeErrors ?? 0} write errors`,
+        "",
+        "Metadata timeline table",
+        ...modalTimelineLines(records),
+        "",
+        "Details",
+        ...(selected ? modalDetailLines(selected) : ["  No metadata events recorded yet."])
+    ];
+    if (state.activeTab === "doctor") {
+        lines.push("", "Doctor", JSON.stringify(redactForDisplay(state.doctor ?? { status: "Doctor unavailable" }), null, 2));
+    }
+    return lines.join("\n");
+}
+
+function modalTimelineLines(records) {
+    if (!records.length) return ["  No metadata events recorded yet."];
+    const widths = { time: 20, kind: 9, event: 30, severity: 8, duration: 8, success: 7 };
+    const header = [
+        fitCell("Time", widths.time), fitCell("Kind", widths.kind), fitCell("Event", widths.event),
+        fitCell("Severity", widths.severity), fitCell("Duration", widths.duration), fitCell("Success", widths.success)
+    ].join(" │ ");
+    const divider = [widths.time, widths.kind, widths.event, widths.severity, widths.duration, widths.success]
+        .map(width => "─".repeat(width)).join("─┼─");
+    return [
+        `  ${header}`,
+        `  ${divider}`,
+        ...records.map(record => `  ${modalTimelineRow(record, widths)}`)
+    ];
+}
+
+function modalTimelineRow(record, widths) {
+    const attributes = sanitizeAttributes(record.attributes ?? {});
+    return [
+        fitCell(shortTimestamp(record.timestamp), widths.time),
+        fitCell(record.kind ?? "event", widths.kind),
+        fitCell(record.eventType ?? "unknown", widths.event),
+        fitCell(record.severity ?? "info", widths.severity),
+        fitCell(Number.isFinite(attributes.durationMs) ? `${attributes.durationMs}ms` : "", widths.duration),
+        fitCell(typeof attributes.success === "boolean" ? String(attributes.success) : "", widths.success)
+    ].join(" │ ");
+}
+
+function modalDetailLines(record) {
+    const attributes = sanitizeAttributes(record.attributes ?? {});
+    const lines = [
+        `  Record   │ ${cleanLabel(record.recordId ?? "unknown")}`,
+        `  Event    │ ${cleanLabel(record.eventType ?? "unknown")}`,
+        `  Kind     │ ${cleanLabel(record.kind ?? "event")} / ${cleanLabel(record.severity ?? "info")}`,
+        `  Time     │ ${cleanLabel(record.timestamp ?? "unknown")}`
+    ];
+    for (const [key, value] of Object.entries(attributes).slice(0, 12)) {
+        lines.push(`  ${fitCell(key, 8)} │ ${formatAttribute(value)}`);
+    }
+    if (record.bodyReferences?.length) lines.push(`  Redacted │ ${record.bodyReferences.length} body reference(s) omitted`);
+    return lines;
+}
+
+function fitCell(value, width) {
+    const text = cleanLabel(String(value ?? "")) ?? "";
+    if (text.length > width) return `${text.slice(0, Math.max(0, width - 1))}…`;
+    return text.padEnd(width, " ");
+}
+
+function shortTimestamp(value) {
+    const text = cleanLabel(value ?? "unknown") ?? "unknown";
+    return text.replace(/^\d{4}-/, "").replace("T", " ").replace(/\.\d{3}Z$/, "Z");
+}
+
+function formatAttribute(value) {
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    return cleanLabel(String(value ?? "")) ?? "";
+}
+
 export function buildEnterpriseSurfaceDocument(ui, state = {}) {
     if (!ui?.createUIDocument) throw new Error("ui-sdk-unavailable");
     const records = filterAndSortRecords(state.records ?? [], state.filter, state.sort);

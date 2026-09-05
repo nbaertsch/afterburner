@@ -100,7 +100,7 @@ const baseEnvironment = (root, capturePath, packageRoot, extra = {}) => {
   return environment;
 };
 
-const assertCapture = (capture, { expectQuery = false, expectReopenIsolation = false, expectResize = false, expectNoChildInterrupt = false, expectRuntimeClient = false } = {}) => {
+const assertCapture = (capture, { expectQuery = false, expectReopenIsolation = false, expectResize = false, expectNoChildInterrupt = false, expectRuntimeClient = false, expectActions = false } = {}) => {
   if (!capture.env?.AFTERBURNER_MODAL_BOOTSTRAP) {
     throw new Error(`modal broker bootstrap env was not forwarded\n${JSON.stringify(capture)}`);
   }
@@ -125,6 +125,18 @@ const assertCapture = (capture, { expectQuery = false, expectReopenIsolation = f
     const event = capture.modal?.event;
     if (event?.type !== "closed" || event?.id !== "black-box" || event?.generation !== 1) {
       throw new Error(`modal query did not receive generation-1 close reply\n${JSON.stringify(capture.modal)}`);
+    }
+  }
+  if (expectActions) {
+    const actions = capture.modal?.actionEvents ?? [];
+    const observed = actions.map(event => `${event.type}:${event.actionName}:${event.key}`);
+    const want = ["action:refresh:r", "action:doctor:d", "action:close:q"];
+    if (JSON.stringify(observed) !== JSON.stringify(want)) {
+      throw new Error(`modal action keys were not routed\n${JSON.stringify(capture.modal)}`);
+    }
+    const escape = capture.modal?.escapeEvent;
+    if (escape?.type !== "close" || escape?.id !== "black-box" || escape?.generation !== 2 || escape?.key !== "escape") {
+      throw new Error(`modal Escape key was not routed\n${JSON.stringify(capture.modal)}`);
     }
   }
   if (expectReopenIsolation) {
@@ -182,6 +194,7 @@ const runScenario = ({
   expectResize = false,
   expectNoChildInterrupt = false,
   expectRuntimeClient = false,
+  expectActions = false,
   expectRepaint = false,
   expectCleanup = false,
   sendCtrlC = false
@@ -205,6 +218,7 @@ const runScenario = ({
   let raw = "";
   let resized = false;
   let ctrlCSent = false;
+  let actionStep = 0;
   let finished = false;
 
   const cleanup = () => rmSync(root, { recursive: true, force: true });
@@ -245,6 +259,21 @@ const runScenario = ({
       ctrlCSent = true;
       child.write("\x03");
     }
+    if (expectActions) {
+      if (actionStep === 0 && text.includes("live activity update frame")) {
+        actionStep = 1;
+        child.write("r");
+      } else if (actionStep === 1 && text.includes("refresh action updated frame")) {
+        actionStep = 2;
+        child.write("d");
+      } else if (actionStep === 2 && text.includes("doctor action observed")) {
+        actionStep = 3;
+        child.write("q");
+      } else if (actionStep === 3 && text.includes("Afterburner Black Box Escape")) {
+        actionStep = 4;
+        child.write("\x1b");
+      }
+    }
   });
 
   child.onExit(({ exitCode }) => {
@@ -254,7 +283,7 @@ const runScenario = ({
         throw new Error(`afterburn exited ${exitCode}, want ${expectedExit}`);
       }
       const capture = JSON.parse(readFileSync(capturePath, "utf8"));
-      assertCapture(capture, { expectQuery, expectReopenIsolation, expectResize, expectNoChildInterrupt, expectRuntimeClient });
+      assertCapture(capture, { expectQuery, expectReopenIsolation, expectResize, expectNoChildInterrupt, expectRuntimeClient, expectActions });
       const semantic = semanticModalState(raw);
       const text = stripAnsi(raw);
       if (!text.includes("Afterburner Black Box Live") ||
@@ -278,6 +307,9 @@ const runScenario = ({
       }
       if (sendCtrlC && !ctrlCSent) {
         throw new Error("modal Ctrl+C test never sent Ctrl+C while modal was visible");
+      }
+      if (expectActions && actionStep !== 4) {
+        throw new Error(`modal action test did not send every key, stopped at step ${actionStep}`);
       }
       if (expectedExit === 0 && !extraEnv.AFTERBURNER_TEST_MODAL_EXIT_OPEN && !stripAnsi(raw).includes("copilot-after-modal")) {
         throw new Error("child did not complete normal modal close path");
@@ -324,6 +356,15 @@ const scenarios = [
     sendCtrlC: true,
     expectQuery: true,
     expectNoChildInterrupt: true
+  },
+  {
+    name: "black-box-actions",
+    extraEnv: {
+      AFTERBURNER_TEST_MODAL_ACTIONS: "1",
+      AFTERBURNER_TEST_MODAL_FORCE_EXIT: "1"
+    },
+    expectActions: true,
+    expectQuery: true
   },
   {
     name: "normal-exit-open-modal",

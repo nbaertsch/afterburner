@@ -215,8 +215,69 @@ func TestTerminalModalRendererSanitizesExtensionANSI(t *testing.T) {
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 20, Rows: 4})
 	renderer.ShowModal(ModalFrame{Title: "Title\x1b[31m", Body: "Body\x1b[32m"})
 	text := output.String()
-	if strings.Contains(text, "Title\x1b[31m") || strings.Contains(text, "Body\x1b[32m") {
+	if strings.Contains(text, "Title\x1b[31m") || strings.Contains(text, "Body\x1b[32m") || strings.Contains(text, "[31m") || strings.Contains(text, "[32m") {
 		t.Fatalf("extension ANSI was rendered verbatim: %q", text)
+	}
+}
+
+func TestTerminalModalRendererEnterpriseOverlayChrome(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 100, Rows: 30})
+	renderer.WriteCopilotOutput([]byte("copilot backdrop"))
+	renderer.ShowModal(ModalFrame{
+		Title:  "Enterprise Review",
+		Status: "Verified",
+		Body:   "line one\nline two",
+		Footer: "metadata-only host rendering",
+		Actions: []ModalAction{
+			{Name: "approve", Label: "Approve", Key: "enter"},
+			{Name: "dismiss", Label: "Dismiss", Key: "escape"},
+		},
+	})
+	text := output.String()
+	for _, want := range []string{"copilot backdrop", "╭", "╰", "◆ Enterprise Review", "Verified", "Host-rendered secure canvas", "line one", "metadata-only host rendering", "[enter] Approve"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("enterprise overlay missing %q: %q", want, text)
+		}
+	}
+	if strings.Contains(text, "\x1b[?1049h") || strings.Contains(text, "\x1b[?1049l") {
+		t.Fatalf("enterprise overlay should not use alternate screen: %q", text)
+	}
+}
+
+func TestModalServerScrollsOverflowWithoutExtensionAction(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pollTimeout = 20 * time.Millisecond
+	var body strings.Builder
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&body, "line %02d\n", i)
+	}
+	response := callModalServer(t, server, map[string]any{
+		"type": "open", "id": "black-box", "title": "Scrollable", "body": body.String(),
+		"actions": []map[string]any{{"name": "down-action", "label": "Down action", "key": "down"}},
+	})
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b[B")); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	for _, want := range []string{"line 02", "lines 2-", "[↑/↓] Scroll"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("scrolled overlay missing %q: %q", want, text)
+		}
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event != nil {
+		t.Fatalf("scroll key leaked as extension action: %#v", response)
 	}
 }
 
@@ -324,6 +385,99 @@ func TestModalActionAndCloseEvents(t *testing.T) {
 	}
 	if server.ActiveCount() != 0 || renderer.hidden != 1 {
 		t.Fatalf("active=%d hidden=%d", server.ActiveCount(), renderer.hidden)
+	}
+}
+
+func TestModalServerRoutesBatchedActionKeysAndEscape(t *testing.T) {
+	renderer := &testModalRenderer{}
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pollTimeout = 20 * time.Millisecond
+	response := callModalServer(t, server, map[string]any{
+		"type": "open", "id": "black-box", "title": "Black Box",
+		"actions": []map[string]any{
+			{"name": "refresh", "label": "Refresh", "key": "r"},
+			{"name": "doctor", "label": "Doctor", "key": "d"},
+			{"name": "close", "label": "Close", "key": "q"},
+		},
+	})
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	if _, err := server.HandleInput([]byte("rdq\x1b[12;34R")); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []struct {
+		name string
+		key  string
+	}{
+		{"refresh", "r"},
+		{"doctor", "d"},
+		{"close", "q"},
+	} {
+		response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+		if response.Event == nil || response.Event.Type != "action" || response.Event.ActionName != want.name || response.Event.Key != want.key {
+			t.Fatalf("action poll response = %#v, want %s/%s", response, want.name, want.key)
+		}
+	}
+	if server.ActiveCount() != 1 {
+		t.Fatalf("action keys closed modal unexpectedly")
+	}
+	if _, err := server.HandleInput([]byte("\x1bq")); err != nil {
+		t.Fatal(err)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "close" || response.Event.Key != "escape" {
+		t.Fatalf("batched escape close response = %#v", response)
+	}
+	if server.ActiveCount() != 0 || renderer.hidden != 1 {
+		t.Fatalf("active=%d hidden=%d", server.ActiveCount(), renderer.hidden)
+	}
+}
+func TestModalServerRoutesWindowsVTKeyEvents(t *testing.T) {
+	renderer := &testModalRenderer{}
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pollTimeout = 20 * time.Millisecond
+	response := callModalServer(t, server, map[string]any{
+		"type": "open", "id": "black-box", "title": "Black Box",
+		"actions": []map[string]any{
+			{"name": "refresh", "label": "Refresh", "key": "r"},
+			{"name": "doctor", "label": "Doctor", "key": "d"},
+			{"name": "close", "label": "Close", "key": "q"},
+		},
+	})
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	if _, err := server.HandleInput([]byte("\x1b[82;19;114;1;0;1_\x1b[82;19;114;0;0;1_\x1b[68;32;100;1;0;1_\x1b[81;16;113;1;0;1_")); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []struct {
+		name string
+		key  string
+	}{
+		{"refresh", "r"},
+		{"doctor", "d"},
+		{"close", "q"},
+	} {
+		response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+		if response.Event == nil || response.Event.Type != "action" || response.Event.ActionName != want.name || response.Event.Key != want.key {
+			t.Fatalf("Windows VT action response = %#v, want %s/%s", response, want.name, want.key)
+		}
+	}
+	if _, err := server.HandleInput([]byte("\x1b[27;1;0;1;0;1_\x1b[27;1;0;0;0;1_")); err != nil {
+		t.Fatal(err)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "close" || response.Event.Key != "escape" {
+		t.Fatalf("Windows VT escape response = %#v", response)
 	}
 }
 

@@ -8,9 +8,13 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	"charm.land/lipgloss/v2"
 )
 
 // ModalAction describes a host-rendered action advertised by a modal canvas.
@@ -131,6 +135,7 @@ type modalEventKey struct {
 }
 
 func printableModalText(value string, multiline bool) string {
+	value = stripModalANSI(value)
 	var out strings.Builder
 	for _, r := range value {
 		switch {
@@ -149,12 +154,64 @@ func printableModalText(value string, multiline bool) string {
 	return out.String()
 }
 
+func stripModalANSI(value string) string {
+	var out strings.Builder
+	state := 0
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		switch state {
+		case 0:
+			if ch == 0x1b {
+				state = 1
+				continue
+			}
+			out.WriteByte(ch)
+		case 1:
+			switch ch {
+			case '[':
+				state = 2
+			case ']':
+				state = 3
+			case 'P', '^', '_':
+				state = 4
+			default:
+				state = 0
+			}
+		case 2:
+			if ch >= 0x40 && ch <= 0x7e {
+				state = 0
+			}
+		case 3:
+			if ch == 0x07 {
+				state = 0
+			} else if ch == 0x1b {
+				state = 5
+			}
+		case 4:
+			if ch == 0x1b {
+				state = 5
+			}
+		case 5:
+			if ch == '\\' {
+				state = 0
+			} else if ch != 0x1b {
+				state = 4
+			}
+		}
+	}
+	return out.String()
+}
+
 // ModalRenderer paints the active modal frame atop the terminal that the
 // Broker's ConPTY output is being written to. HideModal is called when the
 // last modal closes so the host can repaint Copilot's live screen.
 type ModalRenderer interface {
 	ShowModal(frame ModalFrame)
 	HideModal()
+}
+
+type modalScrollRenderer interface {
+	ScrollModal(key string) bool
 }
 
 func NewModalServer(broker *Broker, renderer ModalRenderer) (*ModalServer, error) {
@@ -656,44 +713,188 @@ func (s *ModalServer) closeLocked(identity modalIdentity) {
 // graceful runtime close. Unhandled keys are swallowed so they cannot leak
 // into Copilot while the modal is visible.
 func (s *ModalServer) HandleInput(data []byte) (int, error) {
-	if len(data) == 0 {
-		return 0, nil
+	inputLen := len(data)
+	for len(data) > 0 {
+		consumed, key := nextModalInputKey(data)
+		if consumed <= 0 {
+			consumed = 1
+		}
+		if key != "" {
+			s.handleInputKey(key)
+		}
+		data = data[consumed:]
 	}
+	return inputLen, nil
+}
+
+func (s *ModalServer) handleInputKey(key string) {
 	identity, frame, generation, ok := s.topSession()
 	if !ok {
-		return len(data), nil
+		return
 	}
-	key := modalInputKey(data)
 	if key == "escape" {
 		s.requestClose(identity, generation, key)
-		return len(data), nil
+		return
+	}
+	if modalIsScrollKey(key) {
+		if scroller, ok := s.renderer.(modalScrollRenderer); ok && scroller.ScrollModal(key) {
+			return
+		}
 	}
 	if actionName := modalActionForKey(frame, key); actionName != "" {
 		s.enqueueEvent(ModalEvent{Type: "action", ID: identity.surfaceID, Generation: generation, ActionName: actionName, Key: key}, identity)
-		return len(data), nil
+		return
 	}
 	if key == "q" {
 		s.requestClose(identity, generation, key)
 	}
-	return len(data), nil
 }
 
 func modalInputKey(data []byte) string {
-	switch string(data) {
-	case "\x1b":
-		return "escape"
-	case "\r", "\n":
-		return "enter"
-	case "\t":
-		return "tab"
-	case "q", "Q":
-		return strings.ToLower(string(data))
+	_, key := nextModalInputKey(data)
+	return key
+}
+
+func nextModalInputKey(data []byte) (int, string) {
+	if len(data) == 0 {
+		return 0, ""
+	}
+	switch data[0] {
+	case '\x1b':
+		return nextModalEscapeInputKey(data)
+	case '\r', '\n':
+		return 1, "enter"
+	case '\t':
+		return 1, "tab"
 	default:
-		if len(data) == 1 && data[0] >= 0x20 && data[0] <= 0x7e {
-			return strings.ToLower(string(data))
+		if data[0] >= 0x20 && data[0] <= 0x7e {
+			return 1, strings.ToLower(string(data[0]))
 		}
+		if r, size := utf8.DecodeRune(data); r != utf8.RuneError || size > 1 {
+			return size, ""
+		}
+		return 1, ""
+	}
+}
+
+func nextModalEscapeInputKey(data []byte) (int, string) {
+	if len(data) == 1 {
+		return 1, "escape"
+	}
+	switch data[1] {
+	case '[':
+		if consumed, key := consumeModalCSIInput(data); consumed > 0 {
+			return consumed, key
+		}
+	case 'O':
+		if len(data) >= 3 {
+			switch data[2] {
+			case 'A':
+				return 3, "up"
+			case 'B':
+				return 3, "down"
+			case 'H':
+				return 3, "home"
+			case 'F':
+				return 3, "end"
+			}
+		}
+	case ']':
+		if consumed := consumeModalStringInput(data); consumed > 0 {
+			return consumed, ""
+		}
+	case 'P':
+		if consumed := consumeModalStringInput(data); consumed > 0 {
+			return consumed, ""
+		}
+	}
+	return 1, "escape"
+}
+
+func consumeModalCSIInput(data []byte) (int, string) {
+	for i := 2; i < len(data); i++ {
+		if data[i] >= 0x40 && data[i] <= 0x7e {
+			return i + 1, modalCSIInputKey(data[2 : i+1])
+		}
+		if data[i] < 0x20 || data[i] > 0x3f {
+			return 0, ""
+		}
+	}
+	return 0, ""
+}
+
+func modalCSIInputKey(seq []byte) string {
+	if len(seq) > 0 && seq[len(seq)-1] == '_' {
+		return modalWindowsVTInputKey(seq[:len(seq)-1])
+	}
+	switch string(seq) {
+	case "A":
+		return "up"
+	case "B":
+		return "down"
+	case "H", "1~", "7~":
+		return "home"
+	case "F", "4~", "8~":
+		return "end"
+	case "5~":
+		return "pageup"
+	case "6~":
+		return "pagedown"
+	}
+	return ""
+}
+
+func modalWindowsVTInputKey(body []byte) string {
+	fields := strings.Split(string(body), ";")
+	if len(fields) >= 4 && fields[3] != "1" {
 		return ""
 	}
+	codeField := ""
+	if len(fields) >= 3 && fields[2] != "" && fields[2] != "0" {
+		codeField = fields[2]
+	} else if len(fields) >= 1 {
+		codeField = fields[0]
+	}
+	code, err := strconv.Atoi(codeField)
+	if err != nil {
+		return ""
+	}
+	switch code {
+	case 9:
+		return "tab"
+	case 13:
+		return "enter"
+	case 27:
+		return "escape"
+	}
+	if code >= 0x20 && code <= 0x7e {
+		return strings.ToLower(string(rune(code)))
+	}
+	return ""
+}
+
+func modalIsScrollKey(key string) bool {
+	switch key {
+	case "up", "down", "pageup", "pagedown", "home", "end":
+		return true
+	default:
+		return false
+	}
+}
+
+func consumeModalStringInput(data []byte) int {
+	for i := 2; i < len(data); i++ {
+		switch data[i] {
+		case '\a':
+			return i + 1
+		case '\x1b':
+			if i+1 < len(data) && data[i+1] == '\\' {
+				return i + 2
+			}
+			return 0
+		}
+	}
+	return 0
 }
 
 func modalActionForKey(frame ModalFrame, key string) string {
@@ -766,10 +967,11 @@ type TerminalModalRenderer struct {
 	screen        *vtScreen
 	queryRequests terminalSequenceSplitter
 
-	mu          sync.Mutex
-	active      bool
-	hostAlt     bool
-	activeFrame ModalFrame
+	mu           sync.Mutex
+	active       bool
+	hostAlt      bool
+	activeFrame  ModalFrame
+	scrollOffset int
 }
 
 func NewTerminalModalRenderer(writer io.Writer) *TerminalModalRenderer {
@@ -805,7 +1007,9 @@ func (r *TerminalModalRenderer) Resize(size Size) {
 	defer r.mu.Unlock()
 	r.screen.Resize(size)
 	if r.active && r.writer != nil {
-		_, _ = io.WriteString(r.writer, renderModalFrame(r.screen.Snapshot(), r.activeFrame))
+		body, scrollOffset := renderModalFrame(r.screen.Snapshot(), r.activeFrame, r.scrollOffset)
+		r.scrollOffset = scrollOffset
+		_, _ = io.WriteString(r.writer, body)
 	}
 }
 
@@ -837,15 +1041,97 @@ func (r *TerminalModalRenderer) ShowModal(frame ModalFrame) {
 	defer r.mu.Unlock()
 	r.queryRequests.Reset()
 	r.hostAlt = r.screen.useAlt
+	if !r.active || r.activeFrame.ID != frame.ID {
+		r.scrollOffset = 0
+	}
 	r.active = true
 	r.activeFrame = frame
 	if r.writer == nil {
 		return
 	}
-	_, _ = io.WriteString(r.writer, renderModalFrame(r.screen.Snapshot(), frame))
+	body, scrollOffset := renderModalFrame(r.screen.Snapshot(), frame, r.scrollOffset)
+	r.scrollOffset = scrollOffset
+	_, _ = io.WriteString(r.writer, body)
 }
 
-func renderModalFrame(snapshot TerminalSnapshot, frame ModalFrame) string {
+func (r *TerminalModalRenderer) ScrollModal(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active || r.writer == nil {
+		return false
+	}
+	layout := newModalLayout(r.screen.Snapshot())
+	bodyLines := modalBodyLines(r.activeFrame.Body, layout.innerWidth)
+	maxScroll := maxInt(0, len(bodyLines)-layout.bodyRows)
+	if maxScroll == 0 {
+		return false
+	}
+	oldOffset := r.scrollOffset
+	page := maxInt(1, layout.bodyRows-1)
+	switch key {
+	case "up":
+		r.scrollOffset--
+	case "down":
+		r.scrollOffset++
+	case "pageup":
+		r.scrollOffset -= page
+	case "pagedown":
+		r.scrollOffset += page
+	case "home":
+		r.scrollOffset = 0
+	case "end":
+		r.scrollOffset = maxScroll
+	default:
+		return false
+	}
+	r.scrollOffset = clampInt(r.scrollOffset, 0, maxScroll)
+	if r.scrollOffset == oldOffset {
+		return false
+	}
+	body, scrollOffset := renderModalFrame(r.screen.Snapshot(), r.activeFrame, r.scrollOffset)
+	r.scrollOffset = scrollOffset
+	_, _ = io.WriteString(r.writer, body)
+	return true
+}
+
+func renderModalFrame(snapshot TerminalSnapshot, frame ModalFrame, scrollOffset int) (string, int) {
+	layout := newModalLayout(snapshot)
+	bodyLines := modalBodyLines(frame.Body, layout.innerWidth)
+	maxScroll := maxInt(0, len(bodyLines)-layout.bodyRows)
+	scrollOffset = clampInt(scrollOffset, 0, maxScroll)
+
+	var out strings.Builder
+	out.WriteString("\x1b[?25l\x1b[0m\x1b[H")
+	writeBackdrop(&out, snapshot, layout.cols, layout.rows)
+	writeModalShadow(&out, layout)
+	if layout.compact {
+		writeCompactModalPanel(&out, layout, frame)
+	} else {
+		writeEnterpriseModalPanel(&out, layout, frame, bodyLines, scrollOffset, maxScroll)
+	}
+	out.WriteString("\x1b[0m\x1b[?25h")
+	return out.String(), scrollOffset
+}
+
+type modalLayout struct {
+	cols           int
+	rows           int
+	panelWidth     int
+	panelHeight    int
+	left           int
+	top            int
+	innerLeft      int
+	innerWidth     int
+	contentRows    int
+	headerRows     int
+	separatorRows  int
+	footerRows     int
+	bodyRows       int
+	footerStartRow int
+	compact        bool
+}
+
+func newModalLayout(snapshot TerminalSnapshot) modalLayout {
 	cols := int(snapshot.Size.Cols)
 	rows := int(snapshot.Size.Rows)
 	if cols <= 0 {
@@ -854,18 +1140,26 @@ func renderModalFrame(snapshot TerminalSnapshot, frame ModalFrame) string {
 	if rows <= 0 {
 		rows = vtDefaultRows
 	}
-	panelWidth := cols - 8
-	if panelWidth > 110 {
-		panelWidth = 110
+	panelWidth := cols - 10
+	if cols < 72 {
+		panelWidth = cols - 4
 	}
-	if panelWidth < 48 {
+	if cols <= 40 {
+		panelWidth = cols - 2
+	}
+	panelWidth = clampInt(panelWidth, minInt(cols, 24), minInt(cols, 112))
+	if panelWidth < 4 {
 		panelWidth = cols
 	}
 	panelHeight := rows - 6
-	if panelHeight > 28 {
-		panelHeight = 28
+	if rows >= 18 {
+		panelHeight = rows * 72 / 100
 	}
-	if panelHeight < 10 {
+	panelHeight = clampInt(panelHeight, minInt(rows, 8), minInt(rows, 30))
+	if rows <= 8 {
+		panelHeight = rows
+	}
+	if panelHeight < 3 {
 		panelHeight = rows
 	}
 	left := (cols-panelWidth)/2 + 1
@@ -876,42 +1170,78 @@ func renderModalFrame(snapshot TerminalSnapshot, frame ModalFrame) string {
 	if top < 1 {
 		top = 1
 	}
-	contentWidth := panelWidth - 4
-	if contentWidth < 1 {
-		contentWidth = panelWidth
+	innerWidth := panelWidth - 4
+	if innerWidth < 1 {
+		innerWidth = maxInt(1, panelWidth-2)
 	}
-	reservedFooterRows := 0
-	if panelHeight >= 8 && len(frame.Actions) > 0 {
-		reservedFooterRows++
+	layout := modalLayout{
+		cols:        cols,
+		rows:        rows,
+		panelWidth:  panelWidth,
+		panelHeight: panelHeight,
+		left:        left,
+		top:         top,
+		innerLeft:   minInt(cols, left+2),
+		innerWidth:  innerWidth,
+		compact:     panelWidth < 24 || panelHeight < 6,
 	}
-	if panelHeight >= 8 && frame.Footer != "" {
-		reservedFooterRows++
+	layout.contentRows = maxInt(0, panelHeight-2)
+	layout.headerRows = 2
+	layout.separatorRows = 1
+	layout.footerRows = 3
+	layout.bodyRows = layout.contentRows - layout.headerRows - layout.separatorRows - layout.footerRows
+	if layout.bodyRows < 2 {
+		layout.footerRows = minInt(1, layout.footerRows)
+		layout.bodyRows = layout.contentRows - layout.headerRows - layout.separatorRows - layout.footerRows
 	}
-	contentBottom := panelHeight - 1 - reservedFooterRows
-	if contentBottom < 2 {
-		contentBottom = panelHeight - 1
+	if layout.bodyRows < 1 {
+		layout.bodyRows = maxInt(0, layout.contentRows-layout.headerRows)
+		layout.separatorRows = 0
+		layout.footerRows = 0
 	}
+	layout.footerStartRow = layout.top + 1 + layout.headerRows + layout.separatorRows + layout.bodyRows
+	return layout
+}
 
-	var out strings.Builder
-	out.WriteString("\x1b[?25l\x1b[0m\x1b[H")
-	writeBackdrop(&out, snapshot, cols, rows)
-	writeBox(&out, top, left, panelWidth, panelHeight, frame, contentWidth, contentBottom, reservedFooterRows)
-	out.WriteString("\x1b[?25h")
-	return out.String()
+type modalStyles struct {
+	backdrop lipgloss.Style
+	shadow   lipgloss.Style
+	panel    lipgloss.Style
+	border   lipgloss.Style
+	title    lipgloss.Style
+	status   lipgloss.Style
+	muted    lipgloss.Style
+	body     lipgloss.Style
+	accent   lipgloss.Style
+	footer   lipgloss.Style
+	actions  lipgloss.Style
+}
+
+func newModalStyles() modalStyles {
+	return modalStyles{
+		backdrop: lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Background(lipgloss.Color("234")).Faint(true),
+		shadow:   lipgloss.NewStyle().Background(lipgloss.Color("232")),
+		panel:    lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("235")),
+		border:   lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Background(lipgloss.Color("235")).Bold(true),
+		title:    lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("235")).Bold(true),
+		status:   lipgloss.NewStyle().Foreground(lipgloss.Color("16")).Background(lipgloss.Color("39")).Bold(true),
+		muted:    lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Background(lipgloss.Color("235")),
+		body:     lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("235")),
+		accent:   lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Background(lipgloss.Color("235")).Bold(true),
+		footer:   lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Background(lipgloss.Color("235")),
+		actions:  lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("238")).Bold(true),
+	}
 }
 
 func writeBackdrop(out *strings.Builder, snapshot TerminalSnapshot, cols, rows int) {
+	styles := newModalStyles()
 	for row := 0; row < rows; row++ {
-		out.WriteString("\x1b[0;90m")
 		line := ""
 		if row < len(snapshot.Rows) {
 			line = terminalSnapshotRowString(snapshot.Rows[row])
 		}
-		line = fitModalLine(line, cols)
-		out.WriteString(line)
-		if len([]rune(line)) < cols {
-			out.WriteString(strings.Repeat(" ", cols-len([]rune(line))))
-		}
+		line = modalPadLine(modalFitLine(line, cols), cols)
+		out.WriteString(styles.backdrop.Render(line))
 		if row < rows-1 {
 			out.WriteString("\r\n")
 		}
@@ -934,86 +1264,236 @@ func terminalSnapshotRowString(row []TerminalCell) string {
 	return strings.TrimRight(line.String(), " ")
 }
 
-func writeBox(out *strings.Builder, top, left, width, height int, frame ModalFrame, contentWidth, contentBottom, reservedFooterRows int) {
-	move := func(row, col int) { fmt.Fprintf(out, "\x1b[%d;%dH", row, col) }
-	if width < 4 || height < 4 {
-		move(top, left)
-		writePanelLine(out, top, left, maxInt(1, width), "\x1b[1;97;44m", printableModalText(frame.Title, false))
-		if height > 1 {
-			writePanelLine(out, top+1, left, maxInt(1, width), "\x1b[37;44m", printableModalText(frame.Body, true))
+func writeModalShadow(out *strings.Builder, layout modalLayout) {
+	if layout.panelWidth < 4 || layout.panelHeight < 3 {
+		return
+	}
+	styles := newModalStyles()
+	shadowCell := styles.shadow.Render(" ")
+	for row := 1; row < layout.panelHeight && layout.top+row <= layout.rows; row++ {
+		col := layout.left + layout.panelWidth
+		if col <= layout.cols {
+			moveModalCursor(out, layout.top+row, col)
+			out.WriteString(shadowCell)
+		}
+	}
+	bottomRow := layout.top + layout.panelHeight
+	if bottomRow <= layout.rows {
+		moveModalCursor(out, bottomRow, minInt(layout.cols, layout.left+2))
+		width := minInt(layout.panelWidth-1, layout.cols-layout.left-1)
+		if width > 0 {
+			out.WriteString(styles.shadow.Render(strings.Repeat(" ", width)))
+		}
+	}
+}
+
+func writeCompactModalPanel(out *strings.Builder, layout modalLayout, frame ModalFrame) {
+	styles := newModalStyles()
+	width := layout.panelWidth
+	if width < 1 {
+		return
+	}
+	if width < 8 || layout.panelHeight < 3 {
+		writeModalLine(out, layout.top, layout.left, width, styles.panel, printableModalText(firstNonEmpty(frame.Title, frame.Body, "Modal"), false))
+		if layout.panelHeight > 1 {
+			writeModalLine(out, layout.top+1, layout.left, width, styles.body, printableModalText(frame.Body, true))
 		}
 		return
 	}
-	border := strings.Repeat("─", width-2)
-	move(top, left)
-	fmt.Fprintf(out, "\x1b[0;1;97;44m╭%s╮\x1b[0m", border)
-	for row := 1; row < height-1; row++ {
-		move(top+row, left)
-		fmt.Fprintf(out, "\x1b[0;37;44m│%s│\x1b[0m", strings.Repeat(" ", width-2))
+	writeModalLine(out, layout.top, layout.left, width, styles.border, "╭"+strings.Repeat("─", width-2)+"╮")
+	insideRows := layout.panelHeight - 2
+	content := []string{printableModalText(firstNonEmpty(frame.Title, "Modal"), false)}
+	if frame.Status != "" {
+		content = append(content, printableModalText(frame.Status, false))
 	}
-	move(top+height-1, left)
-	fmt.Fprintf(out, "\x1b[0;1;97;44m╰%s╯\x1b[0m", border)
-
-	line := 1
-	writePanelLine(out, top+line, left+2, contentWidth, "\x1b[1;97;44m", printableModalText(frame.Title, false))
-	line++
-	if frame.Status != "" && line < height-2 {
-		writePanelLine(out, top+line, left+2, contentWidth, "\x1b[36;44m", printableModalText(frame.Status, false))
-		line++
-	}
-	if line < height-2 {
-		writePanelLine(out, top+line, left+2, contentWidth, "\x1b[37;44m", strings.Repeat("─", contentWidth))
-		line++
-	}
-	bodyLines := wrapModalText(printableModalText(frame.Body, true), contentWidth)
-	for index, bodyLine := range bodyLines {
-		if line >= contentBottom {
-			if index < len(bodyLines) {
-				writePanelLine(out, top+line, left+2, contentWidth, "\x1b[33;44m", "…")
-			}
-			break
+	content = append(content, modalBodyLines(frame.Body, maxInt(1, width-4))...)
+	for i := 0; i < insideRows; i++ {
+		text := ""
+		if i < len(content) {
+			text = content[i]
 		}
-		writePanelLine(out, top+line, left+2, contentWidth, "\x1b[37;44m", bodyLine)
-		line++
+		writeModalLine(out, layout.top+1+i, layout.left, width, styles.panel, "│"+modalPadLine(modalFitLine(text, width-2), width-2)+"│")
 	}
-	if len(frame.Actions) > 0 && reservedFooterRows > 0 {
-		actions := modalActionsText(frame)
-		writePanelLine(out, top+height-1-reservedFooterRows, left+2, contentWidth, "\x1b[1;30;47m", actions)
+	writeModalLine(out, layout.top+layout.panelHeight-1, layout.left, width, styles.border, "╰"+strings.Repeat("─", width-2)+"╯")
+}
+
+func writeEnterpriseModalPanel(out *strings.Builder, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int) {
+	styles := newModalStyles()
+	writeModalLine(out, layout.top, layout.left, layout.panelWidth, styles.border, "╭"+strings.Repeat("─", layout.panelWidth-2)+"╮")
+	for row := 1; row < layout.panelHeight-1; row++ {
+		writeModalLine(out, layout.top+row, layout.left, layout.panelWidth, styles.panel, "│"+strings.Repeat(" ", layout.panelWidth-2)+"│")
 	}
-	if frame.Footer != "" && height >= 8 {
-		writePanelLine(out, top+height-2, left+2, contentWidth, "\x1b[37;44m", printableModalText(frame.Footer, false))
+	writeModalLine(out, layout.top+layout.panelHeight-1, layout.left, layout.panelWidth, styles.border, "╰"+strings.Repeat("─", layout.panelWidth-2)+"╯")
+
+	writeModalHeader(out, layout, frame, bodyLines, scrollOffset, maxScroll)
+	separatorRow := layout.top + 1 + layout.headerRows
+	if layout.separatorRows > 0 {
+		writeModalText(out, separatorRow, layout.innerLeft, layout.innerWidth, styles.muted, strings.Repeat("─", layout.innerWidth))
+	}
+	writeModalBody(out, layout, bodyLines, scrollOffset)
+	writeModalFooter(out, layout, frame, maxScroll)
+}
+
+func writeModalHeader(out *strings.Builder, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int) {
+	styles := newModalStyles()
+	title := printableModalText(firstNonEmpty(frame.Title, "Modal"), false)
+	status := printableModalText(frame.Status, false)
+	if status == "" {
+		status = "Native overlay"
+	}
+	statusText := " " + modalFitLine(status, maxInt(1, minInt(28, layout.innerWidth/3))) + " "
+	statusBadge := styles.status.Render(statusText)
+	statusWidth := lipgloss.Width(statusText)
+	titleWidth := maxInt(1, layout.innerWidth-statusWidth-2)
+	titleText := "◆ " + modalFitLine(title, maxInt(1, titleWidth-2))
+	space := maxInt(1, layout.innerWidth-lipgloss.Width(titleText)-statusWidth)
+	moveModalCursor(out, layout.top+1, layout.innerLeft)
+	out.WriteString(styles.title.Render(titleText))
+	out.WriteString(styles.panel.Render(strings.Repeat(" ", space)))
+	out.WriteString(statusBadge)
+
+	subtitle := "Host-rendered secure canvas"
+	if maxScroll > 0 {
+		end := minInt(len(bodyLines), scrollOffset+layout.bodyRows)
+		subtitle = fmt.Sprintf("Host-rendered secure canvas • lines %d-%d of %d", scrollOffset+1, end, len(bodyLines))
+	}
+	writeModalText(out, layout.top+2, layout.innerLeft, layout.innerWidth, styles.muted, subtitle)
+}
+
+func writeModalBody(out *strings.Builder, layout modalLayout, bodyLines []string, scrollOffset int) {
+	styles := newModalStyles()
+	bodyStart := layout.top + 1 + layout.headerRows + layout.separatorRows
+	if layout.bodyRows <= 0 {
+		return
+	}
+	if len(bodyLines) == 0 {
+		bodyLines = []string{"No live details yet."}
+	}
+	for row := 0; row < layout.bodyRows; row++ {
+		index := scrollOffset + row
+		text := ""
+		style := styles.body
+		if index < len(bodyLines) {
+			text = bodyLines[index]
+		}
+		if row == 0 && scrollOffset > 0 {
+			text = "↑ " + text
+			style = styles.accent
+		}
+		if row == layout.bodyRows-1 && scrollOffset+layout.bodyRows < len(bodyLines) {
+			remaining := len(bodyLines) - (scrollOffset + layout.bodyRows)
+			text = fmt.Sprintf("… %d more line%s (↓/PgDn)", remaining, pluralSuffix(remaining))
+			style = styles.accent
+		}
+		writeModalText(out, bodyStart+row, layout.innerLeft, layout.innerWidth, style, text)
 	}
 }
 
-func writePanelLine(out *strings.Builder, row, col, width int, style, text string) {
-	fmt.Fprintf(out, "\x1b[%d;%dH%s%s\x1b[0m", row, col, style, fitModalLine(text, width))
+func writeModalFooter(out *strings.Builder, layout modalLayout, frame ModalFrame, maxScroll int) {
+	if layout.footerRows <= 0 {
+		return
+	}
+	styles := newModalStyles()
+	row := layout.footerStartRow
+	if row < layout.top+layout.panelHeight-1 {
+		writeModalText(out, row, layout.innerLeft, layout.innerWidth, styles.muted, strings.Repeat("─", layout.innerWidth))
+		row++
+	}
+	if frame.Footer != "" && row < layout.top+layout.panelHeight-1 {
+		writeModalText(out, row, layout.innerLeft, layout.innerWidth, styles.footer, printableModalText(frame.Footer, false))
+		row++
+	}
+	if row < layout.top+layout.panelHeight-1 {
+		actions := modalActionsText(frame)
+		if actions == "" {
+			actions = "[Esc] Close"
+		}
+		if maxScroll > 0 {
+			actions += "  [↑/↓] Scroll"
+		}
+		writeModalText(out, row, layout.innerLeft, layout.innerWidth, styles.actions, actions)
+	}
+}
+
+func writeModalLine(out *strings.Builder, row, col, width int, style lipgloss.Style, text string) {
+	moveModalCursor(out, row, col)
+	out.WriteString(style.Render(modalPadLine(modalFitLine(text, width), width)))
+}
+
+func writeModalText(out *strings.Builder, row, col, width int, style lipgloss.Style, text string) {
+	moveModalCursor(out, row, col)
+	out.WriteString(style.Render(modalPadLine(modalFitLine(printableModalText(text, false), width), width)))
+}
+
+func moveModalCursor(out *strings.Builder, row, col int) {
+	fmt.Fprintf(out, "\x1b[%d;%dH", row, col)
 }
 
 func modalActionsText(frame ModalFrame) string {
-	parts := make([]string, 0, len(frame.Actions))
+	parts := make([]string, 0, len(frame.Actions)+1)
 	for _, action := range frame.Actions {
 		label := printableModalText(action.Label, false)
+		if label == "" {
+			label = printableModalText(action.Name, false)
+		}
 		if action.Key != "" {
 			label = "[" + printableModalText(action.Key, false) + "] " + label
+		}
+		if action.Description != "" {
+			label += " — " + printableModalText(action.Description, false)
 		}
 		parts = append(parts, label)
 	}
 	return strings.Join(parts, "  ")
 }
 
+func modalBodyLines(text string, width int) []string {
+	lines := wrapModalText(printableModalText(text, true), width)
+	if len(lines) == 0 {
+		return []string{"No live details yet."}
+	}
+	return lines
+}
+
 func wrapModalText(text string, width int) []string {
 	if width <= 0 {
 		return nil
 	}
+	text = strings.ReplaceAll(text, "	", "    ")
 	var lines []string
 	for _, raw := range strings.Split(text, "\n") {
-		line := strings.TrimRight(raw, " ")
-		for len([]rune(line)) > width {
-			runes := []rune(line)
-			lines = append(lines, string(runes[:width]))
-			line = string(runes[width:])
+		raw = strings.TrimRight(raw, " ")
+		if raw == "" {
+			lines = append(lines, "")
+			continue
 		}
-		lines = append(lines, line)
+		line := ""
+		for _, word := range strings.Fields(raw) {
+			if line == "" {
+				for lipgloss.Width(word) > width {
+					prefix, rest := splitModalWidth(word, width)
+					lines = append(lines, prefix)
+					word = rest
+				}
+				line = word
+				continue
+			}
+			if lipgloss.Width(line)+1+lipgloss.Width(word) <= width {
+				line += " " + word
+				continue
+			}
+			lines = append(lines, line)
+			line = ""
+			for lipgloss.Width(word) > width {
+				prefix, rest := splitModalWidth(word, width)
+				lines = append(lines, prefix)
+				word = rest
+			}
+			line = word
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
 	}
 	return lines
 }
@@ -1026,17 +1506,62 @@ func maxInt(a, b int) int {
 }
 
 func fitModalLine(text string, width int) string {
+	return modalFitLine(text, width)
+}
+
+func modalFitLine(text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	runes := []rune(text)
-	if len(runes) > width {
-		if width == 1 {
-			return "…"
-		}
-		return string(runes[:width-1]) + "…"
+	if lipgloss.Width(text) <= width {
+		return text
 	}
-	return string(runes) + strings.Repeat(" ", width-len(runes))
+	if width == 1 {
+		return "…"
+	}
+	prefix, _ := splitModalWidth(text, width-1)
+	return prefix + "…"
+}
+
+func modalPadLine(text string, width int) string {
+	visible := lipgloss.Width(text)
+	if visible >= width {
+		return text
+	}
+	return text + strings.Repeat(" ", width-visible)
+}
+
+func splitModalWidth(text string, width int) (string, string) {
+	if width <= 0 {
+		return "", text
+	}
+	var out strings.Builder
+	used := 0
+	for index, r := range text {
+		w := lipgloss.Width(string(r))
+		if used+w > width {
+			return out.String(), text[index:]
+		}
+		out.WriteRune(r)
+		used += w
+	}
+	return out.String(), ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func pluralSuffix(value int) string {
+	if value == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func (r *TerminalModalRenderer) HideModal() {
@@ -1048,6 +1573,7 @@ func (r *TerminalModalRenderer) HideModal() {
 	r.queryRequests.Reset()
 	r.active = false
 	r.activeFrame = ModalFrame{}
+	r.scrollOffset = 0
 	if r.writer != nil {
 		if r.hostAlt && !r.screen.useAlt {
 			_, _ = io.WriteString(r.writer, "\x1b[?1049l")
