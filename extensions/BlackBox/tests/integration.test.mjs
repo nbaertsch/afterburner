@@ -183,6 +183,14 @@ test("session registration renders the visible panel without canvas support", as
     assert.match(logs[0], /Signals\s*:/);
 });
 
+test("session extension uses the real session canvas RPC to open Black Box", async () => {
+    const source = await readFile(new URL("../extensions/BlackBox/extension.mjs", import.meta.url), "utf8");
+    assert.match(source, /joinedSession\?\.rpc\?\.canvas\?\.open/);
+    assert.doesNotMatch(source, /copilotSdk\.openModalCanvas/);
+    assert.match(source, /extensionId:\s*"black-box"/);
+    assert.match(source, /canvasId/);
+});
+
 test("black-box-modal command opens the registered runtime modal when available", async () => {
     const opens = [];
     const { registration, logs } = await captureSessionRegistration({
