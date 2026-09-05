@@ -210,7 +210,13 @@ export async function activate(api = {}) {
             catch { return; }
             for (const request of requests) {
                 if (request.surfaceId !== "afterburner-black-box-live") continue;
-                await modal.open(request.input ?? {}).catch(() => isolatedWarning("modal-canvas-open-failed"));
+                try {
+                    await modal.open(request.input ?? {});
+                    await service.completeModalOpenRequest(request, { ok: true });
+                } catch {
+                    isolatedWarning("modal-canvas-open-failed");
+                    await service.completeModalOpenRequest(request, { ok: false, error: "modal-canvas-open-failed" }).catch(() => {});
+                }
             }
         };
         if (modal) {

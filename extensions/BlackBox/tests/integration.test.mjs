@@ -33,6 +33,25 @@ test("native event path resolves the Copilot extension SESSION_ID", () => {
     }), "C:\\managed-home\\session-state\\session-123\\events.jsonl");
 });
 
+test("modal activation requests wait for runtime acknowledgement", async t => {
+    const home = await workDirectory("modal-activation-ack");
+    t.after(() => cleanup(home));
+    const configPath = join(home, "config", "black-box.json");
+    await mkdir(join(home, "config"), { recursive: true });
+    await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
+    const service = await startBlackBoxService({
+        mode: "session",
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
+    });
+    t.after(() => service.close());
+    const pending = service.requestModalOpen({ timeoutMs: 2000 });
+    await delay(100);
+    const requests = await service.consumeModalOpenRequests();
+    assert.equal(requests.length, 1);
+    await service.completeModalOpenRequest(requests[0], { ok: true });
+    assert.equal((await pending).ok, true);
+});
+
 test("runtime observer ignores modal update self-noise", async t => {
     const home = await workDirectory("modal-self-noise");
     t.after(() => cleanup(home));

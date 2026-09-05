@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { TimelineAnalytics } from "./analytics.mjs";
 import { loadBlackBoxConfig, resolveDataRoot, resolveNativeEventsPath } from "./config.mjs";
 import { exportSanitizedBundle } from "./export.mjs";
@@ -162,7 +163,9 @@ export async function startBlackBoxService(options = {}) {
         if (options.startTailer !== false) tailer.start();
     }
 
-    const activationPath = join(root, "state", "modal-activation.jsonl");
+    const activationStateDirectory = join(root, "state");
+    const activationPath = join(activationStateDirectory, "modal-activation.jsonl");
+    const activationAckDirectory = join(activationStateDirectory, "modal-activation-acks");
     const service = {
         root,
         config,
@@ -230,7 +233,7 @@ export async function startBlackBoxService(options = {}) {
             return store.readRecent(limit, record => !kinds || kinds.has(record.kind));
         },
         async requestModalOpen(input = {}) {
-            await mkdir(join(root, "state"), { recursive: true });
+            await mkdir(activationAckDirectory, { recursive: true });
             const request = {
                 schemaVersion: 1,
                 requestId: randomBytes(12).toString("hex"),
@@ -239,7 +242,19 @@ export async function startBlackBoxService(options = {}) {
                 input: input.input && typeof input.input === "object" ? input.input : {}
             };
             await writeFile(activationPath, `${JSON.stringify(request)}\n`, { flag: "a" });
-            return { ok: true, requestId: request.requestId, surfaceId: request.surfaceId };
+            const ackPath = join(activationAckDirectory, `${request.requestId}.json`);
+            const deadline = Date.now() + safeLimit(input.timeoutMs, 3000, 10000);
+            while (Date.now() < deadline) {
+                try {
+                    const ack = JSON.parse(await readFile(ackPath, "utf8"));
+                    try { await unlink(ackPath); } catch {}
+                    return { ok: ack.ok === true, requestId: request.requestId, surfaceId: request.surfaceId, error: ack.error };
+                } catch (error) {
+                    if (error?.code !== "ENOENT") return { ok: false, requestId: request.requestId, surfaceId: request.surfaceId, error: "modal-activation-ack-invalid" };
+                }
+                await delay(100);
+            }
+            return { ok: false, requestId: request.requestId, surfaceId: request.surfaceId, error: "modal-activation-timeout" };
         },
         async consumeModalOpenRequests() {
             let body = "";
@@ -252,7 +267,20 @@ export async function startBlackBoxService(options = {}) {
             return body.split(/\r?\n/).filter(Boolean).map(line => {
                 try { return JSON.parse(line); }
                 catch { return null; }
-            }).filter(request => request?.schemaVersion === 1 && typeof request.surfaceId === "string");
+            }).filter(request => request?.schemaVersion === 1 && typeof request.surfaceId === "string" && typeof request.requestId === "string");
+        },
+        async completeModalOpenRequest(request, result = {}) {
+            if (!request?.requestId) return false;
+            await mkdir(activationAckDirectory, { recursive: true });
+            const ack = {
+                schemaVersion: 1,
+                requestId: request.requestId,
+                ok: result.ok === true,
+                error: result.error ? String(result.error).slice(0, 160) : undefined,
+                completedAt: new Date().toISOString()
+            };
+            await writeFile(join(activationAckDirectory, `${request.requestId}.json`), JSON.stringify(ack), "utf8");
+            return true;
         },
         async exportBundle(input = {}) {
             await store.flush();
