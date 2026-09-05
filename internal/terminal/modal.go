@@ -805,7 +805,7 @@ func (r *TerminalModalRenderer) Resize(size Size) {
 	defer r.mu.Unlock()
 	r.screen.Resize(size)
 	if r.active && r.writer != nil {
-		_, _ = io.WriteString(r.writer, renderModalFrame(r.activeFrame))
+		_, _ = io.WriteString(r.writer, renderModalFrame(r.screen.Snapshot(), r.activeFrame))
 	}
 }
 
@@ -842,47 +842,201 @@ func (r *TerminalModalRenderer) ShowModal(frame ModalFrame) {
 	if r.writer == nil {
 		return
 	}
-	_, _ = io.WriteString(r.writer, renderModalFrame(frame))
+	_, _ = io.WriteString(r.writer, renderModalFrame(r.screen.Snapshot(), frame))
 }
 
-func renderModalFrame(frame ModalFrame) string {
+func renderModalFrame(snapshot TerminalSnapshot, frame ModalFrame) string {
+	cols := int(snapshot.Size.Cols)
+	rows := int(snapshot.Size.Rows)
+	if cols <= 0 {
+		cols = vtDefaultCols
+	}
+	if rows <= 0 {
+		rows = vtDefaultRows
+	}
+	panelWidth := cols - 8
+	if panelWidth > 110 {
+		panelWidth = 110
+	}
+	if panelWidth < 48 {
+		panelWidth = cols
+	}
+	panelHeight := rows - 6
+	if panelHeight > 28 {
+		panelHeight = 28
+	}
+	if panelHeight < 10 {
+		panelHeight = rows
+	}
+	left := (cols-panelWidth)/2 + 1
+	top := (rows-panelHeight)/2 + 1
+	if left < 1 {
+		left = 1
+	}
+	if top < 1 {
+		top = 1
+	}
+	contentWidth := panelWidth - 4
+	if contentWidth < 1 {
+		contentWidth = panelWidth
+	}
+	reservedFooterRows := 0
+	if panelHeight >= 8 && len(frame.Actions) > 0 {
+		reservedFooterRows++
+	}
+	if panelHeight >= 8 && frame.Footer != "" {
+		reservedFooterRows++
+	}
+	contentBottom := panelHeight - 1 - reservedFooterRows
+	if contentBottom < 2 {
+		contentBottom = panelHeight - 1
+	}
+
 	var out strings.Builder
-	out.WriteString("\x1b[?25l\x1b[0m\x1b[H\x1b[2J")
-	out.WriteString("\x1b[1m")
-	out.WriteString(printableModalText(frame.Title, false))
-	out.WriteString("\x1b[0m\r\n")
-	if frame.Status != "" {
-		out.WriteString(printableModalText(frame.Status, false))
-		out.WriteString("\r\n")
-	}
-	out.WriteString("\r\n")
-	body := printableModalText(frame.Body, true)
-	for _, line := range strings.Split(body, "\n") {
-		out.WriteString(line)
-		out.WriteString("\r\n")
-	}
-	if len(frame.Actions) > 0 {
-		out.WriteString("\r\n")
-		for index, action := range frame.Actions {
-			if index > 0 {
-				out.WriteString("  ")
-			}
-			if action.Key != "" {
-				out.WriteString("[")
-				out.WriteString(printableModalText(action.Key, false))
-				out.WriteString("] ")
-			}
-			out.WriteString(printableModalText(action.Label, false))
-		}
-		out.WriteString("\r\n")
-	}
-	if frame.Footer != "" {
-		out.WriteString("\r\n")
-		out.WriteString(printableModalText(frame.Footer, false))
-		out.WriteString("\r\n")
-	}
+	out.WriteString("\x1b[?25l\x1b[0m\x1b[H")
+	writeBackdrop(&out, snapshot, cols, rows)
+	writeBox(&out, top, left, panelWidth, panelHeight, frame, contentWidth, contentBottom, reservedFooterRows)
 	out.WriteString("\x1b[?25h")
 	return out.String()
+}
+
+func writeBackdrop(out *strings.Builder, snapshot TerminalSnapshot, cols, rows int) {
+	for row := 0; row < rows; row++ {
+		out.WriteString("\x1b[0;90m")
+		line := ""
+		if row < len(snapshot.Rows) {
+			line = terminalSnapshotRowString(snapshot.Rows[row])
+		}
+		line = fitModalLine(line, cols)
+		out.WriteString(line)
+		if len([]rune(line)) < cols {
+			out.WriteString(strings.Repeat(" ", cols-len([]rune(line))))
+		}
+		if row < rows-1 {
+			out.WriteString("\r\n")
+		}
+	}
+	out.WriteString("\x1b[0m")
+}
+
+func terminalSnapshotRowString(row []TerminalCell) string {
+	var line strings.Builder
+	for _, cell := range row {
+		if cell.Continuation {
+			continue
+		}
+		if cell.Grapheme == "" {
+			line.WriteByte(' ')
+		} else {
+			line.WriteString(cell.Grapheme)
+		}
+	}
+	return strings.TrimRight(line.String(), " ")
+}
+
+func writeBox(out *strings.Builder, top, left, width, height int, frame ModalFrame, contentWidth, contentBottom, reservedFooterRows int) {
+	move := func(row, col int) { fmt.Fprintf(out, "\x1b[%d;%dH", row, col) }
+	if width < 4 || height < 4 {
+		move(top, left)
+		writePanelLine(out, top, left, maxInt(1, width), "\x1b[1;97;44m", printableModalText(frame.Title, false))
+		if height > 1 {
+			writePanelLine(out, top+1, left, maxInt(1, width), "\x1b[37;44m", printableModalText(frame.Body, true))
+		}
+		return
+	}
+	border := strings.Repeat("─", width-2)
+	move(top, left)
+	fmt.Fprintf(out, "\x1b[0;1;97;44m╭%s╮\x1b[0m", border)
+	for row := 1; row < height-1; row++ {
+		move(top+row, left)
+		fmt.Fprintf(out, "\x1b[0;37;44m│%s│\x1b[0m", strings.Repeat(" ", width-2))
+	}
+	move(top+height-1, left)
+	fmt.Fprintf(out, "\x1b[0;1;97;44m╰%s╯\x1b[0m", border)
+
+	line := 1
+	writePanelLine(out, top+line, left+2, contentWidth, "\x1b[1;97;44m", printableModalText(frame.Title, false))
+	line++
+	if frame.Status != "" && line < height-2 {
+		writePanelLine(out, top+line, left+2, contentWidth, "\x1b[36;44m", printableModalText(frame.Status, false))
+		line++
+	}
+	if line < height-2 {
+		writePanelLine(out, top+line, left+2, contentWidth, "\x1b[37;44m", strings.Repeat("─", contentWidth))
+		line++
+	}
+	bodyLines := wrapModalText(printableModalText(frame.Body, true), contentWidth)
+	for index, bodyLine := range bodyLines {
+		if line >= contentBottom {
+			if index < len(bodyLines) {
+				writePanelLine(out, top+line, left+2, contentWidth, "\x1b[33;44m", "…")
+			}
+			break
+		}
+		writePanelLine(out, top+line, left+2, contentWidth, "\x1b[37;44m", bodyLine)
+		line++
+	}
+	if len(frame.Actions) > 0 && reservedFooterRows > 0 {
+		actions := modalActionsText(frame)
+		writePanelLine(out, top+height-1-reservedFooterRows, left+2, contentWidth, "\x1b[1;30;47m", actions)
+	}
+	if frame.Footer != "" && height >= 8 {
+		writePanelLine(out, top+height-2, left+2, contentWidth, "\x1b[37;44m", printableModalText(frame.Footer, false))
+	}
+}
+
+func writePanelLine(out *strings.Builder, row, col, width int, style, text string) {
+	fmt.Fprintf(out, "\x1b[%d;%dH%s%s\x1b[0m", row, col, style, fitModalLine(text, width))
+}
+
+func modalActionsText(frame ModalFrame) string {
+	parts := make([]string, 0, len(frame.Actions))
+	for _, action := range frame.Actions {
+		label := printableModalText(action.Label, false)
+		if action.Key != "" {
+			label = "[" + printableModalText(action.Key, false) + "] " + label
+		}
+		parts = append(parts, label)
+	}
+	return strings.Join(parts, "  ")
+}
+
+func wrapModalText(text string, width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	var lines []string
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimRight(raw, " ")
+		for len([]rune(line)) > width {
+			runes := []rune(line)
+			lines = append(lines, string(runes[:width]))
+			line = string(runes[width:])
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func fitModalLine(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) > width {
+		if width == 1 {
+			return "…"
+		}
+		return string(runes[:width-1]) + "…"
+	}
+	return string(runes) + strings.Repeat(" ", width-len(runes))
 }
 
 func (r *TerminalModalRenderer) HideModal() {
