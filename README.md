@@ -70,10 +70,10 @@ Afterburner preserves argument boundaries, empty arguments, repeated flags, Unic
 interactive terminal behavior, Ctrl+C, and child exit codes. It injects only the prepared runtime
 version required by Copilot's loader. Normal `copilot` remains untouched.
 
-An experimental production terminal broker foundation can be enabled for local interactive Windows
-launches with `AFTERBURNER_TERMINAL_BROKER=1`. The broker uses Windows ConPTY to forward Copilot
-input/output and hosts authenticated extension modal canvases. It is only used when both stdin and
-stdout are terminals; redirected and non-interactive launches keep the default direct process path.
+Local interactive Windows launches automatically use the production ConPTY terminal broker. The
+broker forwards Copilot input/output and hosts authenticated extension UI surfaces. Redirected and
+non-interactive launches continue using the direct process path. For emergency diagnostics only,
+set `AFTERBURNER_DISABLE_TERMINAL_BROKER=1` to force direct passthrough.
 
 Recovery launch options:
 

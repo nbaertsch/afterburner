@@ -16,16 +16,16 @@ import (
 	"github.com/nbaertsch/afterburner/internal/terminal"
 )
 
-func TestBrokerFeatureFlag(t *testing.T) {
-	t.Setenv("AFTERBURNER_TERMINAL_BROKER", "")
-	if brokerFeatureEnabled() {
-		t.Fatal("broker enabled without feature flag")
+func TestBrokerEnabledByDefaultWithEmergencyOptOut(t *testing.T) {
+	t.Setenv("AFTERBURNER_DISABLE_TERMINAL_BROKER", "")
+	if !brokerFeatureEnabled() {
+		t.Fatal("broker disabled by default")
 	}
 	for _, value := range []string{"1", "true", "yes", "on"} {
 		t.Run(value, func(t *testing.T) {
-			t.Setenv("AFTERBURNER_TERMINAL_BROKER", value)
-			if !brokerFeatureEnabled() {
-				t.Fatalf("broker disabled for %q", value)
+			t.Setenv("AFTERBURNER_DISABLE_TERMINAL_BROKER", value)
+			if brokerFeatureEnabled() {
+				t.Fatalf("broker enabled despite opt-out %q", value)
 			}
 		})
 	}

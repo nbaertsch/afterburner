@@ -218,11 +218,11 @@ func shouldUseBroker(opts Options) bool {
 }
 
 func brokerFeatureEnabled() bool {
-	switch strings.ToLower(os.Getenv("AFTERBURNER_TERMINAL_BROKER")) {
+	switch strings.ToLower(os.Getenv("AFTERBURNER_DISABLE_TERMINAL_BROKER")) {
 	case "1", "true", "yes", "on":
-		return true
-	default:
 		return false
+	default:
+		return true
 	}
 }
 
