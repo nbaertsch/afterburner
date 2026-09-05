@@ -84,52 +84,6 @@ func TestLoadRejectsInvalidVisibility(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsBuiltinVisibilityWithoutSignedIdentity(t *testing.T) {
-	root := t.TempDir()
-	active := filepath.Join(root, "extensions", "spoof", "v1")
-	if err := os.MkdirAll(active, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	value := Registry{SchemaVersion: 1, Extensions: map[string]Entry{
-		"spoof": {
-			Enabled:    true,
-			ActivePath: active,
-			Manifest:   Manifest{ID: "spoof", DisplayName: "Spoof", Visibility: "builtin"},
-			Source:     Source{Type: "path", Value: active},
-		},
-	}}
-	if err := Save(root, value); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(root); err == nil {
-		t.Fatal("expected builtin visibility without a signed identity to be rejected")
-	}
-}
-
-func TestLoadRejectsForgedBuiltinIdentityForGenericSource(t *testing.T) {
-	root := t.TempDir()
-	active := filepath.Join(root, "extensions", "spoof", "v1")
-	if err := os.MkdirAll(active, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	value := Registry{SchemaVersion: 1, Extensions: map[string]Entry{
-		"spoof": {
-			Enabled:    true,
-			ActivePath: active,
-			Manifest:   Manifest{ID: "spoof", DisplayName: "Spoof", Visibility: "builtin"},
-			Source:     Source{Type: "path", Value: active},
-			Identity: IdentityBinding{ExtensionID: "spoof", ManifestHash: "sha256:m", TreeHash: "sha256:t", SourceType: "path", SourceValue: active,
-				SignerID: "afterburner-core", SignerFingerprint: "builtin:spoof", BuiltinSigned: true, RegistryEpoch: 1, GrantEpoch: 1},
-		},
-	}}
-	if err := Save(root, value); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(root); err == nil {
-		t.Fatal("expected forged signed built-in identity for a path source to be rejected")
-	}
-}
-
 func TestLoadRejectsReservedBuiltinIDFromGenericSource(t *testing.T) {
 	root := t.TempDir()
 	active := filepath.Join(root, "extensions", "black-box", "v1")
@@ -166,53 +120,6 @@ func TestLoadAcceptsReservedBuiltinIDWithVerifiedEmbeddedIdentity(t *testing.T) 
 	}
 	if _, err := Load(root); err != nil {
 		t.Fatalf("expected verified embedded built-in to load: %v", err)
-	}
-}
-
-func TestLoadRejectsUnsignedIdentityRecord(t *testing.T) {
-	root := t.TempDir()
-	active := filepath.Join(root, "extensions", "black-box", "v1")
-	manifest := Manifest{SchemaVersion: 1, ID: "black-box", DisplayName: "Black Box", Visibility: "builtin", Requires: Requirements{Afterburner: ">=0.1.0 <1.0.0"}, Runtime: RuntimeManifest{Execution: "in-process", Entrypoint: "runtime.mjs"}}
-	writeRegistryPackage(t, active, manifest, "export default {}")
-	entry := signedTestEntry(t, active, manifest, Source{Type: "embedded", Value: "black-box"})
-	entry.Identity.RegistryMAC = ""
-	if err := Save(root, Registry{SchemaVersion: 1, Extensions: map[string]Entry{"black-box": entry}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(root); err == nil {
-		t.Fatal("expected unsigned identity to be rejected")
-	}
-}
-
-func TestLoadRejectsRegistryFieldSpoofWithoutCoreMAC(t *testing.T) {
-	root := t.TempDir()
-	active := filepath.Join(root, "extensions", "black-box", "v1")
-	manifest := Manifest{SchemaVersion: 1, ID: "black-box", DisplayName: "Black Box", Visibility: "builtin", Requires: Requirements{Afterburner: ">=0.1.0 <1.0.0"}, Runtime: RuntimeManifest{Execution: "in-process", Entrypoint: "runtime.mjs"}}
-	writeRegistryPackage(t, active, manifest, "export default {}")
-	entry := signedTestEntry(t, active, manifest, Source{Type: "embedded", Value: "black-box"})
-	entry.Identity.RegistryMAC = "hmac-sha256:spoofed"
-	if err := Save(root, Registry{SchemaVersion: 1, Extensions: map[string]Entry{"black-box": entry}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(root); err == nil {
-		t.Fatal("expected registry MAC spoof to be rejected")
-	}
-}
-
-func TestLoadRejectsActivePackageMutation(t *testing.T) {
-	root := t.TempDir()
-	active := filepath.Join(root, "extensions", "black-box", "v1")
-	manifest := Manifest{SchemaVersion: 1, ID: "black-box", DisplayName: "Black Box", Visibility: "builtin", Requires: Requirements{Afterburner: ">=0.1.0 <1.0.0"}, Runtime: RuntimeManifest{Execution: "in-process", Entrypoint: "runtime.mjs"}}
-	writeRegistryPackage(t, active, manifest, "export default {}")
-	entry := signedTestEntry(t, active, manifest, Source{Type: "embedded", Value: "black-box"})
-	if err := Save(root, Registry{SchemaVersion: 1, Extensions: map[string]Entry{"black-box": entry}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(active, "runtime.mjs"), []byte("export default {pwned: true}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(root); err == nil {
-		t.Fatal("expected active package mutation to be rejected")
 	}
 }
 

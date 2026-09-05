@@ -411,14 +411,18 @@ func nativeIdentityAssertions(value *registry.Registry) []nativeIdentityAssertio
 	}
 	assertions := make([]nativeIdentityAssertion, 0, len(value.Extensions))
 	for id, entry := range value.Extensions {
-		if !entry.Enabled || !entry.Verified || entry.Identity.IsZero() {
+		if !entry.Enabled || !entry.Verified {
+			continue
+		}
+		manifestHash, treeHash, err := registry.VerifyActivePackage(entry)
+		if err != nil {
 			continue
 		}
 		assertions = append(assertions, nativeIdentityAssertion{
 			ExtensionID:    id,
 			ActivePath:     entry.ActivePath,
-			ManifestHash:   entry.Identity.ManifestHash,
-			TreeHash:       entry.Identity.TreeHash,
+			ManifestHash:   "sha256:" + manifestHash,
+			TreeHash:       "sha256:" + treeHash,
 			SourceType:     entry.Source.Type,
 			SourceValue:    entry.Source.Value,
 			TrustedBuiltin: registry.IsTrustedBuiltinEntry(entry),

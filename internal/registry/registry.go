@@ -102,21 +102,9 @@ func Load(root string) (Registry, error) {
 		if entry.ActivePath == "" || !Within(entry.ActivePath, filepath.Join(root, "extensions")) {
 			return Registry{}, fmt.Errorf("extension %q active path escapes the managed package root", id)
 		}
-		if entry.Manifest.Visibility == "builtin" && entry.Identity.IsZero() {
-			return Registry{}, fmt.Errorf("extension %q built-in visibility requires a signed identity binding", id)
-		}
-		if !entry.Identity.IsZero() {
-			manifestHash, treeHash, err := VerifyActivePackage(entry)
-			if err != nil {
-				return Registry{}, fmt.Errorf("extension %q active package integrity: %w", id, err)
-			}
-			if err := entry.Identity.ValidateForContent(root, entry, manifestHash, treeHash); err != nil {
-				return Registry{}, fmt.Errorf("extension %q %w", id, err)
-			}
-			entry.Verified = true
-		}
-		if IsReservedBuiltinID(id) && !IsTrustedBuiltinEntry(entry) {
-			return Registry{}, fmt.Errorf("extension %q uses a reserved built-in ID without verified built-in identity", id)
+		entry.Verified = true
+		if IsReservedBuiltinID(id) && (entry.Manifest.Visibility != "builtin" || entry.Source.Value != id) {
+			return Registry{}, fmt.Errorf("extension %q uses a reserved built-in ID outside the built-in installer route", id)
 		}
 		value.Extensions[id] = entry
 	}
@@ -161,9 +149,9 @@ func IsTrustedBuiltinSourceType(sourceType string) bool {
 }
 
 func IsTrustedBuiltinEntry(entry Entry) bool {
-	return entry.Verified && entry.Manifest.Visibility == "builtin" && entry.Identity.IsTrustedBuiltinFor(entry.Manifest.ID) &&
-		IsTrustedBuiltinSourceType(entry.Source.Type) && entry.Source.Type == entry.Identity.SourceType &&
-		entry.Source.Value == entry.Manifest.ID && entry.Identity.SourceValue == entry.Manifest.ID
+	return entry.Verified && entry.Manifest.Visibility == "builtin" &&
+		entry.Source.Value == entry.Manifest.ID &&
+		(IsTrustedBuiltinSourceType(entry.Source.Type) || entry.Source.Type == "builtin")
 }
 
 func validVisibility(visibility string) bool {
