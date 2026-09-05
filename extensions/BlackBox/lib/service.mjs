@@ -41,6 +41,12 @@ function safeLimit(value, fallback, maximum) {
     return Number.isSafeInteger(number) && number > 0 ? Math.min(number, maximum) : fallback;
 }
 
+function shouldIgnoreRuntimeObservation(event) {
+    const type = typeof event?.type === "string" ? event.type : "";
+    if (type === "ui.modal_canvas.updated") return true;
+    return false;
+}
+
 export async function startBlackBoxService(options = {}) {
     const env = options.env ?? process.env;
     const loaded = options.config
@@ -168,6 +174,7 @@ export async function startBlackBoxService(options = {}) {
             const normalized = event?.metadata && event.data === undefined
                 ? { ...event, data: event.metadata }
                 : event;
+            if (shouldIgnoreRuntimeObservation(normalized)) return false;
             return observe(normalized, {
                 kind: "runtime-observer",
                 sessionId: envelope?.sessionId ?? envelope?.session?.id ?? env.SESSION_ID ?? env.COPILOT_AGENT_SESSION_ID

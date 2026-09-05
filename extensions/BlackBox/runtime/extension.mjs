@@ -3,7 +3,7 @@ import { buildEnterpriseModalFrame, registerEnterpriseSurface, subscribeObservab
 
 const INSTANCE = Symbol.for("afterburner.black-box.runtime");
 const LIVE_MODAL_ID = "afterburner-black-box-live";
-const MODAL_REFRESH_THROTTLE_MS = 250;
+const MODAL_REFRESH_THROTTLE_MS = 1000;
 
 function isolatedWarning(code) {
     if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {

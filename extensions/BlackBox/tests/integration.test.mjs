@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { DEFAULT_MAX_BYTES, DEFAULT_SEGMENT_BYTES, loadBlackBoxConfig, resolveNativeEventsPath } from "../lib/config.mjs";
 import { buildSessionRegistration } from "../lib/session-extension.mjs";
+import { startBlackBoxService } from "../lib/service.mjs";
 import {
     BLACK_BOX_OBSERVABILITY_CAPABILITY,
     blackBoxObservabilitySinkDescriptor,
@@ -30,6 +31,22 @@ test("native event path resolves the Copilot extension SESSION_ID", () => {
         COPILOT_HOME: "C:\\managed-home",
         SESSION_ID: "session-123"
     }), "C:\\managed-home\\session-state\\session-123\\events.jsonl");
+});
+
+test("runtime observer ignores modal update self-noise", async t => {
+    const home = await workDirectory("modal-self-noise");
+    t.after(() => cleanup(home));
+    const configPath = join(home, "config", "black-box.json");
+    await mkdir(join(home, "config"), { recursive: true });
+    await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
+    const service = await startBlackBoxService({
+        mode: "runtime",
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
+    });
+    t.after(() => service.close());
+    assert.equal(await service.observeRuntime({ type: "ui.modal_canvas.updated", metadata: { modalId: "afterburner-black-box-live" } }), false);
+    const status = await service.status();
+    assert.equal(status.analytics.totalRecords, 0);
 });
 
 function fakePanelService(records = []) {
