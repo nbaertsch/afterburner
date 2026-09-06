@@ -63,6 +63,16 @@ async function closeControls(controls) {
     }
 }
 
+function modalFrameFingerprint(frame = {}) {
+    return JSON.stringify({
+        title: frame.title,
+        status: frame.status,
+        body: frame.body,
+        footer: frame.footer,
+        documentRevision: frame.document?.revision
+    });
+}
+
 async function doctorFrame(service, ui) {
     try {
         return await renderLiveModal(service, ui, {
@@ -88,6 +98,7 @@ function subscribeLiveModal(service, controls, ui) {
     let refreshing = false;
     let pending = false;
     let lastRefreshAt = 0;
+    let lastFrameFingerprint = "";
 
     const clear = () => {
         if (timer) clearTimeout(timer);
@@ -108,7 +119,14 @@ function subscribeLiveModal(service, controls, ui) {
         }
         refreshing = true;
         lastRefreshAt = Date.now();
-        try { await updateControls(controls, await safeRenderLiveModal(service, ui)); }
+        try {
+            const frame = await safeRenderLiveModal(service, ui);
+            const fingerprint = modalFrameFingerprint(frame);
+            if (fingerprint !== lastFrameFingerprint) {
+                lastFrameFingerprint = fingerprint;
+                await updateControls(controls, frame);
+            }
+        }
         finally {
             refreshing = false;
             if (pending && !disposed) {
