@@ -94,6 +94,44 @@ test("native tailing ignores Black Box UI self-noise", async t => {
     await service.close();
 });
 
+test("runtime observer accepts only scoped current-session events", async t => {
+    const root = await workDirectory("runtime-scope");
+    t.after(() => cleanup(root));
+    const service = await startBlackBoxService({
+        root,
+        config: completeConfig({ native: { enabled: false } }),
+        salt: "stable-test-salt",
+        env: { SESSION_ID: "current-session" },
+        processId: 25,
+        runId: "runtime-scope"
+    });
+    assert.equal(await service.observeRuntime({ type: "extension.discovery.started", metadata: {} }), false);
+    assert.equal(await service.observeRuntime({ type: "session.info", metadata: { sessionId: "other-session" } }), false);
+    assert.equal(await service.observeRuntime({ type: "session.info", metadata: { sessionId: "current-session", content: "SECRET" } }), true);
+    const records = await service.tail({ limit: 20 });
+    assert.equal(records.filter(record => record.eventType === "session.info").length, 1);
+    assert.doesNotMatch(JSON.stringify(records), /SECRET|current-session|other-session/);
+    await service.close();
+});
+
+test("runtime observer adopts first scoped session when no environment session is present", async t => {
+    const root = await workDirectory("runtime-scope-adopt");
+    t.after(() => cleanup(root));
+    const service = await startBlackBoxService({
+        root,
+        config: completeConfig({ native: { enabled: false } }),
+        salt: "stable-test-salt",
+        env: {},
+        processId: 26,
+        runId: "runtime-scope-adopt"
+    });
+    assert.equal(await service.observeRuntime({ type: "session.info", metadata: { sessionId: "first-session" } }), true);
+    assert.equal(await service.observeRuntime({ type: "session.info", metadata: { sessionId: "second-session" } }), false);
+    const records = await service.tail({ limit: 20 });
+    assert.equal(records.filter(record => record.eventType === "session.info").length, 1);
+    await service.close();
+});
+
 test("doctor treats a configured not-yet-created native event file as waiting", async t => {
     const root = await workDirectory("native-waiting");
     t.after(() => cleanup(root));

@@ -86,7 +86,7 @@ test("runtime observer ignores Black Box modal self-noise", async t => {
     await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
     const service = await startBlackBoxService({
         mode: "runtime",
-        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, SESSION_ID: "session-one" }
     });
     t.after(() => service.close());
     for (const type of ["ui.modal_canvas.opened", "ui.modal_canvas.updated", "ui.modal_canvas.action_started", "ui.modal_canvas.action_completed", "ui.modal_canvas.closed"]) {
@@ -95,8 +95,11 @@ test("runtime observer ignores Black Box modal self-noise", async t => {
     for (const type of ["ui.host.lifecycle", "ui.host.patch", "ui.host.recovery", "ui.host.quota"]) {
         assert.equal(await service.observeRuntime({ type, metadata: { surfaceId: "afterburner-black-box-live" } }), false, type);
     }
-    assert.equal(await service.observeRuntime({ type: "ui.modal_canvas.opened", metadata: { modalId: "other-modal" } }), true);
-    assert.equal(await service.observeRuntime({ type: "ui.host.lifecycle", metadata: { surfaceId: "other-surface" } }), true);
+    assert.equal(await service.observeRuntime({ type: "ui.modal_canvas.opened", metadata: { modalId: "other-modal" } }), false);
+    assert.equal(await service.observeRuntime({ type: "ui.host.lifecycle", metadata: { surfaceId: "other-surface" } }), false);
+    assert.equal(await service.observeRuntime({ type: "ui.modal_canvas.opened", metadata: { sessionId: "session-one", modalId: "other-modal" } }), true);
+    assert.equal(await service.observeRuntime({ type: "ui.host.lifecycle", metadata: { sessionId: "session-one", surfaceId: "other-surface" } }), true);
+    assert.equal(await service.observeRuntime({ type: "ui.host.lifecycle", metadata: { sessionId: "other-session", surfaceId: "other-surface" } }), false);
     const status = await service.status();
     assert.equal(status.analytics.totalRecords, 2);
 });
@@ -146,10 +149,15 @@ async function configureRuntimeEnvironment(t, name) {
     const previous = {
         home: process.env.AFTERBURNER_HOME,
         config: process.env.AFTERBURNER_BLACK_BOX_CONFIG,
-        openOnStart: process.env.AFTERBURNER_BLACK_BOX_OPEN_MODAL_ON_START
+        openOnStart: process.env.AFTERBURNER_BLACK_BOX_OPEN_MODAL_ON_START,
+        openSurfaceOnStart: process.env.AFTERBURNER_BLACK_BOX_OPEN_SURFACE_ON_START,
+        sessionId: process.env.SESSION_ID,
+        copilotSessionId: process.env.COPILOT_AGENT_SESSION_ID
     };
     process.env.AFTERBURNER_HOME = home;
     process.env.AFTERBURNER_BLACK_BOX_CONFIG = configPath;
+    process.env.SESSION_ID = "session-one";
+    delete process.env.COPILOT_AGENT_SESSION_ID;
     delete process.env.AFTERBURNER_BLACK_BOX_OPEN_MODAL_ON_START;
     t.after(async () => {
         if (previous.home === undefined) delete process.env.AFTERBURNER_HOME;
@@ -158,6 +166,12 @@ async function configureRuntimeEnvironment(t, name) {
         else process.env.AFTERBURNER_BLACK_BOX_CONFIG = previous.config;
         if (previous.openOnStart === undefined) delete process.env.AFTERBURNER_BLACK_BOX_OPEN_MODAL_ON_START;
         else process.env.AFTERBURNER_BLACK_BOX_OPEN_MODAL_ON_START = previous.openOnStart;
+        if (previous.openSurfaceOnStart === undefined) delete process.env.AFTERBURNER_BLACK_BOX_OPEN_SURFACE_ON_START;
+        else process.env.AFTERBURNER_BLACK_BOX_OPEN_SURFACE_ON_START = previous.openSurfaceOnStart;
+        if (previous.sessionId === undefined) delete process.env.SESSION_ID;
+        else process.env.SESSION_ID = previous.sessionId;
+        if (previous.copilotSessionId === undefined) delete process.env.COPILOT_AGENT_SESSION_ID;
+        else process.env.COPILOT_AGENT_SESSION_ID = previous.copilotSessionId;
         await cleanup(home);
     });
 }
@@ -385,7 +399,7 @@ test("runtime activation registers an isolated observer without modal support", 
         sequence: 1,
         timestamp: "2026-09-02T10:00:00.000Z",
         type: "model.request.completed",
-        metadata: { model: "colosseum-prod/gpt-5-5", durationMs: 42, content: "RUNTIME SECRET" }
+        metadata: { sessionId: "session-one", model: "colosseum-prod/gpt-5-5", durationMs: 42, content: "RUNTIME SECRET" }
     });
     const records = await instance.service.tail({ limit: 10 });
     assert.doesNotMatch(JSON.stringify(records), /RUNTIME SECRET/);
@@ -760,6 +774,22 @@ test("runtime modal prefers the top-level native registrar when available", asyn
     await instance.dispose();
 });
 
+test("runtime activation never auto-opens the modal", async t => {
+    await configureRuntimeEnvironment(t, "runtime-modal-no-auto-open");
+    process.env.AFTERBURNER_BLACK_BOX_OPEN_MODAL_ON_START = "1";
+    process.env.AFTERBURNER_BLACK_BOX_OPEN_SURFACE_ON_START = "1";
+    let openCount = 0;
+    const instance = await activate({
+        ui: { ...createFakeRuntimeUI(), registerModalCanvas: definition => ({ open: async () => { openCount++; return definition.open(); }, close: async () => ({ ok: true }), dispose() {} }) },
+        registerRuntimeObserver: () => () => {},
+        registerModalCanvas: definition => ({ open: async () => { openCount++; return definition.open(); }, close: async () => ({ ok: true }), dispose() {} })
+    });
+    t.after(() => instance?.dispose());
+    await delay(250);
+    assert.equal(openCount, 0);
+    await instance.dispose();
+});
+
 test("runtime modal opens, refreshes from accepted metadata events, and handles actions defensively", async t => {
     await configureRuntimeEnvironment(t, "runtime-modal");
     let observer;
@@ -841,6 +871,7 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
         timestamp: "2026-09-02T10:00:01.000Z",
         type: "model.request.completed",
         metadata: {
+            sessionId: "session-one",
             model: "colosseum-prod/gpt-5-5",
             durationMs: 42,
             success: true,
@@ -855,21 +886,19 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
     assert.doesNotMatch(JSON.stringify(updates), /PROMPT SECRET|RUNTIME SECRET|TOOL SECRET/);
     const updateCount = updates.length;
     unsubscribe();
-    await observer.onEvent({
+    assert.equal(await observer.onEvent({
         schemaVersion: 1,
         sequence: 3,
         timestamp: "2026-09-02T10:00:02.000Z",
         type: "extension.activated",
         metadata: { extensionId: "black-box", extensionKind: "afterburner", state: "active" }
-    });
+    }), false);
     await delay(350);
     assert.equal(updates.length, updateCount, "unsubscribed modal must not continue receiving live updates");
 
     const records = await instance.service.tail({ limit: 10 });
     assert.doesNotMatch(JSON.stringify(records), /PROMPT SECRET|RUNTIME SECRET|TOOL SECRET/);
-    assert.deepEqual(records.find(record => record.eventType === "extension.activated")?.attributes, {
-        extensionId: "black-box", extensionKind: "afterburner", state: "active"
-    });
+    assert.equal(records.find(record => record.eventType === "extension.activated"), undefined);
 
     await instance.dispose();
     assert.equal(handleCloseCount, 1);

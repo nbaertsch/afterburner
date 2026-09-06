@@ -308,11 +308,6 @@ export async function activate(api = {}) {
             activationWatcher = await subscribeActivationWakeups();
             await pollActivationRequests();
         }
-        if (enterprise && process.env.AFTERBURNER_BLACK_BOX_OPEN_SURFACE_ON_START === "1") {
-            await enterprise.open({}).catch(() => isolatedWarning("enterprise-surface-open-failed"));
-        } else if (modal && process.env.AFTERBURNER_BLACK_BOX_OPEN_MODAL_ON_START === "1") {
-            await modal.open().catch(() => isolatedWarning("modal-canvas-open-failed"));
-        }
         const instance = {
             service,
             observer,

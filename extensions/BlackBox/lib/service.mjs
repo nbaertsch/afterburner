@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { watch } from "node:fs";
 import { mkdir, open, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -78,6 +78,16 @@ function shouldIgnoreRuntimeObservation(event) {
     return false;
 }
 
+function opaqueSessionId(value) {
+    if (value === undefined || value === null || value === "") return undefined;
+    return `ses_${createHash("sha256").update(String(value)).digest("base64url").slice(0, 20)}`;
+}
+
+function runtimeEventSessionId(event, envelope = {}) {
+    const data = event?.metadata ?? event?.data ?? {};
+    return envelope?.sessionId ?? envelope?.session?.id ?? data.sessionId ?? event?.sessionId;
+}
+
 export async function startBlackBoxService(options = {}) {
     const env = options.env ?? process.env;
     const loaded = options.config
@@ -88,6 +98,8 @@ export async function startBlackBoxService(options = {}) {
     const mode = options.mode ?? "session";
     const processId = options.processId ?? process.pid;
     const runId = options.runId ?? randomBytes(6).toString("hex");
+    const configuredSessionId = env.SESSION_ID ?? env.COPILOT_AGENT_SESSION_ID;
+    const runtimeSessionScope = new Set([configuredSessionId, opaqueSessionId(configuredSessionId)].filter(Boolean));
     const salt = options.salt ?? await loadOrCreateSalt(root);
     const reference = createReferenceFactory(salt);
     const store = options.store ?? new SegmentedJsonlStore({
@@ -209,9 +221,13 @@ export async function startBlackBoxService(options = {}) {
                 ? { ...event, data: event.metadata }
                 : event;
             if (shouldIgnoreRuntimeObservation(normalized)) return false;
+            const eventSessionId = runtimeEventSessionId(normalized, envelope);
+            if (!eventSessionId) return false;
+            if (runtimeSessionScope.size === 0) runtimeSessionScope.add(eventSessionId);
+            if (!runtimeSessionScope.has(eventSessionId)) return false;
             return observe(normalized, {
                 kind: "runtime-observer",
-                sessionId: envelope?.sessionId ?? envelope?.session?.id ?? env.SESSION_ID ?? env.COPILOT_AGENT_SESSION_ID
+                sessionId: eventSessionId
             });
         },
         async pollNative() {
