@@ -237,14 +237,20 @@ const visibleSelfNoise = () => capturedScreens()
 
 const visualInspectionChecks = () => {
   const screens = Object.fromEntries(capturedScreens());
+  const modalScreen = screens["Modal open screen"] ?? "";
+  const doctorScreen = screens["Doctor action screen"] ?? "";
   const checks = {
-    modalHasBoxChrome: /╭/.test(screens["Modal open screen"] ?? "") && /╰/.test(screens["Modal open screen"] ?? ""),
-    modalShowsTitle: /Afterburner Black Box Live/i.test(screens["Modal open screen"] ?? ""),
-    modalShowsActionBar: /\[r\] Refresh\s+\[d\] Doctor\s+\[q\] Close/i.test(screens["Modal open screen"] ?? ""),
-    modalAdvertisesAllScrollKeys: /↑\/↓ PgUp\/PgDn Home\/End/.test(screens["Modal open screen"] ?? ""),
+    modalHasBoxChrome: /╭/.test(modalScreen) && /╰/.test(modalScreen),
+    modalShowsTitle: /Afterburner Black Box Live/i.test(modalScreen),
+    modalShowsSecureCanvasSubtitle: /Host-rendered secure canvas/i.test(modalScreen),
+    modalShowsActionBar: /\[r\] Refresh\s+\[d\] Doctor\s+\[q\] Close/i.test(modalScreen),
+    modalAdvertisesCloseKeys: /Esc\/q closes/i.test(modalScreen),
+    modalAdvertisesMetadataOnlyFallback: /metadata-only fallback remains \/black-box-tail/i.test(modalScreen),
+    modalAdvertisesAllScrollKeys: /↑\/↓ PgUp\/PgDn Home\/End/.test(modalScreen),
     everyScrollScreenCaptured: scrollSteps.every(step => Boolean(screens[step.title])),
     refreshScreenCaptured: /Afterburner Black Box Live/i.test(screens["Refresh action screen"] ?? ""),
-    doctorScreenCaptured: /Afterburner Black Box Doctor/i.test(screens["Doctor action screen"] ?? ""),
+    doctorScreenCaptured: /Afterburner Black Box Doctor/i.test(doctorScreen),
+    doctorShowsRecorderHealth: /Recorder|Storage|Queue/i.test(doctorScreen),
     promptRestoredAfterQ: /\/ commands|tab next tab|\? help/i.test(screens["Q close restore screen"] ?? ""),
     promptRestoredAfterEscape: /\/ commands|tab next tab|\? help/i.test(screens["Escape close restore screen"] ?? ""),
     noVisibleSelfNoise: visibleSelfNoise().length === 0
@@ -474,6 +480,10 @@ child.onData(data => {
   }
   if (commandSentAt && !modalSeenAt && /Canvas opened:\s*Afterburner Black Box/i.test(recent)) {
     finish(1, "Copilot opened the Black Box canvas instead of the native modal");
+    return;
+  }
+  if (escapeCommandSentAt && !escapeModalSeenAt && /Canvas opened:\s*Afterburner Black Box/i.test(stripAnsi(raw.slice(escapeCommandRawLength)))) {
+    finish(1, "Copilot opened the Black Box canvas instead of reopening the native modal");
     return;
   }
 
