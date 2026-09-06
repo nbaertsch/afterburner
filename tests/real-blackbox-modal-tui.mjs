@@ -213,6 +213,16 @@ const extractModalBlock = (value, titlePattern) => {
   return text.slice(start, lineEnd < 0 ? undefined : lineEnd).trimEnd();
 };
 
+const extractOverlayEvidence = (value, titlePattern) => {
+  const text = stripAnsi(value).replace(/\r/g, "");
+  const matches = [...text.matchAll(titlePattern)];
+  const titleIndex = matches.at(-1)?.index ?? -1;
+  if (titleIndex < 0) return "";
+  const before = text.lastIndexOf("\n", Math.max(0, titleIndex - 1200));
+  const after = text.indexOf("\n", titleIndex + 2800);
+  return text.slice(before < 0 ? 0 : before + 1, after < 0 ? undefined : after).trimEnd();
+};
+
 const visualScreen = (value, titlePattern = null) => {
   if (!value) return "";
   const modalBlock = titlePattern ? extractModalBlock(value, titlePattern) : "";
@@ -221,9 +231,11 @@ const visualScreen = (value, titlePattern = null) => {
 };
 
 const capturedScreens = () => [
+  ["Modal overlay full screen", extractOverlayEvidence(modalOpenRaw, /Afterburner Black Box Live/gi)],
   ["Modal open screen", visualScreen(modalOpenRaw, /Afterburner Black Box Live/gi)],
   ...scrollSteps.map(step => [step.title, visualScreen(scrollRaw[step.name], /Afterburner Black Box Live/gi)]),
   ["Refresh action screen", visualScreen(refreshRaw, /Afterburner Black Box Live/gi)],
+  ["Doctor overlay full screen", extractOverlayEvidence(doctorRaw, /Afterburner Black Box Doctor/gi)],
   ["Doctor action screen", visualScreen(doctorRaw, /Afterburner Black Box Doctor/gi)],
   ["Q close restore screen", visualScreen(closeRestoreRaw)],
   ["Escape close modal screen", visualScreen(escapeModalRaw, /Afterburner Black Box Live/gi)],
@@ -237,9 +249,13 @@ const visibleSelfNoise = () => capturedScreens()
 
 const visualInspectionChecks = () => {
   const screens = Object.fromEntries(capturedScreens());
+  const modalOverlayScreen = screens["Modal overlay full screen"] ?? "";
+  const doctorOverlayScreen = screens["Doctor overlay full screen"] ?? "";
   const modalScreen = screens["Modal open screen"] ?? "";
   const doctorScreen = screens["Doctor action screen"] ?? "";
   const checks = {
+    modalPreservesBackdrop: /Afterburner Black Box Live/i.test(modalOverlayScreen) && /(?:Copilot v|\/ commands|open sidebar)/i.test(modalOverlayScreen),
+    doctorPreservesBackdrop: /Afterburner Black Box Doctor/i.test(doctorOverlayScreen) && /(?:Copilot v|\/ commands|open sidebar)/i.test(doctorOverlayScreen),
     modalHasBoxChrome: /╭/.test(modalScreen) && /╰/.test(modalScreen),
     modalShowsTitle: /Afterburner Black Box Live/i.test(modalScreen),
     modalShowsSecureCanvasSubtitle: /Host-rendered secure canvas/i.test(modalScreen),
