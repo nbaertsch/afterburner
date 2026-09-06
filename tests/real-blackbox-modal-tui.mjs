@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -207,30 +208,55 @@ ${body}
 `;
 };
 
-const svgReport = capture => {
-  const screens = capturedScreens();
-  const charWidth = 8;
-  const lineHeight = 16;
-  const margin = 24;
-  const titleHeight = 28;
-  const summaryLines = JSON.stringify(capture, null, 2).split("\n");
-  const blocks = [["Result", summaryLines.join("\n")], ...screens];
-  const width = 1180;
-  let y = margin;
-  const parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${blocks.reduce((sum, [, content]) => sum + titleHeight + Math.max(1, content.split("\n").length) * lineHeight + margin, margin)}" viewBox="0 0 ${width} ${blocks.reduce((sum, [, content]) => sum + titleHeight + Math.max(1, content.split("\n").length) * lineHeight + margin, margin)}">`,
-    `<rect width="100%" height="100%" fill="#0d1117"/>`];
-  for (const [title, content] of blocks) {
-    const lines = content.split("\n");
-    const blockHeight = titleHeight + Math.max(1, lines.length) * lineHeight + 16;
-    parts.push(`<text x="${margin}" y="${y + 18}" fill="#f0f6fc" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">${escapeHtml(title)}</text>`);
-    parts.push(`<rect x="${margin}" y="${y + titleHeight}" width="${width - margin * 2}" height="${blockHeight - titleHeight}" rx="8" fill="#010409" stroke="#30363d"/>`);
-    lines.forEach((line, index) => {
-      parts.push(`<text x="${margin + 16}" y="${y + titleHeight + 22 + index * lineHeight}" fill="#e6edf3" font-family="Cascadia Mono, Consolas, monospace" font-size="13" xml:space="preserve">${escapeHtml(line.slice(0, Math.floor((width - margin * 2 - 32) / charWidth)))}</text>`);
-    });
-    y += blockHeight + margin;
+const writePngReport = capture => {
+  if (process.platform !== "win32") return;
+  const payloadPath = join(captureDirectory, "blackbox-modal-tui-visual.json");
+  const scriptPath = join(captureDirectory, "render-blackbox-modal-png.ps1");
+  const outputPath = join(captureDirectory, "blackbox-modal-tui-report.png");
+  const payload = { capture, screens: capturedScreens().map(([title, content]) => ({ title, content })) };
+  writeFileSync(payloadPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  writeFileSync(scriptPath, `param([string]$PayloadPath, [string]$OutputPath)
+Add-Type -AssemblyName System.Drawing
+$data = Get-Content -LiteralPath $PayloadPath -Raw | ConvertFrom-Json
+$font = [System.Drawing.Font]::new('Cascadia Mono', 10)
+$titleFont = [System.Drawing.Font]::new('Segoe UI', 16, [System.Drawing.FontStyle]::Bold)
+$brush = [System.Drawing.SolidBrush]::new([System.Drawing.ColorTranslator]::FromHtml('#e6edf3'))
+$titleBrush = [System.Drawing.SolidBrush]::new([System.Drawing.ColorTranslator]::FromHtml('#f0f6fc'))
+$bg = [System.Drawing.SolidBrush]::new([System.Drawing.ColorTranslator]::FromHtml('#0d1117'))
+$panel = [System.Drawing.SolidBrush]::new([System.Drawing.ColorTranslator]::FromHtml('#010409'))
+$pen = [System.Drawing.Pen]::new([System.Drawing.ColorTranslator]::FromHtml('#30363d'))
+$lineHeight = 16
+$margin = 24
+$width = 1200
+$blocks = @(@{ title = 'Result'; content = ($data.capture | ConvertTo-Json -Depth 8) }) + @($data.screens)
+$height = $margin
+foreach ($block in $blocks) { $height += 36 + (($block.content -split [char]10).Count * $lineHeight) + $margin }
+$bitmap = [System.Drawing.Bitmap]::new($width, [Math]::Max($height, 200))
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+try {
+  $graphics.Clear([System.Drawing.ColorTranslator]::FromHtml('#0d1117'))
+  $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
+  $y = $margin
+  foreach ($block in $blocks) {
+    $graphics.DrawString([string]$block.title, $titleFont, $titleBrush, $margin, $y)
+    $y += 30
+    $lines = [string]$block.content -split [char]10
+    $blockHeight = [Math]::Max(1, $lines.Count) * $lineHeight + 16
+    $graphics.FillRectangle($panel, $margin, $y, $width - ($margin * 2), $blockHeight)
+    $graphics.DrawRectangle($pen, $margin, $y, $width - ($margin * 2), $blockHeight)
+    $textY = $y + 8
+    foreach ($line in $lines) { $graphics.DrawString($line, $font, $brush, $margin + 12, $textY); $textY += $lineHeight }
+    $y += $blockHeight + $margin
   }
-  parts.push("</svg>");
-  return parts.join("\n");
+  $bitmap.Save($OutputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+} finally {
+  $graphics.Dispose(); $bitmap.Dispose(); $font.Dispose(); $titleFont.Dispose(); $brush.Dispose(); $titleBrush.Dispose(); $bg.Dispose(); $panel.Dispose(); $pen.Dispose()
+}
+`, "utf8");
+  const renderer = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, payloadPath, outputPath], { encoding: "utf8" });
+  if (renderer.status !== 0) {
+    writeFileSync(join(captureDirectory, "blackbox-modal-png-render.log"), `${renderer.stdout ?? ""}\n${renderer.stderr ?? ""}`, "utf8");
+  }
 };
 
 const writeCaptures = (status = "running", extra = {}) => {
@@ -239,7 +265,7 @@ const writeCaptures = (status = "running", extra = {}) => {
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.txt"), stripAnsi(raw), "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(capture, null, 2)}\n`, "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-report.html"), visualReport(capture), "utf8");
-  writeFileSync(join(captureDirectory, "blackbox-modal-tui-report.svg"), svgReport(capture), "utf8");
+  writePngReport(capture);
 };
 
 const finish = (code, message) => {
@@ -380,7 +406,7 @@ child.onData(data => {
         return;
       }
       const scrollSummary = scrollSteps.map(step => `${step.name}:${scrollSeenAt[step.name] - scrollSentAt[step.name]}ms`).join(",");
-      finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true closeRestored=true closeLatencyMs=${closeRestoredAt - closeRequestedAt} report=${join(captureDirectory, "blackbox-modal-tui-report.svg")}`);
+      finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true closeRestored=true closeLatencyMs=${closeRestoredAt - closeRequestedAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")}`);
     }
   }
 });
@@ -389,7 +415,7 @@ child.onExit(({ exitCode }) => {
   if (finished) return;
   if (modalSeenAt && doctorSeen && closeSent && closeRestoredAt) {
     const scrollSummary = scrollSteps.map(step => `${step.name}:${scrollSeenAt[step.name] - scrollSentAt[step.name]}ms`).join(",");
-    finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true closeRestored=true closeLatencyMs=${closeRestoredAt - closeRequestedAt} report=${join(captureDirectory, "blackbox-modal-tui-report.svg")} exitCode=${exitCode}`);
+    finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true closeRestored=true closeLatencyMs=${closeRestoredAt - closeRequestedAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")} exitCode=${exitCode}`);
     return;
   }
   finish(1, `afterburn exited before modal validation completed: ${exitCode}`);
