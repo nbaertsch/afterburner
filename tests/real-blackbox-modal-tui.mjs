@@ -49,10 +49,13 @@ delete env.COPILOT_AGENT_SESSION_ID;
 delete env.COPILOT_LOADER_PID;
 delete env.COPILOT_SUPERVISED;
 
+const terminalColumns = 140;
+const terminalRows = 40;
+
 const child = pty.spawn(afterburn, [], {
   name: "xterm-256color",
-  cols: 140,
-  rows: 40,
+  cols: terminalColumns,
+  rows: terminalRows,
   cwd: process.cwd(),
   env
 });
@@ -128,6 +131,10 @@ const result = (status, extra = {}) => {
     visibleSelfNoise: visibleSelfNoise(),
     latencyBudget: validateLatencyBudgets(),
     visualInspection: visualInspectionChecks(),
+    visualGeometry: {
+      modalOverlay: modalGeometry(capturedScreenMap()["Modal overlay full screen"] ?? ""),
+      doctorOverlay: modalGeometry(capturedScreenMap()["Doctor overlay full screen"] ?? "")
+    },
     visualEvidence: visualEvidenceManifest(),
     visualEvidenceValidation: validateVisualEvidenceManifest(),
     visualArtifacts: {
@@ -141,7 +148,7 @@ const result = (status, extra = {}) => {
   };
 };
 
-const renderTerminalScreen = (value, columns = 140, rows = 40) => {
+const renderTerminalScreen = (value, columns = terminalColumns, rows = terminalRows) => {
   const screen = Array.from({ length: rows }, () => Array(columns).fill(" "));
   let row = 0;
   let column = 0;
@@ -252,10 +259,27 @@ const capturedScreens = () => [
   ["Escape close restore screen", visualScreen(escapeRestoreRaw)]
 ].filter(([, body]) => body);
 
+const capturedScreenMap = () => Object.fromEntries(capturedScreens());
+
 const visibleSelfNoise = () => capturedScreens()
   .filter(([title]) => title !== "Q close restore screen" && title !== "Escape close restore screen")
   .flatMap(([title, body]) => [...body.matchAll(/\bui\.(?:modal_canvas|host)\.[a-z0-9_.-]+\b/gi)]
     .map(match => ({ title, eventType: match[0] })));
+
+const modalGeometry = screen => {
+  const lines = screen.split("\n");
+  const frameLines = lines
+    .map((line, index) => ({ line, index, left: line.search(/[╭│╰]/), right: Math.max(line.lastIndexOf("╮"), line.lastIndexOf("│"), line.lastIndexOf("╯")) }))
+    .filter(item => item.left >= 0 && item.right > item.left);
+  if (frameLines.length === 0) return { present: false, left: null, right: null, top: null, bottom: null, width: null, height: null };
+  const left = Math.min(...frameLines.map(item => item.left));
+  const right = Math.max(...frameLines.map(item => item.right));
+  const top = Math.min(...frameLines.map(item => item.index));
+  const bottom = Math.max(...frameLines.map(item => item.index));
+  return { present: true, left, right, top, bottom, width: right - left + 1, height: bottom - top + 1 };
+};
+
+const geometryLooksOverlay = geometry => geometry.present && geometry.left >= 2 && geometry.right < terminalColumns - 2 && geometry.top >= 1 && geometry.bottom < terminalRows - 1 && geometry.width >= 80 && geometry.width < terminalColumns && geometry.height >= 10 && geometry.height < terminalRows;
 
 const visualInspectionChecks = () => {
   const screens = Object.fromEntries(capturedScreens());
@@ -263,9 +287,13 @@ const visualInspectionChecks = () => {
   const doctorOverlayScreen = screens["Doctor overlay full screen"] ?? "";
   const modalScreen = screens["Modal open screen"] ?? "";
   const doctorScreen = screens["Doctor action screen"] ?? "";
+  const modalOverlayGeometry = modalGeometry(modalOverlayScreen);
+  const doctorOverlayGeometry = modalGeometry(doctorOverlayScreen);
   const checks = {
     modalPreservesBackdrop: /Afterburner Black Box Live/i.test(modalOverlayScreen) && /(?:Copilot v|\/ commands|open sidebar)/i.test(modalOverlayScreen),
     doctorPreservesBackdrop: /Afterburner Black Box Doctor/i.test(doctorOverlayScreen) && /(?:Copilot v|\/ commands|open sidebar)/i.test(doctorOverlayScreen),
+    modalUsesBoundedOverlayGeometry: geometryLooksOverlay(modalOverlayGeometry),
+    doctorUsesBoundedOverlayGeometry: geometryLooksOverlay(doctorOverlayGeometry),
     modalHasBoxChrome: /╭/.test(modalScreen) && /╰/.test(modalScreen),
     modalShowsTitle: /Afterburner Black Box Live/i.test(modalScreen),
     modalShowsSecureCanvasSubtitle: /Host-rendered secure canvas/i.test(modalScreen),
@@ -298,7 +326,7 @@ const failIfVisualInspectionFailed = () => {
 const visualEvidenceManifest = () => ({
   modalOverlay: {
     screen: "modal-overlay-full-screen.png",
-    proves: ["native modal is visible", "Copilot backdrop remains visible behind the overlay"]
+    proves: ["native modal is visible", "Copilot backdrop remains visible behind the overlay", "modal uses bounded centered overlay geometry"]
   },
   primaryModal: {
     screen: "modal-open-screen.png",
@@ -312,7 +340,7 @@ const visualEvidenceManifest = () => ({
   }])),
   refresh: { screen: "refresh-action-screen.png", key: "r", proves: ["Refresh action re-renders the live modal"], latencyMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null },
   doctor: { screen: "doctor-action-screen.png", key: "d", proves: ["Doctor view opens", "recorder/storage/queue health is visible"] },
-  doctorOverlay: { screen: "doctor-overlay-full-screen.png", proves: ["Doctor view preserves Copilot backdrop"] },
+  doctorOverlay: { screen: "doctor-overlay-full-screen.png", proves: ["Doctor view preserves Copilot backdrop", "Doctor view uses bounded centered overlay geometry"] },
   close: { screen: "q-close-restore-screen.png", key: "q", proves: ["q closes modal and restores Copilot prompt"], latencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null },
   escapeClose: { screen: "escape-close-restore-screen.png", key: "Escape", proves: ["Escape closes modal and restores Copilot prompt"], latencyMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null }
 });
