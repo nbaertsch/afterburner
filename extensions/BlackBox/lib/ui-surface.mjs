@@ -731,6 +731,7 @@ export function buildEnterpriseModalFrame(ui, state = {}, options = {}) {
         actions: [
             { name: "refresh", label: "Refresh", key: "r", description: "Refresh status cards, timeline, and details." },
             { name: "doctor", label: "Doctor", key: "d", description: "Run metadata-only diagnostics." },
+            { name: "export", label: "Export", key: "e", description: "Create a fast sanitized evidence bundle for the visible modal context." },
             { name: "close", label: "Close", key: "q", description: "Close the Black Box live modal." }
         ]
     };
@@ -765,6 +766,7 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
             }),
             ...modalSignalTrendNodes(c, records),
             ...modalHealthAlertNodes(c, status, state.lifecycle),
+            ...modalActiveResultPanels(c, state),
             c.row({ label: "Timeline and detail split", responsive: { collapseBelowColumns: 100, orientation: "vertical" } }, [
                 c.panel({ title: "Metadata timeline", width: "58%" }, [
                     c.table({
@@ -785,9 +787,6 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
                     c.code({ language: "json", code: selected ? JSON.stringify(redactForDisplay(selected), null, 2) : "{}" }, [], { id: "bb-modal-detail-json" })
                 ], { id: "bb-modal-detail-panel", accessibility: { role: "region", name: "Selected metadata details" }, localization: { key: "details" } })
             ], { id: "bb-modal-main-split" }),
-            ...(state.activeTab === "doctor" ? [c.panel({ title: "Doctor" }, [
-                c.code({ language: "json", code: JSON.stringify(redactForDisplay(state.doctor ?? { status: "Doctor unavailable" }), null, 2) }, [], { id: "bb-modal-doctor-json" })
-            ], { id: "bb-modal-doctor-panel" })] : []),
             c.text({ value: fallbackFooter(state), tone: "muted" }, [], { id: "bb-modal-footer", accessibility: { role: "status", name: "Black Box modal status" } })
         ], { id: "bb-modal-root", accessibility: { role: "dialog", name: title }, metadata: surfaceMetadata() });
         return ui.createUIDocument(root, {
@@ -801,9 +800,29 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
     }
 }
 
+function modalActiveResultTextLines(state = {}) {
+    if (state.activeTab === "doctor") return ["", "Doctor", JSON.stringify(redactForDisplay(state.doctor ?? { status: "Doctor unavailable" }), null, 2)];
+    if (state.activeTab === "export") return ["", "Export", JSON.stringify(redactForDisplay(state.exportResult ?? { status: "Run Export to create a sanitized local bundle." }), null, 2)];
+    return [];
+}
+
+function modalActiveResultPanels(c, state = {}) {
+    if (state.activeTab === "doctor") {
+        return [c.panel({ title: "Doctor" }, [
+            c.code({ language: "json", code: JSON.stringify(redactForDisplay(state.doctor ?? { status: "Doctor unavailable" }), null, 2) }, [], { id: "bb-modal-doctor-json" })
+        ], { id: "bb-modal-doctor-panel" })];
+    }
+    if (state.activeTab === "export") {
+        return [c.panel({ title: "Export" }, [
+            c.code({ language: "json", code: JSON.stringify(redactForDisplay(state.exportResult ?? { status: "Run Export to create a sanitized local bundle." }), null, 2) }, [], { id: "bb-modal-export-json" })
+        ], { id: "bb-modal-export-panel" })];
+    }
+    return [];
+}
+
 function modalTextBody({ status, records, selected, state, healthTone, progressValue }) {
     const lines = [
-        "Shortcuts: r Refresh · d Doctor · q/Esc Close · ↑/↓ PgUp/PgDn Home/End Scroll",
+        "Shortcuts: r Refresh · d Doctor · e Export · q/Esc Close · ↑/↓ PgUp/PgDn Home/End Scroll",
         "Privacy: metadata-only; payload bodies redacted. Fallback: /black-box-tail",
         "",
         `Storage usage: ${formatPercent(progressValue)} of ${formatBytes(status.storage?.maxBytes)} retained`,
@@ -815,6 +834,7 @@ function modalTextBody({ status, records, selected, state, healthTone, progressV
         `  Signals   ${fitCell(`${status.analytics?.anomalyCount ?? 0} anomalies`, 12)}  ${status.analytics?.milestoneCount ?? 0} milestones  ${status.queue?.droppedRecords ?? 0} dropped`,
         `  Queue     ${fitCell(`${status.queue?.records ?? 0} queued`, 12)}  ${fitCell(formatBytes(status.queue?.bytes ?? 0), 10)}  ${status.queue?.writeErrors ?? 0} write errors`,
         ...modalHealthCalloutLines(status, state.lifecycle),
+        ...modalActiveResultTextLines(state),
         "",
         "Selected event",
         ...(selected ? modalSelectedSummaryLines(selected) : ["  No metadata event selected."]),
@@ -825,9 +845,6 @@ function modalTextBody({ status, records, selected, state, healthTone, progressV
         "Details",
         ...(selected ? modalDetailLines(selected) : ["  No metadata events recorded yet."])
     ];
-    if (state.activeTab === "doctor") {
-        lines.push("", "Doctor", JSON.stringify(redactForDisplay(state.doctor ?? { status: "Doctor unavailable" }), null, 2));
-    }
     return lines.join("\n");
 }
 
@@ -1301,7 +1318,7 @@ function looksSensitiveString(value) {
     return /\b[A-Za-z]:[\\/]|\\\\|(?:^|\s)\/(?:users|home|tmp|var|mnt|workspace)\/|secret|password|credential|api[_-]?key|access[_-]?token/i.test(value);
 }
 
-function hashDisplayPath(path) {
+export function hashDisplayPath(path) {
     if (typeof path !== "string" || !path) return null;
     return `path_${createHash("sha256").update(path).digest("hex").slice(0, 16)}`;
 }

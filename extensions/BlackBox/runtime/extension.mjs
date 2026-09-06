@@ -1,6 +1,6 @@
 import { watch } from "node:fs";
 import { startBlackBoxService } from "../lib/service.mjs";
-import { buildEnterpriseModalFrame, registerEnterpriseSurface, subscribeObservability } from "../lib/ui-surface.mjs";
+import { buildEnterpriseModalFrame, hashDisplayPath, registerEnterpriseSurface, subscribeObservability } from "../lib/ui-surface.mjs";
 
 const INSTANCE = Symbol.for("afterburner.black-box.runtime");
 const LIVE_MODAL_ID = "afterburner-black-box-live";
@@ -75,11 +75,12 @@ function modalFrameFingerprint(frame = {}) {
     });
 }
 
-async function doctorFrame(service, ui) {
+async function doctorFrame(service, ui, viewState = {}) {
     try {
+        viewState.activeTab = "doctor";
+        viewState.doctor = await service.doctor();
         return await renderLiveModal(service, ui, {
-            activeTab: "doctor",
-            doctor: await service.doctor(),
+            ...viewState,
             title: "Afterburner Black Box Doctor"
         });
     } catch {
@@ -93,7 +94,27 @@ async function doctorFrame(service, ui) {
     }
 }
 
-function subscribeLiveModal(service, controls, ui) {
+async function exportFrame(service, ui, viewState = {}) {
+    try {
+        const result = await service.exportBundle({ maxRecords: 100 });
+        viewState.activeTab = "export";
+        viewState.exportResult = { ok: true, pathRef: hashDisplayPath(result.path), manifest: result.manifest };
+        return await renderLiveModal(service, ui, {
+            ...viewState,
+            title: "Afterburner Black Box Export"
+        });
+    } catch {
+        isolatedWarning("modal-canvas-export-failed");
+        return {
+            title: "Afterburner Black Box Export",
+            status: "Export failed.",
+            body: JSON.stringify({ ok: false, error: "black-box-export-failed" }, null, 2),
+            footer: "Use /black-box-export for text export"
+        };
+    }
+}
+
+function subscribeLiveModal(service, controls, ui, viewState = {}) {
     if (typeof service.subscribeRecords !== "function" || typeof controls?.update !== "function") return () => {};
     let disposed = false;
     let timer = null;
@@ -122,7 +143,7 @@ function subscribeLiveModal(service, controls, ui) {
         refreshing = true;
         lastRefreshAt = Date.now();
         try {
-            const frame = await safeRenderLiveModal(service, ui);
+            const frame = await safeRenderLiveModal(service, ui, viewState);
             const fingerprint = modalFrameFingerprint(frame);
             if (fingerprint !== lastFrameFingerprint) {
                 lastFrameFingerprint = fingerprint;
@@ -154,6 +175,7 @@ function modalCanvasRegistrar(api = {}) {
 function registerLiveModal(api, service) {
     const register = modalCanvasRegistrar(api);
     const ui = api?.ui;
+    const modalViewState = { activeTab: "timeline", doctor: null, exportResult: null };
     if (!register) {
         isolatedWarning("modal-canvas-unavailable");
         return null;
@@ -168,13 +190,28 @@ function registerLiveModal(api, service) {
                     name: "refresh",
                     label: "Refresh",
                     key: "r",
-                    handler: async (_input, controls) => updateControls(controls, await safeRenderLiveModal(service, ui))
+                    handler: async (_input, controls) => {
+                        modalViewState.activeTab = "timeline";
+                        return updateControls(controls, await safeRenderLiveModal(service, ui, modalViewState));
+                    }
                 },
                 {
                     name: "doctor",
                     label: "Doctor",
                     key: "d",
-                    handler: async (_input, controls) => updateControls(controls, await doctorFrame(service, ui))
+                    handler: async (_input, controls) => {
+                        modalViewState.activeTab = "doctor";
+                        return updateControls(controls, await doctorFrame(service, ui, modalViewState));
+                    }
+                },
+                {
+                    name: "export",
+                    label: "Export",
+                    key: "e",
+                    handler: async (_input, controls) => {
+                        modalViewState.activeTab = "export";
+                        return updateControls(controls, await exportFrame(service, ui, modalViewState));
+                    }
                 },
                 {
                     name: "close",
@@ -183,9 +220,12 @@ function registerLiveModal(api, service) {
                     handler: async (_input, controls) => closeControls(controls)
                 }
             ],
-            open: async () => safeRenderLiveModal(service, ui),
+            open: async () => {
+                modalViewState.activeTab = "timeline";
+                return safeRenderLiveModal(service, ui, modalViewState);
+            },
             render: async context => context.state,
-            subscribe: async controls => subscribeLiveModal(service, controls, ui)
+            subscribe: async controls => subscribeLiveModal(service, controls, ui, modalViewState)
         });
     } catch {
         isolatedWarning("modal-canvas-registration-failed");

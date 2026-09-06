@@ -782,7 +782,7 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
 
     assert.equal(observer.id, "black-box");
     assert.equal(modalDefinition.id, "afterburner-black-box-live");
-    assert.deepEqual(modalDefinition.actions.map(action => action.name), ["refresh", "doctor", "close"]);
+    assert.deepEqual(modalDefinition.actions.map(action => action.name), ["refresh", "doctor", "export", "close"]);
 
     const openFrame = await modalDefinition.open();
     assert.equal(openFrame.title, "Afterburner Black Box Live");
@@ -813,7 +813,10 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
         update: async frame => { updates.push(frame); return { ok: true, frame }; },
         close: async () => { closeCount++; return { ok: true }; }
     };
-    const [refresh, doctor, close] = modalDefinition.actions;
+    const refresh = modalDefinition.actions.find(action => action.name === "refresh");
+    const doctor = modalDefinition.actions.find(action => action.name === "doctor");
+    const exportAction = modalDefinition.actions.find(action => action.name === "export");
+    const close = modalDefinition.actions.find(action => action.name === "close");
     await refresh.handler({}, controls);
     assert.equal(updates.at(-1).title, "Afterburner Black Box Live");
     assert.equal(updates.at(-1).document.root.kind, "dialog");
@@ -821,6 +824,10 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
     assert.equal(updates.at(-1).title, "Afterburner Black Box Doctor");
     assert.match(updates.at(-1).body, /Doctor/);
     assert.match(updates.at(-1).body, /"healthy"/);
+    await exportAction.handler({}, controls);
+    assert.equal(updates.at(-1).title, "Afterburner Black Box Export");
+    assert.match(updates.at(-1).body, /Export/);
+    assert.match(JSON.stringify(updates.at(-1).document), /bb-modal-export-panel/);
     await close.handler({}, controls);
     assert.equal(closeCount, 1);
     await refresh.handler({}, {});

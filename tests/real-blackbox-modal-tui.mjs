@@ -18,7 +18,7 @@ const option = name => {
 const hasFlag = name => process.argv.includes(name);
 
 if (hasFlag("--help") || hasFlag("-h")) {
-  process.stdout.write(`Usage: node tests\\real-blackbox-modal-tui.mjs [afterburn.exe] [capture-dir] [timeout-ms] [options]\n\nOptions:\n  --afterburn <path>          Afterburner executable to launch.\n  --capture-dir <path>       Directory for raw/text/json/png visual artifacts.\n  --timeout-ms <ms>          End-to-end UAT timeout.\n  --max-open-ms <ms>         Native modal first-open latency budget.\n  --max-reopen-ms <ms>       Native modal reopen latency budget.\n  --max-scroll-ms <ms>       Per-key scroll response budget.\n  --max-refresh-ms <ms>      Refresh action response budget.\n  --max-close-ms <ms>        q close response budget.\n  --max-escape-close-ms <ms> Escape close response budget.\n\nEnvironment overrides use AFTERBURNER_REAL_TUI_* names matching each option.\n`);
+  process.stdout.write(`Usage: node tests\\real-blackbox-modal-tui.mjs [afterburn.exe] [capture-dir] [timeout-ms] [options]\n\nOptions:\n  --afterburn <path>          Afterburner executable to launch.\n  --capture-dir <path>       Directory for raw/text/json/png visual artifacts.\n  --timeout-ms <ms>          End-to-end UAT timeout.\n  --max-open-ms <ms>         Native modal first-open latency budget.\n  --max-reopen-ms <ms>       Native modal reopen latency budget.\n  --max-scroll-ms <ms>       Per-key scroll response budget.\n  --max-refresh-ms <ms>      Refresh action response budget.\n  --max-export-ms <ms>       Export action response budget.\n  --max-close-ms <ms>        q close response budget.\n  --max-escape-close-ms <ms> Escape close response budget.\n\nEnvironment overrides use AFTERBURNER_REAL_TUI_* names matching each option.\n`);
   process.exit(0);
 }
 
@@ -38,6 +38,7 @@ const latencyBudgets = {
   reopenMs: Number(option("--max-reopen-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_REOPEN_MS ?? 5_000),
   scrollMs: Number(option("--max-scroll-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_SCROLL_MS ?? 250),
   refreshMs: Number(option("--max-refresh-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_REFRESH_MS ?? 5_000),
+  exportMs: Number(option("--max-export-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_EXPORT_MS ?? 8_000),
   closeMs: Number(option("--max-close-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_CLOSE_MS ?? 500),
   escapeCloseMs: Number(option("--max-escape-close-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_ESCAPE_CLOSE_MS ?? 500)
 };
@@ -88,6 +89,10 @@ let refreshRawLength = 0;
 let refreshRaw = "";
 let doctorSeen = false;
 let doctorCaptureScheduled = false;
+let exportSentAt = 0;
+let exportSeenAt = 0;
+let exportRawLength = 0;
+let exportRaw = "";
 let closeSent = false;
 let closeRequestedAt = 0;
 let closeRawLength = 0;
@@ -122,6 +127,7 @@ const result = (status, extra = {}) => {
     refreshAction: Boolean(refreshSeenAt),
     refreshLatencyMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null,
     doctorAction: doctorSeen,
+    exportAction: Boolean(exportSeenAt),
     closeRestored: Boolean(closeRestoredAt),
     escapeClose: Boolean(escapeRestoredAt),
     openLatencyMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
@@ -255,6 +261,7 @@ const capturedScreens = () => [
   ["Refresh action screen", visualScreen(refreshRaw, /Afterburner Black Box Live/gi)],
   ["Doctor overlay full screen", extractOverlayEvidence(doctorRaw, /Afterburner Black Box Doctor/gi)],
   ["Doctor action screen", visualScreen(doctorRaw, /Afterburner Black Box Doctor/gi)],
+  ["Export action screen", visualScreen(exportRaw, /Afterburner Black Box Export/gi)],
   ["Q close restore screen", visualScreen(closeRestoreRaw)],
   ["Escape close modal screen", visualScreen(escapeModalRaw, /Afterburner Black Box Live/gi)],
   ["Escape close restore screen", visualScreen(escapeRestoreRaw)]
@@ -298,8 +305,8 @@ const visualInspectionChecks = () => {
     modalHasBoxChrome: /╭/.test(modalScreen) && /╰/.test(modalScreen),
     modalShowsTitle: /Afterburner Black Box Live/i.test(modalScreen),
     modalShowsNativeOverlaySubtitle: /Native Afterburner modal overlay/i.test(modalScreen),
-    modalShowsShortcutSummary: /Shortcuts:\s*r Refresh\s+·\s+d Doctor\s+·\s+q\/Esc Close/i.test(modalScreen),
-    modalShowsActionBar: /\[r\] Refresh\s+\[d\] Doctor\s+\[q\] Close/i.test(modalScreen),
+    modalShowsShortcutSummary: /Shortcuts:\s*r Refresh\s+·\s+d Doctor\s+·\s+e Export\s+·\s+q\/Esc Close/i.test(modalScreen),
+    modalShowsActionBar: /\[r\] Refresh\s+\[d\] Doctor\s+\[e\] Export\s+\[q\] Close/i.test(modalScreen),
     modalAdvertisesCloseKeys: /Esc\/q closes/i.test(modalScreen),
     modalAdvertisesMetadataOnlyFallback: /metadata-only[\s\S]*\/black-box-tail/i.test(modalScreen),
     modalAdvertisesAllScrollKeys: /↑\/↓ PgUp\/PgDn Home\/End/.test(modalScreen),
@@ -314,6 +321,7 @@ const visualInspectionChecks = () => {
     refreshScreenCaptured: /Afterburner Black Box Live/i.test(screens["Refresh action screen"] ?? ""),
     doctorScreenCaptured: /Afterburner Black Box Doctor/i.test(doctorScreen),
     doctorShowsRecorderHealth: /Recorder|Storage|Queue/i.test(doctorScreen),
+    exportScreenCaptured: /Afterburner Black Box Export/i.test(screens["Export action screen"] ?? "") && /pathRef|manifest|recordCount/i.test(screens["Export action screen"] ?? ""),
     promptRestoredAfterQ: /\/ commands|tab next tab|\? help/i.test(screens["Q close restore screen"] ?? ""),
     promptRestoredAfterEscape: /\/ commands|tab next tab|\? help/i.test(screens["Escape close restore screen"] ?? ""),
     noVisibleSelfNoise: visibleSelfNoise().length === 0
@@ -345,8 +353,9 @@ const visualEvidenceManifest = () => ({
     latencyMs: scrollSentAt[step.name] && scrollSeenAt[step.name] ? scrollSeenAt[step.name] - scrollSentAt[step.name] : null
   }])),
   refresh: { screen: "refresh-action-screen.png", key: "r", proves: ["Refresh action re-renders the live modal"], latencyMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null },
-  doctor: { screen: "doctor-action-screen.png", key: "d",   proves: ["Doctor view opens", "recorder/storage/queue health is visible", "health warning alert is represented in extension-facing UI"] },
+  doctor: { screen: "doctor-action-screen.png", key: "d", proves: ["Doctor view opens", "recorder/storage/queue health is visible", "health warning alert is represented in extension-facing UI"] },
   doctorOverlay: { screen: "doctor-overlay-full-screen.png", proves: ["Doctor view preserves Copilot backdrop", "Doctor view uses bounded centered overlay geometry"] },
+  export: { screen: "export-action-screen.png", key: "e", proves: ["Export action creates a sanitized local bundle", "Export result is visible in the modal"], latencyMs: exportSentAt && exportSeenAt ? exportSeenAt - exportSentAt : null },
   close: { screen: "q-close-restore-screen.png", key: "q", proves: ["q closes modal and restores Copilot prompt"], latencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null },
   escapeClose: { screen: "escape-close-restore-screen.png", key: "Escape", proves: ["Escape closes modal and restores Copilot prompt"], latencyMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null }
 });
@@ -372,6 +381,7 @@ const measuredLatencies = () => ({
     ? scrollSeenAt[step.name] - scrollSentAt[step.name]
     : null])),
   refreshMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null,
+  exportMs: exportSentAt && exportSeenAt ? exportSeenAt - exportSentAt : null,
   closeMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null,
   escapeCloseMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null
 });
@@ -379,7 +389,7 @@ const measuredLatencies = () => ({
 const validateLatencyBudgets = () => {
   const measured = measuredLatencies();
   const failures = [];
-  for (const name of ["openMs", "reopenMs", "refreshMs", "closeMs", "escapeCloseMs"]) {
+  for (const name of ["openMs", "reopenMs", "refreshMs", "exportMs", "closeMs", "escapeCloseMs"]) {
     if (measured[name] === null || measured[name] > latencyBudgets[name]) failures.push({ name, measuredMs: measured[name], budgetMs: latencyBudgets[name] });
   }
   for (const [name, measuredMs] of Object.entries(measured.scrollMs)) {
@@ -746,6 +756,16 @@ child.onData(data => {
     doctorCaptureScheduled = true;
     setTimeout(() => {
       doctorRaw = raw;
+      exportSentAt = Date.now();
+      exportRawLength = raw.length;
+      child.write("e");
+    }, 500).unref?.();
+    return;
+  }
+  if (exportSentAt && !exportSeenAt && /Afterburner Black Box Export/i.test(stripAnsi(raw.slice(exportRawLength)))) {
+    exportSeenAt = Date.now();
+    exportRaw = raw;
+    setTimeout(() => {
       closeSent = true;
       closeRequestedAt = Date.now();
       closeRawLength = raw.length;
@@ -788,17 +808,17 @@ child.onData(data => {
       escapeRestoreRaw = raw;
       if (failIfVisualInspectionFailed()) return;
       const scrollSummary = scrollSteps.map(step => `${step.name}:${scrollSeenAt[step.name] - scrollSentAt[step.name]}ms`).join(",");
-      finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true qCloseLatencyMs=${closeRestoredAt - closeRequestedAt} escapeCloseLatencyMs=${escapeRestoredAt - escapeSentAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")}`);
+      finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} exportLatencyMs=${exportSeenAt - exportSentAt} doctorAction=true exportAction=true qCloseLatencyMs=${closeRestoredAt - closeRequestedAt} escapeCloseLatencyMs=${escapeRestoredAt - escapeSentAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")}`);
     }
   }
 });
 
 child.onExit(({ exitCode }) => {
   if (finished) return;
-  if (modalSeenAt && doctorSeen && closeSent && closeRestoredAt && escapeRestoredAt) {
+  if (modalSeenAt && doctorSeen && exportSeenAt && closeSent && closeRestoredAt && escapeRestoredAt) {
     if (failIfVisualInspectionFailed()) return;
     const scrollSummary = scrollSteps.map(step => `${step.name}:${scrollSeenAt[step.name] - scrollSentAt[step.name]}ms`).join(",");
-    finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true qCloseLatencyMs=${closeRestoredAt - closeRequestedAt} escapeCloseLatencyMs=${escapeRestoredAt - escapeSentAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")} exitCode=${exitCode}`);
+    finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} exportLatencyMs=${exportSeenAt - exportSentAt} doctorAction=true exportAction=true qCloseLatencyMs=${closeRestoredAt - closeRequestedAt} escapeCloseLatencyMs=${escapeRestoredAt - escapeSentAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")} exitCode=${exitCode}`);
     return;
   }
   finish(1, `afterburn exited before modal validation completed: ${exitCode}`);
@@ -813,6 +833,8 @@ const timeout = setTimeout(() => {
   }
   else if (!refreshSeenAt) finish(1, "timed out before Black Box refresh action rendered");
   else if (!doctorSeen) finish(1, "timed out before Black Box doctor action rendered");
+  else if (!exportSentAt) finish(1, "timed out before Black Box export key was sent");
+  else if (!exportSeenAt) finish(1, "timed out before Black Box export action rendered");
   else if (!closeSent) finish(1, "timed out before Black Box q close key was sent");
   else if (!closeRestoredAt) finish(1, "timed out before Black Box q close restored the Copilot prompt");
   else if (!escapeCommandSentAt) finish(1, "timed out before reopening Black Box modal for Escape close validation");
