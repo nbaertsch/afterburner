@@ -96,12 +96,6 @@ const result = (status, extra = {}) => ({
   ...extra
 });
 
-const escapeHtml = value => String(value)
-  .replaceAll("&", "&amp;")
-  .replaceAll("<", "&lt;")
-  .replaceAll(">", "&gt;")
-  .replaceAll('"', "&quot;");
-
 const renderTerminalScreen = (value, columns = 140, rows = 40) => {
   const screen = Array.from({ length: rows }, () => Array(columns).fill(" "));
   let row = 0;
@@ -183,31 +177,6 @@ const visibleSelfNoise = () => capturedScreens()
   .flatMap(([title, body]) => [...body.matchAll(/\bui\.(?:modal_canvas|host)\.[a-z0-9_.-]+\b/gi)]
     .map(match => ({ title, eventType: match[0] })));
 
-const visualReport = capture => {
-  const body = capturedScreens().map(([title, content]) => `
-    <section>
-      <h2>${escapeHtml(title)}</h2>
-      <pre>${escapeHtml(content)}</pre>
-    </section>`).join("\n");
-  return `<!doctype html>
-<html lang="en">
-<meta charset="utf-8">
-<title>Black Box Modal TUI Visual Report</title>
-<style>
-  :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; background: #0d1117; color: #e6edf3; }
-  body { margin: 24px; }
-  h1, h2 { color: #f0f6fc; }
-  .summary { border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px; background: #161b22; }
-  pre { overflow: auto; white-space: pre-wrap; border: 1px solid #30363d; border-radius: 8px; padding: 16px; background: #010409; line-height: 1.25; }
-  code { color: #7ee787; }
-</style>
-<h1>Black Box Modal TUI Visual Report</h1>
-<div class="summary"><pre>${escapeHtml(JSON.stringify(capture, null, 2))}</pre></div>
-${body}
-</html>
-`;
-};
-
 const writePngReport = capture => {
   if (process.platform !== "win32") return;
   const payloadPath = join(captureDirectory, "blackbox-modal-tui-visual.json");
@@ -264,7 +233,6 @@ const writeCaptures = (status = "running", extra = {}) => {
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.raw"), raw, "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.txt"), stripAnsi(raw), "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(capture, null, 2)}\n`, "utf8");
-  writeFileSync(join(captureDirectory, "blackbox-modal-tui-report.html"), visualReport(capture), "utf8");
   writePngReport(capture);
 };
 
