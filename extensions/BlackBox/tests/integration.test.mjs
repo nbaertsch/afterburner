@@ -52,6 +52,31 @@ test("modal activation requests wait for runtime acknowledgement", async t => {
     assert.equal((await pending).ok, true);
 });
 
+test("modal activation acknowledgement wakes without waiting for polling fallback", async t => {
+    const home = await workDirectory("modal-activation-ack-watch");
+    t.after(() => cleanup(home));
+    const configPath = join(home, "config", "black-box.json");
+    await mkdir(join(home, "config"), { recursive: true });
+    await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
+    const service = await startBlackBoxService({
+        mode: "session",
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
+    });
+    t.after(() => service.close());
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (handler, delayMs, ...args) => originalSetTimeout(handler, delayMs === 100 ? 1000 : delayMs, ...args);
+    t.after(() => { globalThis.setTimeout = originalSetTimeout; });
+
+    const startedAt = Date.now();
+    const pending = service.requestModalOpen({ timeoutMs: 2000 });
+    await delay(10);
+    const requests = await service.consumeModalOpenRequests();
+    assert.equal(requests.length, 1);
+    await service.completeModalOpenRequest(requests[0], { ok: true });
+    assert.equal((await pending).ok, true);
+    assert.ok(Date.now() - startedAt < 500, "acknowledgement should resolve before the inflated polling fallback");
+});
+
 test("runtime observer ignores Black Box modal self-noise", async t => {
     const home = await workDirectory("modal-self-noise");
     t.after(() => cleanup(home));

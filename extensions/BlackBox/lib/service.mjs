@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { watch } from "node:fs";
 import { mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { TimelineAnalytics } from "./analytics.mjs";
 import { loadBlackBoxConfig, resolveDataRoot, resolveNativeEventsPath } from "./config.mjs";
 import { exportSanitizedBundle } from "./export.mjs";
@@ -40,6 +40,30 @@ async function loadOrCreateSalt(root) {
 function safeLimit(value, fallback, maximum) {
     const number = Number(value);
     return Number.isSafeInteger(number) && number > 0 ? Math.min(number, maximum) : fallback;
+}
+
+async function waitForFileChange(directory, file, timeoutMs) {
+    await new Promise(resolve => {
+        let settled = false;
+        let watcher = null;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            try { watcher?.close?.(); } catch {}
+            resolve();
+        };
+        const timer = setTimeout(finish, Math.max(1, timeoutMs));
+        timer.unref?.();
+        try {
+            watcher = watch(directory, { persistent: false }, (_event, filename) => {
+                if (!filename || String(filename) === file) finish();
+            });
+            watcher.unref?.();
+        } catch {
+            finish();
+        }
+    });
 }
 
 function shouldIgnoreRuntimeObservation(event) {
@@ -250,7 +274,8 @@ export async function startBlackBoxService(options = {}) {
                 input: input.input && typeof input.input === "object" ? input.input : {}
             };
             await writeFile(activationPath, `${JSON.stringify(request)}\n`, { flag: "a" });
-            const ackPath = join(activationAckDirectory, `${request.requestId}.json`);
+            const ackFile = `${request.requestId}.json`;
+            const ackPath = join(activationAckDirectory, ackFile);
             const deadline = Date.now() + safeLimit(input.timeoutMs, 3000, 10000);
             while (Date.now() < deadline) {
                 try {
@@ -260,7 +285,7 @@ export async function startBlackBoxService(options = {}) {
                 } catch (error) {
                     if (error?.code !== "ENOENT") return { ok: false, requestId: request.requestId, surfaceId: request.surfaceId, error: "modal-activation-ack-invalid" };
                 }
-                await delay(100);
+                await waitForFileChange(activationAckDirectory, ackFile, Math.min(100, Math.max(1, deadline - Date.now())));
             }
             return { ok: false, requestId: request.requestId, surfaceId: request.surfaceId, error: "modal-activation-timeout" };
         },
