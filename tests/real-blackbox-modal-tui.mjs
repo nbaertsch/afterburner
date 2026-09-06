@@ -25,6 +25,14 @@ const positionalAfterburn = /(?:^|[\\/])[^\\/]+\.exe$/i.test(positional[0] ?? ""
 const afterburn = resolve(option("--afterburn") ?? positionalAfterburn ?? process.env.AFTERBURNER_EXE ?? join(homedir(), ".afterburner", "bin", "afterburn.exe"));
 const captureDirectory = resolve(option("--capture-dir") ?? positional[0] ?? join(process.cwd(), "artifacts", "real-tui"));
 const timeoutMs = Number(option("--timeout-ms") ?? positional[1] ?? process.env.AFTERBURNER_REAL_TUI_TIMEOUT_MS ?? 90_000);
+const latencyBudgets = {
+  openMs: Number(option("--max-open-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_OPEN_MS ?? 5_000),
+  reopenMs: Number(option("--max-reopen-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_REOPEN_MS ?? 5_000),
+  scrollMs: Number(option("--max-scroll-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_SCROLL_MS ?? 250),
+  refreshMs: Number(option("--max-refresh-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_REFRESH_MS ?? 5_000),
+  closeMs: Number(option("--max-close-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_CLOSE_MS ?? 500),
+  escapeCloseMs: Number(option("--max-escape-close-ms") ?? process.env.AFTERBURNER_REAL_TUI_MAX_ESCAPE_CLOSE_MS ?? 500)
+};
 const scriptStartedAt = Date.now();
 mkdirSync(captureDirectory, { recursive: true });
 
@@ -110,6 +118,7 @@ const result = (status, extra = {}) => {
     closeLatencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null,
     escapeCloseLatencyMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null,
     visibleSelfNoise: visibleSelfNoise(),
+    latencyBudget: validateLatencyBudgets(),
     visualInspection: visualInspectionChecks(),
     visualArtifacts: {
       raw: artifactPath("blackbox-modal-tui.raw"),
@@ -251,6 +260,29 @@ const failIfVisualInspectionFailed = () => {
   return true;
 };
 
+const measuredLatencies = () => ({
+  openMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
+  reopenMs: escapeCommandSentAt && escapeModalSeenAt ? escapeModalSeenAt - escapeCommandSentAt : null,
+  scrollMs: Object.fromEntries(scrollSteps.map(step => [step.name, scrollSentAt[step.name] && scrollSeenAt[step.name]
+    ? scrollSeenAt[step.name] - scrollSentAt[step.name]
+    : null])),
+  refreshMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null,
+  closeMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null,
+  escapeCloseMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null
+});
+
+const validateLatencyBudgets = () => {
+  const measured = measuredLatencies();
+  const failures = [];
+  for (const name of ["openMs", "reopenMs", "refreshMs", "closeMs", "escapeCloseMs"]) {
+    if (measured[name] === null || measured[name] > latencyBudgets[name]) failures.push({ name, measuredMs: measured[name], budgetMs: latencyBudgets[name] });
+  }
+  for (const [name, measuredMs] of Object.entries(measured.scrollMs)) {
+    if (measuredMs === null || measuredMs > latencyBudgets.scrollMs) failures.push({ name: `scroll.${name}`, measuredMs, budgetMs: latencyBudgets.scrollMs });
+  }
+  return { passed: failures.length === 0, budgets: latencyBudgets, measured, failures };
+};
+
 const expectedPngArtifacts = () => [
   artifactPath("blackbox-modal-tui-report.png"),
   ...capturedScreens().map(([title]) => artifactPath(`${slugTitle(title)}.png`))
@@ -367,6 +399,14 @@ const finish = (code, message) => {
   let exitCode = code;
   let finalMessage = message;
   if (code === 0) {
+    const latencyValidation = validateLatencyBudgets();
+    if (!latencyValidation.passed) {
+      exitCode = 1;
+      finalMessage = `Black Box modal latency budget exceeded: ${latencyValidation.failures.map(item => `${item.name}=${item.measuredMs}ms>${item.budgetMs}ms`).join(", ")}`;
+      writeCaptures("failed", { message: finalMessage });
+    }
+  }
+  if (exitCode === 0) {
     const pngValidation = validatePngArtifacts();
     if (!pngValidation.passed) {
       exitCode = 1;
