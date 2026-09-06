@@ -48,6 +48,9 @@ let commandSentAt = 0;
 let modalSeenAt = 0;
 let doctorSeen = false;
 let closeSent = false;
+let closeRequestedAt = 0;
+let closeRawLength = 0;
+let closeRestoredAt = 0;
 let finished = false;
 
 const result = (status, extra = {}) => ({
@@ -59,7 +62,9 @@ const result = (status, extra = {}) => ({
   commandSent: Boolean(commandSentAt),
   modalSeen: Boolean(modalSeenAt),
   doctorAction: doctorSeen,
+  closeRestored: Boolean(closeRestoredAt),
   openLatencyMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
+  closeLatencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null,
   ...extra
 });
 
@@ -133,16 +138,25 @@ child.onData(data => {
   }
   if (modalSeenAt && !doctorSeen && /Afterburner Black Box Doctor/i.test(text)) {
     doctorSeen = true;
-    scheduleWrite("q", 250);
     closeSent = true;
-    setTimeout(() => finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} doctorAction=true`), 750).unref();
+    closeRequestedAt = Date.now() + 250;
+    closeRawLength = raw.length;
+    scheduleWrite("q", 250);
+    return;
+  }
+  if (closeSent && !closeRestoredAt) {
+    const afterCloseText = stripAnsi(raw.slice(closeRawLength));
+    if (/\/ commands|tab next tab|\? help/i.test(afterCloseText)) {
+      closeRestoredAt = Date.now();
+      finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} doctorAction=true closeRestored=true`);
+    }
   }
 });
 
 child.onExit(({ exitCode }) => {
   if (finished) return;
-  if (modalSeenAt && doctorSeen && closeSent) {
-    finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} doctorAction=true exitCode=${exitCode}`);
+  if (modalSeenAt && doctorSeen && closeSent && closeRestoredAt) {
+    finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} doctorAction=true closeRestored=true exitCode=${exitCode}`);
     return;
   }
   finish(1, `afterburn exited before modal validation completed: ${exitCode}`);
@@ -152,6 +166,7 @@ const timeout = setTimeout(() => {
   if (!commandSentAt) finish(1, "timed out before Copilot prompt accepted /black-box-modal");
   else if (!modalSeenAt) finish(1, "timed out before Black Box modal appeared");
   else if (!doctorSeen) finish(1, "timed out before Black Box doctor action rendered");
-  else finish(1, "timed out before Black Box modal closed");
+  else if (!closeSent) finish(1, "timed out before Black Box close key was sent");
+  else finish(1, "timed out before Black Box modal close restored the Copilot prompt");
 }, timeoutMs);
 timeout.unref?.();
