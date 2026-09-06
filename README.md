@@ -229,4 +229,7 @@ the replay artifacts exist, every visual evidence entry names generated proof, t
 bounded overlay on the Copilot backdrop, accessible cues/status/timeline/export/privacy content are
 visible, no Black Box UI self-noise leaks into the modal, PNGs are valid/nonblank, and all
 open/reopen/scroll/refresh/export/close interactions stay within latency budgets. Run
-`node tests\real-blackbox-modal-tui.mjs --help` for artifact and latency-budget options.
+`node tests\real-blackbox-modal-tui.mjs --help` for artifact and latency-budget options. Use
+`npm run replay:real-tui:black-box -- <capture-dir> --mode steps` to step through the captured
+operator viewports, `--mode replay` to replay the recorded terminal stream, or `--mode summary` to
+inspect pass/fail state and artifact completeness.

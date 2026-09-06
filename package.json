@@ -8,7 +8,8 @@
     "test:native": "go test ./...",
     "test:black-box": "npm test --prefix extensions/BlackBox",
     "test:compatibility": "node --test tests/request-compatibility.test.mjs",
-    "test:real-tui:black-box": "node tests/real-blackbox-modal-tui.mjs"
+    "test:real-tui:black-box": "node tests/real-blackbox-modal-tui.mjs",
+    "replay:real-tui:black-box": "node tests/replay-blackbox-tui.mjs"
   },
   "devDependencies": {
     "node-pty": "^1.1.0"
