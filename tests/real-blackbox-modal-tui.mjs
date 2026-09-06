@@ -341,11 +341,13 @@ const evidenceScreenNames = evidence => {
   return [...new Set(names)];
 };
 
-const expectedPngArtifacts = () => [
+const generatedScreenPngArtifacts = () => capturedScreens().map(([title]) => artifactPath(`${slugTitle(title)}.png`));
+
+const expectedPngArtifacts = () => [...new Set([
   artifactPath("blackbox-modal-tui-report.png"),
-  ...capturedScreens().map(([title]) => artifactPath(`${slugTitle(title)}.png`)),
+  ...generatedScreenPngArtifacts(),
   ...evidenceScreenNames(visualEvidenceManifest()).map(artifactPath)
-];
+])];
 
 const readPngMetadata = path => {
   if (!existsSync(path)) return { path, exists: false, validSignature: false, bytes: 0, width: null, height: null };
@@ -367,9 +369,9 @@ const validatePngArtifacts = () => {
   if (process.platform !== "win32") return { passed: false, message: "PNG visual artifacts are only rendered on Windows", artifacts: [] };
   const artifacts = expectedPngArtifacts().map(readPngMetadata);
   const invalid = artifacts.filter(item => !item.exists || !item.validSignature || item.bytes < 1024 || (item.width ?? 0) < 800 || (item.height ?? 0) < 150);
-  const expected = new Set(expectedPngArtifacts().map(path => resolve(path).toLowerCase()));
+  const generated = new Set(generatedScreenPngArtifacts().map(path => resolve(path).toLowerCase()));
   const referenced = new Set(evidenceScreenNames(visualEvidenceManifest()).map(name => resolve(captureDirectory, name).toLowerCase()));
-  const missingEvidenceRefs = [...referenced].filter(path => !expected.has(path));
+  const missingEvidenceRefs = [...referenced].filter(path => !generated.has(path));
   return invalid.length === 0 && missingEvidenceRefs.length === 0
     ? { passed: true, message: "PNG visual artifacts are present with valid raster dimensions and evidence references", artifacts, missingEvidenceRefs }
     : { passed: false, message: `missing, invalid, too-small, or ungenerated PNG visual artifacts: ${[...invalid.map(item => item.path), ...missingEvidenceRefs].join(", ")}`, artifacts, missingEvidenceRefs };
