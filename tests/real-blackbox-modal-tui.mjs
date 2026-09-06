@@ -121,6 +121,7 @@ const result = (status, extra = {}) => {
     latencyBudget: validateLatencyBudgets(),
     visualInspection: visualInspectionChecks(),
     visualEvidence: visualEvidenceManifest(),
+    visualEvidenceValidation: validateVisualEvidenceManifest(),
     visualArtifacts: {
       raw: artifactPath("blackbox-modal-tui.raw"),
       text: artifactPath("blackbox-modal-tui.txt"),
@@ -298,14 +299,29 @@ const visualEvidenceManifest = () => ({
   scrollControls: Object.fromEntries(scrollSteps.map(step => [step.name, {
     screen: `${slugTitle(step.title)}.png`,
     key: step.key,
+    proves: [`${step.title} responds`],
     latencyMs: scrollSentAt[step.name] && scrollSeenAt[step.name] ? scrollSeenAt[step.name] - scrollSentAt[step.name] : null
   }])),
-  refresh: { screen: "refresh-action-screen.png", key: "r", latencyMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null },
+  refresh: { screen: "refresh-action-screen.png", key: "r", proves: ["Refresh action re-renders the live modal"], latencyMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null },
   doctor: { screen: "doctor-action-screen.png", key: "d", proves: ["Doctor view opens", "recorder/storage/queue health is visible"] },
   doctorOverlay: { screen: "doctor-overlay-full-screen.png", proves: ["Doctor view preserves Copilot backdrop"] },
-  close: { screen: "q-close-restore-screen.png", key: "q", latencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null },
-  escapeClose: { screen: "escape-close-restore-screen.png", key: "Escape", latencyMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null }
+  close: { screen: "q-close-restore-screen.png", key: "q", proves: ["q closes modal and restores Copilot prompt"], latencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null },
+  escapeClose: { screen: "escape-close-restore-screen.png", key: "Escape", proves: ["Escape closes modal and restores Copilot prompt"], latencyMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null }
 });
+
+const flattenVisualEvidence = (evidence = visualEvidenceManifest(), path = []) => Object.entries(evidence).flatMap(([name, value]) => {
+  const nextPath = [...path, name];
+  if (!value || typeof value !== "object") return [];
+  if (typeof value.screen === "string") return [{ id: nextPath.join("."), ...value }];
+  return flattenVisualEvidence(value, nextPath);
+});
+
+const validateVisualEvidenceManifest = () => {
+  const generated = new Set(generatedScreenPngArtifacts().map(path => resolve(path).toLowerCase()));
+  const entries = flattenVisualEvidence();
+  const failures = entries.filter(entry => !entry.screen || !generated.has(resolve(captureDirectory, entry.screen).toLowerCase()) || !Array.isArray(entry.proves) || entry.proves.length === 0 || entry.proves.some(proof => typeof proof !== "string" || proof.trim() === ""));
+  return { passed: failures.length === 0, entries, failures };
+};
 
 const measuredLatencies = () => ({
   openMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
@@ -451,6 +467,7 @@ const writeCaptures = (status = "running", extra = {}) => {
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.txt"), stripAnsi(raw), "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(capture, null, 2)}\n`, "utf8");
   writePngReport(capture);
+  capture.visualEvidenceValidation = validateVisualEvidenceManifest();
   capture.visualArtifacts.pngValidation = validatePngArtifacts();
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(capture, null, 2)}\n`, "utf8");
 };
@@ -467,6 +484,14 @@ const finish = (code, message) => {
     if (!latencyValidation.passed) {
       exitCode = 1;
       finalMessage = `Black Box modal latency budget exceeded: ${latencyValidation.failures.map(item => `${item.name}=${item.measuredMs}ms>${item.budgetMs}ms`).join(", ")}`;
+      writeCaptures("failed", { message: finalMessage });
+    }
+  }
+  if (exitCode === 0) {
+    const evidenceValidation = validateVisualEvidenceManifest();
+    if (!evidenceValidation.passed) {
+      exitCode = 1;
+      finalMessage = `visual evidence manifest validation failed: ${evidenceValidation.failures.map(item => item.id).join(", ")}`;
       writeCaptures("failed", { message: finalMessage });
     }
   }

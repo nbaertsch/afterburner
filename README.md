@@ -224,5 +224,5 @@ text, machine-readable latency/result with a visual evidence manifest, a combine
 per-screen PNG captures
 under `artifacts\real-tui` by default. The run fails unless the PNG report and every per-screen
 PNG are present, non-empty, deduplicated in validation output, have valid PNG signatures, meet minimum
-raster dimensions, every visual evidence manifest reference resolves to a generated screenshot, and all
-open/reopen/scroll/refresh/close interactions stay within the harness latency budgets for agent-run visual QA.
+raster dimensions, every visual evidence manifest entry names a generated screenshot with proof text, and
+all open/reopen/scroll/refresh/close interactions stay within the harness latency budgets for agent-run visual QA.
