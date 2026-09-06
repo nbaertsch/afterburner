@@ -34,6 +34,21 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+func TestCoreUpdateStatusWarningReportsFailedReplacement(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "core-update-status.json"), []byte(`{"schemaVersion":1,"status":"failed","completedAt":"2026-01-02T03:04:05Z","error":"Access is denied"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	warning, ok := coreUpdateStatusWarning(root)
+	if !ok || !strings.Contains(warning, "previous Afterburner core update failed") || !strings.Contains(warning, "Access is denied") {
+		t.Fatalf("warning ok=%t value=%q", ok, warning)
+	}
+}
+
 func TestUIValidateManifestCommand(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "extension.mjs"), []byte("export {};"), 0o600); err != nil {

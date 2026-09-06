@@ -51,6 +51,29 @@ func TestChecksumAndArchiveExtraction(t *testing.T) {
 	}
 }
 
+func TestReadAndFormatFailedUpdateStatus(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "core-update-status.json"), []byte(`{"schemaVersion":1,"status":"failed","completedAt":"2026-01-02T03:04:05Z","error":"replace denied"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, ok, err := ReadStatus(root)
+	if err != nil || !ok {
+		t.Fatalf("ReadStatus ok=%t err=%v", ok, err)
+	}
+	warning := FormatStatusWarning(status)
+	if !strings.Contains(warning, "previous Afterburner core update failed") || !strings.Contains(warning, "replace denied") {
+		t.Fatalf("warning = %q", warning)
+	}
+	status.Status = "succeeded"
+	if FormatStatusWarning(status) != "" {
+		t.Fatalf("succeeded status should not warn")
+	}
+}
+
 func TestStageValidatesReleaseAndExecutable(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

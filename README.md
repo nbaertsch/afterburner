@@ -185,7 +185,9 @@ archive SHA-256, size, and built-in extension package checksums. It syncs built-
 release tag, verifies PE architecture and embedded version, then launches a detached replacement
 helper. The current core is retained, a bounded post-update doctor runs, and validation failure
 restores the previous binary automatically. If Windows reports the executable is locked, the helper
-reports an actionable error asking the user to close other Afterburner sessions and retry.
+records the failed transaction in `state\core-update-status.json`; subsequent `afterburn version`,
+`afterburn update`, `afterburn install`, and interactive launches print a warning so stale-core
+state is visible until the next successful replacement.
 
 ## Layout
 

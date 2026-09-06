@@ -72,6 +72,7 @@ func Run(ctx context.Context, args []string, opts Options) (int, error) {
 	case "run":
 		return runCopilot(ctx, route.Args, route.ForcedPassthrough, opts)
 	case "version":
+		warnCoreUpdateStatus(opts)
 		fmt.Fprintf(opts.Stdout, "Afterburn %s\n", opts.Version)
 		return 0, nil
 	case "help":
@@ -98,6 +99,35 @@ func Run(ctx context.Context, args []string, opts Options) (int, error) {
 	}
 }
 
+func warnCoreUpdateStatus(opts Options) {
+	layout, err := home.Initialize()
+	if err != nil {
+		return
+	}
+	warnCoreUpdateStatusForLayout(layout, opts)
+}
+
+func warnCoreUpdateStatusForLayout(layout home.Layout, opts Options) {
+	warning, ok := coreUpdateStatusWarning(layout.Root)
+	if !ok {
+		return
+	}
+	writer := opts.Stderr
+	if writer == nil {
+		writer = io.Discard
+	}
+	fmt.Fprint(writer, warning)
+}
+
+func coreUpdateStatusWarning(root string) (string, bool) {
+	status, ok, err := updater.ReadStatus(root)
+	if err != nil || !ok {
+		return "", false
+	}
+	warning := updater.FormatStatusWarning(status)
+	return warning, warning != ""
+}
+
 func runRollback(args []string, opts Options) (int, error) {
 	if len(args) != 1 || args[0] != "core" {
 		return 2, fmt.Errorf("usage: afterburn rollback core")
@@ -121,6 +151,7 @@ func runRollback(args []string, opts Options) (int, error) {
 }
 
 func runUpdate(ctx context.Context, args []string, opts Options) (int, error) {
+	warnCoreUpdateStatus(opts)
 	checkOnly := len(args) == 1 && args[0] == "--check"
 	pinned := len(args) == 2 && args[0] == "--version" && args[1] != ""
 	if len(args) != 0 && !checkOnly && !pinned {
@@ -221,6 +252,7 @@ func runExtensionCommand(route Route, opts Options) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	warnCoreUpdateStatusForLayout(layout, opts)
 	manager := extensions.Manager{Layout: layout, Stdout: opts.Stdout}
 	if strings.TrimSpace(os.Getenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE")) == "" &&
 		strings.TrimSpace(os.Getenv("AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH")) == "" {
@@ -311,6 +343,7 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	if err != nil {
 		return 1, err
 	}
+	warnCoreUpdateStatusForLayout(baseLayout, opts)
 	traceStartup("home")
 	layout := baseLayout
 	cleanup := func() {}

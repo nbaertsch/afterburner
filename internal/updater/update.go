@@ -461,13 +461,15 @@ func ApplyReplacement(parentPID int, source, target, previous string) (resultErr
 	return nil
 }
 
+type Status struct {
+	SchemaVersion int       `json:"schemaVersion"`
+	Status        string    `json:"status"`
+	CompletedAt   time.Time `json:"completedAt"`
+	Error         string    `json:"error,omitempty"`
+}
+
 func writeStatus(root string, resultErr error) error {
-	status := struct {
-		SchemaVersion int       `json:"schemaVersion"`
-		Status        string    `json:"status"`
-		CompletedAt   time.Time `json:"completedAt"`
-		Error         string    `json:"error,omitempty"`
-	}{
+	status := Status{
 		SchemaVersion: 1,
 		Status:        "succeeded",
 		CompletedAt:   time.Now().UTC(),
@@ -504,6 +506,31 @@ func writeStatus(root string, resultErr error) error {
 		return err
 	}
 	return platform.ReplaceFile(temporaryPath, path)
+}
+
+func ReadStatus(root string) (Status, bool, error) {
+	data, err := os.ReadFile(filepath.Join(root, "state", "core-update-status.json"))
+	if os.IsNotExist(err) {
+		return Status{}, false, nil
+	}
+	if err != nil {
+		return Status{}, false, err
+	}
+	var status Status
+	if err := json.Unmarshal(data, &status); err != nil {
+		return Status{}, false, err
+	}
+	if status.SchemaVersion != 1 || status.Status == "" {
+		return Status{}, false, fmt.Errorf("invalid core update status")
+	}
+	return status, true, nil
+}
+
+func FormatStatusWarning(status Status) string {
+	if status.Status != "failed" || strings.TrimSpace(status.Error) == "" {
+		return ""
+	}
+	return fmt.Sprintf("Warning: previous Afterburner core update failed at %s: %s\n", status.CompletedAt.Format(time.RFC3339), status.Error)
 }
 
 func (client Client) download(ctx context.Context, asset Asset, maximum int64) ([]byte, error) {
