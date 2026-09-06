@@ -379,7 +379,8 @@ child.onData(data => {
         finish(1, `Black Box modal displayed self-noise events: ${selfNoise.map(item => `${item.title}:${item.eventType}`).join(", ")}`);
         return;
       }
-      finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} doctorAction=true closeRestored=true`);
+      const scrollSummary = scrollSteps.map(step => `${step.name}:${scrollSeenAt[step.name] - scrollSentAt[step.name]}ms`).join(",");
+      finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true closeRestored=true closeLatencyMs=${closeRestoredAt - closeRequestedAt} report=${join(captureDirectory, "blackbox-modal-tui-report.svg")}`);
     }
   }
 });
@@ -387,7 +388,8 @@ child.onData(data => {
 child.onExit(({ exitCode }) => {
   if (finished) return;
   if (modalSeenAt && doctorSeen && closeSent && closeRestoredAt) {
-    finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} doctorAction=true closeRestored=true exitCode=${exitCode}`);
+    const scrollSummary = scrollSteps.map(step => `${step.name}:${scrollSeenAt[step.name] - scrollSentAt[step.name]}ms`).join(",");
+    finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true closeRestored=true closeLatencyMs=${closeRestoredAt - closeRequestedAt} report=${join(captureDirectory, "blackbox-modal-tui-report.svg")} exitCode=${exitCode}`);
     return;
   }
   finish(1, `afterburn exited before modal validation completed: ${exitCode}`);
