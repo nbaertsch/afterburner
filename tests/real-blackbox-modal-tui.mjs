@@ -13,9 +13,15 @@ const option = name => {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : undefined;
 };
-const positional = process.argv.slice(2).filter((value, index, args) => !value.startsWith("--") && !args[index - 1]?.startsWith("--"));
+const positional = [];
+for (let index = 2; index < process.argv.length; index++) {
+  const value = process.argv[index];
+  if (value.startsWith("--")) { index++; continue; }
+  positional.push(value);
+}
 
-const afterburn = resolve(option("--afterburn") ?? process.env.AFTERBURNER_EXE ?? join(homedir(), ".afterburner", "bin", "afterburn.exe"));
+const positionalAfterburn = /(?:^|[\\/])[^\\/]+\.exe$/i.test(positional[0] ?? "") ? positional.shift() : undefined;
+const afterburn = resolve(option("--afterburn") ?? positionalAfterburn ?? process.env.AFTERBURNER_EXE ?? join(homedir(), ".afterburner", "bin", "afterburn.exe"));
 const captureDirectory = resolve(option("--capture-dir") ?? positional[0] ?? join(process.cwd(), "artifacts", "real-tui"));
 const timeoutMs = Number(option("--timeout-ms") ?? positional[1] ?? process.env.AFTERBURNER_REAL_TUI_TIMEOUT_MS ?? 90_000);
 mkdirSync(captureDirectory, { recursive: true });
@@ -37,6 +43,7 @@ let raw = "";
 let trusted = false;
 let restored = false;
 let approved = false;
+let terminalSetupDeclined = false;
 let commandSentAt = 0;
 let modalSeenAt = 0;
 let doctorSeen = false;
@@ -81,6 +88,11 @@ child.onData(data => {
     scheduleWrite("\r", 250);
     return;
   }
+  if (!terminalSetupDeclined && /Set up terminal for multi-line input support/i.test(recent)) {
+    terminalSetupDeclined = true;
+    scheduleWrite("\x1b", 250);
+    return;
+  }
 
   const runtimeReady = /\[runtime-extension-host\] loaded from/i.test(text) &&
     /activated Afterburner extension 'black-box'/i.test(text) &&
@@ -88,7 +100,7 @@ child.onData(data => {
   const promptReady = /\/ commands|tab next tab|\? help/i.test(recent);
   if (!commandSentAt && runtimeReady && promptReady) {
     commandSentAt = Date.now();
-    scheduleWrite("/black-box-modal\r", 500);
+    scheduleWrite("/black-box-modal\r", 2500);
     return;
   }
 

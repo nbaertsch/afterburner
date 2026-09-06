@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { watch } from "node:fs";
-import { mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TimelineAnalytics } from "./analytics.mjs";
 import { loadBlackBoxConfig, resolveDataRoot, resolveNativeEventsPath } from "./config.mjs";
@@ -43,6 +43,8 @@ function safeLimit(value, fallback, maximum) {
 }
 
 async function waitForFileChange(directory, file, timeoutMs) {
+    let watchDirectory = directory;
+    try { watchDirectory = await realpath(directory); } catch {}
     await new Promise(resolve => {
         let settled = false;
         let watcher = null;
@@ -56,7 +58,7 @@ async function waitForFileChange(directory, file, timeoutMs) {
         const timer = setTimeout(finish, Math.max(1, timeoutMs));
         timer.unref?.();
         try {
-            watcher = watch(directory, { persistent: false }, (_event, filename) => {
+            watcher = watch(watchDirectory, { persistent: false }, (_event, filename) => {
                 if (!filename || String(filename) === file) finish();
             });
             watcher.unref?.();
@@ -262,7 +264,9 @@ export async function startBlackBoxService(options = {}) {
         },
         async modalActivationWatch() {
             await mkdir(activationStateDirectory, { recursive: true });
-            return { directory: activationStateDirectory, file: "modal-activation.jsonl" };
+            let directory = activationStateDirectory;
+            try { directory = await realpath(activationStateDirectory); } catch {}
+            return { directory, file: "modal-activation.jsonl" };
         },
         async requestModalOpen(input = {}) {
             await mkdir(activationAckDirectory, { recursive: true });
