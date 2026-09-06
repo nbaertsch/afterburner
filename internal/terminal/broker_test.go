@@ -140,6 +140,7 @@ func TestBrokerFlushesLoneEscapeToModal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	server.pendingEscapeDelay = 10 * time.Millisecond
 	registerLegacyModalForTest(t, server)
 	response := callModalServer(t, server, map[string]any{"type": "open", "id": "black-box", "title": "Black Box"})
 	if !response.OK || broker.Owner() != OwnerModal {

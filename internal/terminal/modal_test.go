@@ -281,6 +281,63 @@ func TestModalServerScrollsOverflowWithoutExtensionAction(t *testing.T) {
 	}
 }
 
+func TestModalServerScrollsSplitAndModifiedArrowSequences(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pendingEscapeDelay = 50 * time.Millisecond
+	server.pollTimeout = 20 * time.Millisecond
+	var body strings.Builder
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&body, "line %02d\n", i)
+	}
+	response := callModalServer(t, server, map[string]any{
+		"type": "open", "id": "black-box", "title": "Scrollable", "body": body.String(),
+	})
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.HandleInput([]byte("[B")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "lines 2-") || !strings.Contains(text, "line 02") {
+		t.Fatalf("split down arrow did not scroll modal: %q", text)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event != nil || server.ActiveCount() != 1 {
+		t.Fatalf("split arrow leaked close/action event response=%#v active=%d", response, server.ActiveCount())
+	}
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b[1;5A")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "lines 1-") || !strings.Contains(text, "line 01") {
+		t.Fatalf("modified up arrow did not scroll modal homeward: %q", text)
+	}
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b[40;0;0;1;0;1_")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "lines 2-") || !strings.Contains(text, "line 02") {
+		t.Fatalf("Windows VT down arrow did not scroll modal: %q", text)
+	}
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b[38;0;0;1;0;1_")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "lines 1-") || !strings.Contains(text, "line 01") {
+		t.Fatalf("Windows VT up arrow did not scroll modal homeward: %q", text)
+	}
+}
+
 func TestTerminalModalRendererForwardsQueriesDuringModal(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 20, Rows: 4})
@@ -372,9 +429,11 @@ func TestModalActionAndCloseEvents(t *testing.T) {
 	if server.ActiveCount() != 1 {
 		t.Fatalf("q action closed modal unexpectedly")
 	}
+	server.pendingEscapeDelay = time.Millisecond
 	if _, err := server.HandleInput([]byte("\x1b")); err != nil {
 		t.Fatal(err)
 	}
+	time.Sleep(5 * time.Millisecond)
 	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
 	if response.Event == nil || response.Event.Type != "close" || response.Event.ID != "black-box" || response.Event.Generation != 1 || response.Event.Key != "escape" {
 		t.Fatalf("close poll response = %#v", response)

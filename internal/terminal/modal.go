@@ -92,6 +92,9 @@ type ModalServer struct {
 	events               map[modalEventKey][]ModalEvent
 	renderer             ModalRenderer
 	pollTimeout          time.Duration
+	pendingInput         []byte
+	pendingEscapeTimer   *time.Timer
+	pendingEscapeDelay   time.Duration
 }
 
 // ModalRegistration is supplied by trusted launch/runtime host integration.
@@ -225,6 +228,7 @@ func NewModalServer(broker *Broker, renderer ModalRenderer) (*ModalServer, error
 		events:               make(map[modalEventKey][]ModalEvent),
 		renderer:             renderer,
 		pollTimeout:          30 * time.Second,
+		pendingEscapeDelay:   10 * time.Second,
 	}
 	return server, nil
 }
@@ -714,17 +718,64 @@ func (s *ModalServer) closeLocked(identity modalIdentity) {
 // into Copilot while the modal is visible.
 func (s *ModalServer) HandleInput(data []byte) (int, error) {
 	inputLen := len(data)
+	keys := s.collectInputKeys(data)
+	for _, key := range keys {
+		if key != "" {
+			s.handleInputKey(key)
+		}
+	}
+	return inputLen, nil
+}
+
+func (s *ModalServer) collectInputKeys(data []byte) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingEscapeTimer != nil {
+		s.pendingEscapeTimer.Stop()
+		s.pendingEscapeTimer = nil
+	}
+	if len(s.pendingInput) > 0 {
+		combined := make([]byte, 0, len(s.pendingInput)+len(data))
+		combined = append(combined, s.pendingInput...)
+		combined = append(combined, data...)
+		data = combined
+		s.pendingInput = nil
+	}
+	keys := []string{}
 	for len(data) > 0 {
-		consumed, key := nextModalInputKey(data)
+		consumed, key, incomplete := nextModalInputKeyState(data)
+		if incomplete {
+			s.pendingInput = append(s.pendingInput[:0], data...)
+			if len(s.pendingInput) == 1 && s.pendingInput[0] == '\x1b' {
+				delay := s.pendingEscapeDelay
+				if delay <= 0 {
+					delay = 25 * time.Millisecond
+				}
+				s.pendingEscapeTimer = time.AfterFunc(delay, s.flushPendingEscape)
+			}
+			break
+		}
 		if consumed <= 0 {
 			consumed = 1
 		}
 		if key != "" {
-			s.handleInputKey(key)
+			keys = append(keys, key)
 		}
 		data = data[consumed:]
 	}
-	return inputLen, nil
+	return keys
+}
+
+func (s *ModalServer) flushPendingEscape() {
+	s.mu.Lock()
+	if len(s.pendingInput) != 1 || s.pendingInput[0] != '\x1b' {
+		s.mu.Unlock()
+		return
+	}
+	s.pendingInput = nil
+	s.pendingEscapeTimer = nil
+	s.mu.Unlock()
+	s.handleInputKey("escape")
 }
 
 func (s *ModalServer) handleInputKey(key string) {
@@ -756,78 +807,90 @@ func modalInputKey(data []byte) string {
 }
 
 func nextModalInputKey(data []byte) (int, string) {
-	if len(data) == 0 {
+	consumed, key, incomplete := nextModalInputKeyState(data)
+	if incomplete {
 		return 0, ""
+	}
+	return consumed, key
+}
+
+func nextModalInputKeyState(data []byte) (int, string, bool) {
+	if len(data) == 0 {
+		return 0, "", false
 	}
 	switch data[0] {
 	case '\x1b':
 		return nextModalEscapeInputKey(data)
 	case '\r', '\n':
-		return 1, "enter"
+		return 1, "enter", false
 	case '\t':
-		return 1, "tab"
+		return 1, "tab", false
 	default:
 		if data[0] >= 0x20 && data[0] <= 0x7e {
-			return 1, strings.ToLower(string(data[0]))
+			return 1, strings.ToLower(string(data[0])), false
 		}
 		if r, size := utf8.DecodeRune(data); r != utf8.RuneError || size > 1 {
-			return size, ""
+			return size, "", false
 		}
-		return 1, ""
+		return 1, "", false
 	}
 }
 
-func nextModalEscapeInputKey(data []byte) (int, string) {
+func nextModalEscapeInputKey(data []byte) (int, string, bool) {
 	if len(data) == 1 {
-		return 1, "escape"
+		return 0, "", true
 	}
 	switch data[1] {
 	case '[':
-		if consumed, key := consumeModalCSIInput(data); consumed > 0 {
-			return consumed, key
+		if consumed, key, incomplete := consumeModalCSIInput(data); consumed > 0 || incomplete {
+			return consumed, key, incomplete
 		}
 	case 'O':
-		if len(data) >= 3 {
-			switch data[2] {
-			case 'A':
-				return 3, "up"
-			case 'B':
-				return 3, "down"
-			case 'H':
-				return 3, "home"
-			case 'F':
-				return 3, "end"
-			}
+		if len(data) < 3 {
+			return 0, "", true
+		}
+		switch data[2] {
+		case 'A':
+			return 3, "up", false
+		case 'B':
+			return 3, "down", false
+		case 'H':
+			return 3, "home", false
+		case 'F':
+			return 3, "end", false
 		}
 	case ']':
 		if consumed := consumeModalStringInput(data); consumed > 0 {
-			return consumed, ""
+			return consumed, "", false
 		}
+		return 0, "", true
 	case 'P':
 		if consumed := consumeModalStringInput(data); consumed > 0 {
-			return consumed, ""
+			return consumed, "", false
 		}
+		return 0, "", true
 	}
-	return 1, "escape"
+	return 1, "escape", false
 }
 
-func consumeModalCSIInput(data []byte) (int, string) {
+func consumeModalCSIInput(data []byte) (int, string, bool) {
 	for i := 2; i < len(data); i++ {
 		if data[i] >= 0x40 && data[i] <= 0x7e {
-			return i + 1, modalCSIInputKey(data[2 : i+1])
+			return i + 1, modalCSIInputKey(data[2:i+1]), false
 		}
 		if data[i] < 0x20 || data[i] > 0x3f {
-			return 0, ""
+			return 0, "", false
 		}
 	}
-	return 0, ""
+	return 0, "", true
 }
 
 func modalCSIInputKey(seq []byte) string {
 	if len(seq) > 0 && seq[len(seq)-1] == '_' {
 		return modalWindowsVTInputKey(seq[:len(seq)-1])
 	}
-	switch string(seq) {
+	text := string(seq)
+	switch text {
 	case "A":
 		return "up"
 	case "B":
@@ -840,6 +903,22 @@ func modalCSIInputKey(seq []byte) string {
 		return "pageup"
 	case "6~":
 		return "pagedown"
+	}
+	if len(text) >= 2 {
+		final := text[len(text)-1]
+		params := text[:len(text)-1]
+		if strings.Contains(params, ";") {
+			switch final {
+			case 'A':
+				return "up"
+			case 'B':
+				return "down"
+			case 'H':
+				return "home"
+			case 'F':
+				return "end"
+			}
+		}
 	}
 	return ""
 }
@@ -866,6 +945,18 @@ func modalWindowsVTInputKey(body []byte) string {
 		return "enter"
 	case 27:
 		return "escape"
+	case 33:
+		return "pageup"
+	case 34:
+		return "pagedown"
+	case 35:
+		return "end"
+	case 36:
+		return "home"
+	case 38:
+		return "up"
+	case 40:
+		return "down"
 	}
 	if code >= 0x20 && code <= 0x7e {
 		return strings.ToLower(string(rune(code)))
