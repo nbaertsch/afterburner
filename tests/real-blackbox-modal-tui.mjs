@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
@@ -189,14 +189,33 @@ let closeRestoreRaw = "";
 let escapeModalRaw = "";
 let escapeRestoreRaw = "";
 
+const extractModalBlock = (value, titlePattern) => {
+  const text = stripAnsi(value).replace(/\r/g, "");
+  const matches = [...text.matchAll(titlePattern)];
+  const titleIndex = matches.at(-1)?.index ?? -1;
+  if (titleIndex < 0) return "";
+  const start = text.lastIndexOf("╭", titleIndex);
+  const end = text.indexOf("╰", titleIndex);
+  if (start < 0 || end < 0) return "";
+  const lineEnd = text.indexOf("\n", end);
+  return text.slice(start, lineEnd < 0 ? undefined : lineEnd).trimEnd();
+};
+
+const visualScreen = (value, titlePattern = null) => {
+  if (!value) return "";
+  const modalBlock = titlePattern ? extractModalBlock(value, titlePattern) : "";
+  const rendered = renderTerminalScreen(value);
+  return modalBlock || rendered;
+};
+
 const capturedScreens = () => [
-  ["Modal open screen", modalOpenRaw ? renderTerminalScreen(modalOpenRaw) : ""],
-  ...scrollSteps.map(step => [step.title, scrollRaw[step.name] ? renderTerminalScreen(scrollRaw[step.name]) : ""]),
-  ["Refresh action screen", refreshRaw ? renderTerminalScreen(refreshRaw) : ""],
-  ["Doctor action screen", doctorRaw ? renderTerminalScreen(doctorRaw) : ""],
-  ["Q close restore screen", closeRestoreRaw ? renderTerminalScreen(closeRestoreRaw) : ""],
-  ["Escape close modal screen", escapeModalRaw ? renderTerminalScreen(escapeModalRaw) : ""],
-  ["Escape close restore screen", escapeRestoreRaw ? renderTerminalScreen(escapeRestoreRaw) : ""]
+  ["Modal open screen", visualScreen(modalOpenRaw, /Afterburner Black Box Live/gi)],
+  ...scrollSteps.map(step => [step.title, visualScreen(scrollRaw[step.name], /Afterburner Black Box Live/gi)]),
+  ["Refresh action screen", visualScreen(refreshRaw, /Afterburner Black Box Live/gi)],
+  ["Doctor action screen", visualScreen(doctorRaw, /Afterburner Black Box Doctor/gi)],
+  ["Q close restore screen", visualScreen(closeRestoreRaw)],
+  ["Escape close modal screen", visualScreen(escapeModalRaw, /Afterburner Black Box Live/gi)],
+  ["Escape close restore screen", visualScreen(escapeRestoreRaw)]
 ].filter(([, body]) => body);
 
 const visibleSelfNoise = () => capturedScreens()
@@ -227,6 +246,25 @@ const failIfVisualInspectionFailed = () => {
   const failed = Object.entries(inspection.checks).filter(([, passed]) => !passed).map(([name]) => name);
   finish(1, `visual inspection checks failed: ${failed.join(", ")}`);
   return true;
+};
+
+const expectedPngArtifacts = () => [
+  artifactPath("blackbox-modal-tui-report.png"),
+  ...capturedScreens().map(([title]) => artifactPath(`${slugTitle(title)}.png`))
+];
+
+const validatePngArtifacts = () => {
+  if (process.platform !== "win32") return { passed: false, message: "PNG visual artifacts are only rendered on Windows" };
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const invalid = expectedPngArtifacts().filter(path => {
+    if (!existsSync(path)) return true;
+    const stat = statSync(path);
+    if (stat.size < 1024) return true;
+    return !readFileSync(path).subarray(0, 8).equals(signature);
+  });
+  return invalid.length === 0
+    ? { passed: true, message: "PNG visual artifacts are present and valid" }
+    : { passed: false, message: `missing or invalid PNG visual artifacts: ${invalid.join(", ")}` };
 };
 
 const writePngReport = capture => {
@@ -310,10 +348,20 @@ const finish = (code, message) => {
   finished = true;
   clearTimeout(timeout);
   writeCaptures(code === 0 ? "passed" : "failed", { message });
+  let exitCode = code;
+  let finalMessage = message;
+  if (code === 0) {
+    const pngValidation = validatePngArtifacts();
+    if (!pngValidation.passed) {
+      exitCode = 1;
+      finalMessage = pngValidation.message;
+      writeCaptures("failed", { message: finalMessage });
+    }
+  }
   try { child.kill(); } catch {}
-  if (code === 0) process.stdout.write(`${message}\n`);
-  else process.stderr.write(`${message}\n--- tail ---\n${stripAnsi(raw).slice(-6000)}\n`);
-  process.exit(code);
+  if (exitCode === 0) process.stdout.write(`${finalMessage}\n`);
+  else process.stderr.write(`${finalMessage}\n--- tail ---\n${stripAnsi(raw).slice(-6000)}\n`);
+  process.exit(exitCode);
 };
 
 const scheduleWrite = (data, delayMs = 150) => setTimeout(() => child.write(data), delayMs).unref?.();

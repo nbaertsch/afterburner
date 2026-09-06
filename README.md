@@ -219,4 +219,5 @@ For installed end-to-end modal validation, run `npm run test:real-tui:black-box`
 Afterburner/Copilot TUI, drives `/black-box-modal`, verifies arrow/Page/Home/End scrolling,
 Refresh, Doctor, close/prompt restore, and absence of visible Black Box UI self-noise, and writes
 raw, text, machine-readable latency/result, a combined PNG report, and per-screen PNG captures
-under `artifacts\real-tui` by default.
+under `artifacts\real-tui` by default. The run fails unless the PNG report and every per-screen
+PNG are present, non-empty, and valid raster artifacts for agent-run visual QA.
