@@ -725,7 +725,7 @@ export function buildEnterpriseModalFrame(ui, state = {}, options = {}) {
         title,
         status: `${status.storage?.segmentCount ?? 0} segment(s), ${status.analytics?.totalRecords ?? records.length} record(s), ${status.queue?.droppedRecords ?? 0} dropped · metadata-only`,
         body: modalTextBody({ status, records, selected, state, healthTone }),
-        footer: "Esc/q closes · [r] refresh · [d] doctor · metadata-only fallback remains /black-box-tail",
+        footer: "Esc/q closes · r refresh · d doctor · metadata-only · fallback /black-box-tail",
         actions: [
             { name: "refresh", label: "Refresh", key: "r", description: "Refresh status cards, timeline, and details." },
             { name: "doctor", label: "Doctor", key: "d", description: "Run metadata-only diagnostics." },
@@ -794,12 +794,14 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
 function modalTextBody({ status, records, selected, state, healthTone }) {
     const lines = [
         "Action bar: [r] Refresh  [d] Doctor  [q] Close",
+        "Privacy: metadata-only observability; payload bodies stay redacted.",
+        "Fallback: /black-box-tail",
         "",
         "Status cards",
-        `  Recorder │ ${status.enabled ? "Enabled" : "Disabled"} │ ${status.mode ?? "unknown"} │ ${status.analytics?.totalRecords ?? records.length} records`,
-        `  Storage  │ ${status.storage?.segmentCount ?? 0} segment(s) │ ${formatBytes(status.storage?.segmentBytes)} used │ ${healthTone}`,
-        `  Signals  │ ${status.analytics?.anomalyCount ?? 0} anomalies │ ${status.analytics?.milestoneCount ?? 0} milestones │ ${status.queue?.droppedRecords ?? 0} dropped`,
-        `  Queue    │ ${status.queue?.records ?? 0} queued │ ${formatBytes(status.queue?.bytes ?? 0)} │ ${status.queue?.writeErrors ?? 0} write errors`,
+        `  Recorder  ${status.enabled ? "Enabled " : "Disabled"}  ${fitCell(status.mode ?? "unknown", 8)}  ${status.analytics?.totalRecords ?? records.length} records`,
+        `  Storage   ${fitCell(`${status.storage?.segmentCount ?? 0} segment(s)`, 12)}  ${fitCell(formatBytes(status.storage?.segmentBytes), 10)}  ${healthTone}`,
+        `  Signals   ${fitCell(`${status.analytics?.anomalyCount ?? 0} anomalies`, 12)}  ${status.analytics?.milestoneCount ?? 0} milestones  ${status.queue?.droppedRecords ?? 0} dropped`,
+        `  Queue     ${fitCell(`${status.queue?.records ?? 0} queued`, 12)}  ${fitCell(formatBytes(status.queue?.bytes ?? 0), 10)}  ${status.queue?.writeErrors ?? 0} write errors`,
         "",
         "Metadata timeline table",
         ...modalTimelineLines(records),

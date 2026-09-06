@@ -300,7 +300,7 @@ const visualInspectionChecks = () => {
     modalShowsSecureCanvasSubtitle: /Host-rendered secure canvas/i.test(modalScreen),
     modalShowsActionBar: /\[r\] Refresh\s+\[d\] Doctor\s+\[q\] Close/i.test(modalScreen),
     modalAdvertisesCloseKeys: /Esc\/q closes/i.test(modalScreen),
-    modalAdvertisesMetadataOnlyFallback: /metadata-only fallback remains \/black-box-tail/i.test(modalScreen),
+    modalAdvertisesMetadataOnlyFallback: /metadata-only[\s\S]*\/black-box-tail/i.test(modalScreen),
     modalAdvertisesAllScrollKeys: /↑\/↓ PgUp\/PgDn Home\/End/.test(modalScreen),
     modalShowsStatusCards: /Status cards/i.test(modalScreen) && /Recorder/i.test(modalScreen) && /Storage/i.test(modalScreen) && /Signals/i.test(modalScreen) && /Queue/i.test(modalScreen),
     modalShowsTimelineTable: /Metadata timeline table/i.test(modalScreen) && /Time\s+│\s+Kind\s+│\s+Event\s+│\s+Severity\s+│\s+Duration\s+│\s+Success/i.test(modalScreen),
