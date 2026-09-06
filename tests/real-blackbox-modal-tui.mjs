@@ -304,6 +304,7 @@ const visualInspectionChecks = () => {
     modalAdvertisesMetadataOnlyFallback: /metadata-only[\s\S]*\/black-box-tail/i.test(modalScreen),
     modalAdvertisesAllScrollKeys: /↑\/↓ PgUp\/PgDn Home\/End/.test(modalScreen),
     modalShowsStatusCards: /Status cards/i.test(modalScreen) && /Recorder/i.test(modalScreen) && /Storage/i.test(modalScreen) && /Signals/i.test(modalScreen) && /Queue/i.test(modalScreen),
+    modalShowsActionableHealthCallout: /Needs attention:/i.test(modalScreen),
     modalShowsSelectedEventSummary: /Selected event/i.test(modalScreen) && /session\.info|extension\.discovered|session\.model_change|event|milestone/i.test(modalScreen),
     modalShowsTimelineTable: /Metadata timeline table/i.test(modalScreen) && /Time\s+│\s+Kind\s+│\s+Event\s+│\s+Severity\s+│\s+Duration\s+│\s+Success/i.test(modalScreen),
     modalShowsScrollPosition: /lines \d+-\d+ of \d+/i.test(modalScreen),
@@ -333,7 +334,7 @@ const visualEvidenceManifest = () => ({
   },
   primaryModal: {
     screen: "modal-open-screen.png",
-    proves: ["title", "native overlay subtitle", "shortcut summary", "action bar", "all keyboard hints", "status cards", "selected event summary", "timeline table", "scroll position"]
+    proves: ["title", "native overlay subtitle", "shortcut summary", "action bar", "all keyboard hints", "status cards", "actionable health callout", "selected event summary", "timeline table", "scroll position"]
   },
   scrollControls: Object.fromEntries(scrollSteps.map(step => [step.name, {
     screen: `${slugTitle(step.title)}.png`,

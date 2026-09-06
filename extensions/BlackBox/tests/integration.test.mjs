@@ -11,6 +11,7 @@ import { startBlackBoxService } from "../lib/service.mjs";
 import {
     BLACK_BOX_OBSERVABILITY_CAPABILITY,
     blackBoxObservabilitySinkDescriptor,
+    buildEnterpriseModalFrame,
     registerEnterpriseSurface,
     subscribeObservability
 } from "../lib/ui-surface.mjs";
@@ -786,6 +787,7 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
     const openFrame = await modalDefinition.open();
     assert.equal(openFrame.title, "Afterburner Black Box Live");
     assert.match(openFrame.body, /Status cards/);
+    assert.doesNotMatch(openFrame.body, /Needs attention:/);
     assert.match(openFrame.body, /Selected event/);
     assert.match(openFrame.body, /No metadata event selected/);
     assert.match(openFrame.body, /Metadata timeline table/);
@@ -857,4 +859,23 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
     await instance.dispose();
     assert.equal(handleCloseCount, 1);
     assert.equal(handleDisposeCount, 1);
+});
+
+test("runtime modal surfaces actionable health warnings", () => {
+    const frame = buildEnterpriseModalFrame(createFakeRuntimeUI(), {
+        status: {
+            schemaVersion: 1,
+            enabled: true,
+            mode: "runtime",
+            storage: { segmentCount: 3, segmentBytes: 128, retentionBlockedBytes: 0 },
+            queue: { records: 2, bytes: 64, droppedRecords: 7, writeErrors: 1 },
+            analytics: { anomalyCount: 2, milestoneCount: 4, totalRecords: 13 },
+            native: { enabled: true, configured: true },
+            recentSignals: []
+        },
+        records: [{ recordId: "rec_warn", timestamp: "2026-01-01T00:00:00.000Z", kind: "anomaly", eventType: "ui.latency", severity: "warning", attributes: { durationMs: 321, success: false } }]
+    });
+    assert.match(frame.body, /Needs attention: 1 queue write error\(s\) · 7 dropped record\(s\) · 2 anomaly\/anomalies/);
+    assert.match(frame.body, /Selected event/);
+    assert.match(frame.body, /ui\.latency/);
 });

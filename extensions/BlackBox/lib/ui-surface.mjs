@@ -801,6 +801,7 @@ function modalTextBody({ status, records, selected, state, healthTone }) {
         `  Storage   ${fitCell(`${status.storage?.segmentCount ?? 0} segment(s)`, 12)}  ${fitCell(formatBytes(status.storage?.segmentBytes), 10)}  ${healthTone}`,
         `  Signals   ${fitCell(`${status.analytics?.anomalyCount ?? 0} anomalies`, 12)}  ${status.analytics?.milestoneCount ?? 0} milestones  ${status.queue?.droppedRecords ?? 0} dropped`,
         `  Queue     ${fitCell(`${status.queue?.records ?? 0} queued`, 12)}  ${fitCell(formatBytes(status.queue?.bytes ?? 0), 10)}  ${status.queue?.writeErrors ?? 0} write errors`,
+        ...modalHealthCalloutLines(status, state.lifecycle),
         "",
         "Selected event",
         ...(selected ? modalSelectedSummaryLines(selected) : ["  No metadata event selected."]),
@@ -852,6 +853,15 @@ function modalSelectedSummaryLines(record) {
     return [
         `  ${fitCell(shortTimestamp(record.timestamp), 18)}  ${fitCell(record.kind ?? "event", 9)}  ${fitCell(record.eventType ?? "unknown", 34)}  ${fitCell(record.severity ?? "info", 8)}  ${latency}  ${outcome}`
     ];
+}
+
+function modalHealthCalloutLines(status, lifecycle = {}) {
+    const issues = [];
+    if (lifecycle.backpressure) issues.push("live stream backpressure");
+    if (status.queue?.writeErrors) issues.push(`${status.queue.writeErrors} queue write error(s)`);
+    if (status.queue?.droppedRecords) issues.push(`${status.queue.droppedRecords} dropped record(s)`);
+    if (status.analytics?.anomalyCount) issues.push(`${status.analytics.anomalyCount} anomaly/anomalies`);
+    return issues.length ? ["", `Needs attention: ${issues.join(" · ")}`] : [];
 }
 
 function modalDetailLines(record) {
