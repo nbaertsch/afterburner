@@ -428,11 +428,14 @@ const finish = (code, message) => {
 
 const scheduleWrite = (data, delayMs = 150) => setTimeout(() => child.write(data), delayMs).unref?.();
 const scheduleCommand = (command, delayMs = 150, onSubmit = () => {}) => {
-  [...command].forEach((character, index) => scheduleWrite(character, delayMs + index * 35));
+  setTimeout(() => {
+    child.write("\x15");
+    child.write(`\x1b[200~${command}\x1b[201~`);
+  }, delayMs).unref?.();
   setTimeout(() => {
     onSubmit();
     child.write("\r");
-  }, delayMs + command.length * 35 + 1200).unref?.();
+  }, delayMs + 900).unref?.();
 };
 
 child.onData(data => {
