@@ -381,14 +381,19 @@ const pngPixelStats = buffer => {
   const bitDepth = buffer[24];
   const colorType = buffer[25];
   const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : 0;
-  if (bitDepth !== 8 || channels === 0) return { width, height, colorType, bitDepth, distinctColors: 0, nonBackgroundPixels: 0 };
+  const supportedPixelFormat = bitDepth === 8 && channels > 0;
+  if (!supportedPixelFormat) return { width, height, colorType, bitDepth, supportedPixelFormat, distinctColors: 0, nonBackgroundPixels: 0 };
   const idat = [];
-  for (let offset = 8; offset < buffer.length;) {
+  for (let offset = 8; offset + 12 <= buffer.length;) {
     const length = buffer.readUInt32BE(offset);
-    const type = buffer.toString("ascii", offset + 4, offset + 8);
-    if (type === "IDAT") idat.push(buffer.subarray(offset + 8, offset + 8 + length));
-    offset += length + 12;
+    const chunkStart = offset + 8;
+    const chunkEnd = chunkStart + length;
+    if (chunkEnd + 4 > buffer.length) break;
+    const type = buffer.toString("ascii", offset + 4, chunkStart);
+    if (type === "IDAT") idat.push(buffer.subarray(chunkStart, chunkEnd));
+    offset = chunkEnd + 4;
   }
+  if (idat.length === 0) return { width, height, colorType, bitDepth, supportedPixelFormat, distinctColors: 0, nonBackgroundPixels: 0 };
   const data = inflateSync(Buffer.concat(idat));
   const stride = width * channels;
   const colors = new Set();
@@ -413,16 +418,16 @@ const pngPixelStats = buffer => {
     }
     previous = row;
   }
-  return { width, height, colorType, bitDepth, distinctColors: colors.size, nonBackgroundPixels };
+  return { width, height, colorType, bitDepth, supportedPixelFormat, distinctColors: colors.size, nonBackgroundPixels };
 };
 
 const readPngMetadata = path => {
-  if (!existsSync(path)) return { path, exists: false, validSignature: false, bytes: 0, width: null, height: null, distinctColors: 0, nonBackgroundPixels: 0 };
+  if (!existsSync(path)) return { path, exists: false, validSignature: false, bytes: 0, width: null, height: null, supportedPixelFormat: false, distinctColors: 0, nonBackgroundPixels: 0 };
   const stat = statSync(path);
   const buffer = readFileSync(path);
   const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const validSignature = buffer.length >= 24 && buffer.subarray(0, 8).equals(signature);
-  const stats = validSignature ? pngPixelStats(buffer) : { width: null, height: null, distinctColors: 0, nonBackgroundPixels: 0 };
+  const stats = validSignature ? pngPixelStats(buffer) : { width: null, height: null, supportedPixelFormat: false, distinctColors: 0, nonBackgroundPixels: 0 };
   return {
     path,
     exists: true,
@@ -432,16 +437,27 @@ const readPngMetadata = path => {
   };
 };
 
+const pngArtifactFailures = item => [
+  !item.exists ? "missing" : null,
+  item.exists && !item.validSignature ? "invalid signature" : null,
+  item.exists && item.bytes < 1024 ? `too small (${item.bytes} bytes)` : null,
+  item.validSignature && !item.supportedPixelFormat ? `unsupported PNG pixel format (colorType=${item.colorType}, bitDepth=${item.bitDepth})` : null,
+  item.validSignature && (item.width ?? 0) < 800 ? `width ${item.width}px < 800px` : null,
+  item.validSignature && (item.height ?? 0) < 150 ? `height ${item.height}px < 150px` : null,
+  item.supportedPixelFormat && item.distinctColors < 3 ? `only ${item.distinctColors} distinct colors` : null,
+  item.supportedPixelFormat && item.nonBackgroundPixels < 100 ? `only ${item.nonBackgroundPixels} non-background pixels` : null
+].filter(Boolean);
+
 const validatePngArtifacts = () => {
   if (process.platform !== "win32") return { passed: false, message: "PNG visual artifacts are only rendered on Windows", artifacts: [] };
-  const artifacts = expectedPngArtifacts().map(readPngMetadata);
-  const invalid = artifacts.filter(item => !item.exists || !item.validSignature || item.bytes < 1024 || (item.width ?? 0) < 800 || (item.height ?? 0) < 150 || item.distinctColors < 3 || item.nonBackgroundPixels < 100);
+  const artifacts = expectedPngArtifacts().map(readPngMetadata).map(item => ({ ...item, failures: pngArtifactFailures(item) }));
+  const invalid = artifacts.filter(item => item.failures.length > 0);
   const generated = new Set(generatedScreenPngArtifacts().map(path => resolve(path).toLowerCase()));
   const referenced = new Set(evidenceScreenNames(visualEvidenceManifest()).map(name => resolve(captureDirectory, name).toLowerCase()));
   const missingEvidenceRefs = [...referenced].filter(path => !generated.has(path));
   return invalid.length === 0 && missingEvidenceRefs.length === 0
-    ? { passed: true, message: "PNG visual artifacts are present with valid raster dimensions and evidence references", artifacts, missingEvidenceRefs }
-    : { passed: false, message: `missing, invalid, too-small, or ungenerated PNG visual artifacts: ${[...invalid.map(item => item.path), ...missingEvidenceRefs].join(", ")}`, artifacts, missingEvidenceRefs };
+    ? { passed: true, message: "PNG visual artifacts are present with valid raster dimensions, pixel diversity, and evidence references", artifacts, missingEvidenceRefs }
+    : { passed: false, message: `PNG visual artifact validation failed: ${[...invalid.map(item => `${item.path} (${item.failures.join("; ")})`), ...missingEvidenceRefs.map(path => `${path} (not generated by capturedScreens)`)].join(", ")}`, artifacts, missingEvidenceRefs };
 };
 
 const writePngReport = capture => {
