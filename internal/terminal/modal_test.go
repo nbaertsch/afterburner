@@ -235,7 +235,7 @@ func TestTerminalModalRendererEnterpriseOverlayChrome(t *testing.T) {
 		},
 	})
 	text := output.String()
-	for _, want := range []string{"copilot backdrop", "╭", "╰", "◆ Enterprise Review", "Verified", "Host-rendered secure canvas", "line one", "metadata-only host rendering", "[enter] Approve"} {
+	for _, want := range []string{"copilot backdrop", "╭", "╰", "◆ Enterprise Review", "Verified", "Native Afterburner modal overlay", "line one", "metadata-only host rendering", "[enter] Approve"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("enterprise overlay missing %q: %q", want, text)
 		}

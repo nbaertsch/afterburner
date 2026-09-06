@@ -1443,10 +1443,10 @@ func writeModalHeader(out *strings.Builder, layout modalLayout, frame ModalFrame
 	out.WriteString(styles.panel.Render(strings.Repeat(" ", space)))
 	out.WriteString(statusBadge)
 
-	subtitle := "Host-rendered secure canvas"
+	subtitle := "Native Afterburner modal overlay"
 	if maxScroll > 0 {
 		end := minInt(len(bodyLines), scrollOffset+layout.bodyRows)
-		subtitle = fmt.Sprintf("Host-rendered secure canvas • lines %d-%d of %d", scrollOffset+1, end, len(bodyLines))
+		subtitle = fmt.Sprintf("Native Afterburner modal overlay • lines %d-%d of %d", scrollOffset+1, end, len(bodyLines))
 	}
 	writeModalText(out, layout.top+2, layout.innerLeft, layout.innerWidth, styles.muted, subtitle)
 }
