@@ -75,18 +75,79 @@ const escapeHtml = value => String(value)
   .replaceAll(">", "&gt;")
   .replaceAll('"', "&quot;");
 
-const excerptAround = (text, pattern, radius = 2200) => {
-  const index = text.search(pattern);
-  if (index < 0) return "";
-  return text.slice(Math.max(0, index - radius), Math.min(text.length, index + radius));
+const renderTerminalScreen = (value, columns = 140, rows = 40) => {
+  const screen = Array.from({ length: rows }, () => Array(columns).fill(" "));
+  let row = 0;
+  let column = 0;
+  const clamp = () => {
+    row = Math.max(0, Math.min(rows - 1, row));
+    column = Math.max(0, Math.min(columns - 1, column));
+  };
+  const clear = () => screen.forEach(line => line.fill(" "));
+  const newline = () => {
+    row++;
+    column = 0;
+    if (row >= rows) {
+      screen.shift();
+      screen.push(Array(columns).fill(" "));
+      row = rows - 1;
+    }
+  };
+  for (let index = 0; index < value.length; index++) {
+    const ch = value[index];
+    if (ch === "\x1b") {
+      const next = value[++index];
+      if (next === "]") {
+        while (index < value.length && value[index] !== "\x07" && !(value[index] === "\x1b" && value[index + 1] === "\\")) index++;
+        if (value[index] === "\x1b") index++;
+        continue;
+      }
+      if (next !== "[") continue;
+      let sequence = "";
+      while (++index < value.length) {
+        sequence += value[index];
+        if (/[ -~]/.test(value[index]) && value.charCodeAt(index) >= 0x40) break;
+      }
+      const final = sequence.at(-1);
+      const params = sequence.slice(0, -1).replace(/^\?/, "").split(";").map(part => Number(part || 0));
+      if (final === "H" || final === "f") {
+        row = Math.max(0, (params[0] || 1) - 1);
+        column = Math.max(0, (params[1] || 1) - 1);
+      } else if (final === "J" && (params[0] || 0) === 2) {
+        clear();
+        row = 0;
+        column = 0;
+      } else if (final === "K") {
+        screen[row].fill(" ", column);
+      } else if (final === "A") row -= params[0] || 1;
+      else if (final === "B") row += params[0] || 1;
+      else if (final === "C") column += params[0] || 1;
+      else if (final === "D") column -= params[0] || 1;
+      else if (final === "G") column = Math.max(0, (params[0] || 1) - 1);
+      else if (final === "d") row = Math.max(0, (params[0] || 1) - 1);
+      clamp();
+      continue;
+    }
+    if (ch === "\r") { column = 0; continue; }
+    if (ch === "\n") { newline(); continue; }
+    if (ch === "\b") { column = Math.max(0, column - 1); continue; }
+    if (ch < " " || ch === "\x7f") continue;
+    screen[row][column] = ch;
+    column++;
+    if (column >= columns) newline();
+  }
+  return screen.map(line => line.join("").trimEnd()).join("\n").trimEnd();
 };
 
+let modalOpenRaw = "";
+let doctorRaw = "";
+let closeRestoreRaw = "";
+
 const visualReport = capture => {
-  const text = stripAnsi(raw);
   const sections = [
-    ["Modal open", excerptAround(text, /Afterburner Black Box Live/i)],
-    ["Doctor action", excerptAround(text, /Afterburner Black Box Doctor/i)],
-    ["Close restore", closeRawLength ? stripAnsi(raw.slice(closeRawLength)).slice(0, 3000) : ""]
+    ["Modal open screen", modalOpenRaw ? renderTerminalScreen(modalOpenRaw) : ""],
+    ["Doctor action screen", doctorRaw ? renderTerminalScreen(doctorRaw) : ""],
+    ["Close restore screen", closeRestoreRaw ? renderTerminalScreen(closeRestoreRaw) : ""]
   ].filter(([, body]) => body);
   const body = sections.map(([title, content]) => `
     <section>
@@ -187,11 +248,13 @@ child.onData(data => {
 
   if (commandSentAt && !modalSeenAt && /Afterburner Black Box Live/i.test(text)) {
     modalSeenAt = Date.now();
+    modalOpenRaw = raw;
     scheduleWrite("d", 250);
     return;
   }
   if (modalSeenAt && !doctorSeen && /Afterburner Black Box Doctor/i.test(text)) {
     doctorSeen = true;
+    doctorRaw = raw;
     closeSent = true;
     closeRequestedAt = Date.now() + 250;
     closeRawLength = raw.length;
@@ -202,6 +265,7 @@ child.onData(data => {
     const afterCloseText = stripAnsi(raw.slice(closeRawLength));
     if (/\/ commands|tab next tab|\? help/i.test(afterCloseText)) {
       closeRestoredAt = Date.now();
+      closeRestoreRaw = raw;
       finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} doctorAction=true closeRestored=true`);
     }
   }
