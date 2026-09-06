@@ -47,7 +47,9 @@ let approved = false;
 let terminalSetupDeclined = false;
 let commandSentAt = 0;
 let modalSeenAt = 0;
+let modalCaptureScheduled = false;
 let doctorSeen = false;
+let doctorCaptureScheduled = false;
 let closeSent = false;
 let closeRequestedAt = 0;
 let closeRawLength = 0;
@@ -248,17 +250,27 @@ child.onData(data => {
 
   if (commandSentAt && !modalSeenAt && /Afterburner Black Box Live/i.test(text)) {
     modalSeenAt = Date.now();
-    modalOpenRaw = raw;
-    scheduleWrite("d", 250);
+  }
+  if (modalSeenAt && !modalCaptureScheduled) {
+    modalCaptureScheduled = true;
+    setTimeout(() => {
+      modalOpenRaw = raw;
+      child.write("d");
+    }, 500).unref?.();
     return;
   }
   if (modalSeenAt && !doctorSeen && /Afterburner Black Box Doctor/i.test(text)) {
     doctorSeen = true;
-    doctorRaw = raw;
-    closeSent = true;
-    closeRequestedAt = Date.now() + 250;
-    closeRawLength = raw.length;
-    scheduleWrite("q", 250);
+  }
+  if (doctorSeen && !doctorCaptureScheduled) {
+    doctorCaptureScheduled = true;
+    setTimeout(() => {
+      doctorRaw = raw;
+      closeSent = true;
+      closeRequestedAt = Date.now();
+      closeRawLength = raw.length;
+      child.write("q");
+    }, 500).unref?.();
     return;
   }
   if (closeSent && !closeRestoredAt) {
