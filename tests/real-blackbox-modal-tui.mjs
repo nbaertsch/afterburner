@@ -108,6 +108,7 @@ const result = (status, extra = {}) => ({
   closeLatencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null,
   escapeCloseLatencyMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null,
   visibleSelfNoise: visibleSelfNoise(),
+  visualInspection: visualInspectionChecks(),
   visualArtifacts: {
     raw: artifactPath("blackbox-modal-tui.raw"),
     text: artifactPath("blackbox-modal-tui.txt"),
@@ -199,9 +200,26 @@ const capturedScreens = () => [
 ].filter(([, body]) => body);
 
 const visibleSelfNoise = () => capturedScreens()
-  .filter(([title]) => title !== "Close restore screen")
+  .filter(([title]) => title !== "Q close restore screen" && title !== "Escape close restore screen")
   .flatMap(([title, body]) => [...body.matchAll(/\bui\.(?:modal_canvas|host)\.[a-z0-9_.-]+\b/gi)]
     .map(match => ({ title, eventType: match[0] })));
+
+const visualInspectionChecks = () => {
+  const screens = Object.fromEntries(capturedScreens());
+  const checks = {
+    modalHasBoxChrome: /╭/.test(screens["Modal open screen"] ?? "") && /╰/.test(screens["Modal open screen"] ?? ""),
+    modalShowsTitle: /Afterburner Black Box Live/i.test(screens["Modal open screen"] ?? ""),
+    modalShowsActionBar: /\[r\] Refresh\s+\[d\] Doctor\s+\[q\] Close/i.test(screens["Modal open screen"] ?? ""),
+    modalAdvertisesAllScrollKeys: /↑\/↓ PgUp\/PgDn Home\/End/.test(screens["Modal open screen"] ?? ""),
+    everyScrollScreenCaptured: scrollSteps.every(step => Boolean(screens[step.title])),
+    refreshScreenCaptured: /Afterburner Black Box Live/i.test(screens["Refresh action screen"] ?? ""),
+    doctorScreenCaptured: /Afterburner Black Box Doctor/i.test(screens["Doctor action screen"] ?? ""),
+    promptRestoredAfterQ: /\/ commands|tab next tab|\? help/i.test(screens["Q close restore screen"] ?? ""),
+    promptRestoredAfterEscape: /\/ commands|tab next tab|\? help/i.test(screens["Escape close restore screen"] ?? ""),
+    noVisibleSelfNoise: visibleSelfNoise().length === 0
+  };
+  return { passed: Object.values(checks).every(Boolean), checks };
+};
 
 const writePngReport = capture => {
   if (process.platform !== "win32") return;
