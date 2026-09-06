@@ -793,9 +793,8 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
 
 function modalTextBody({ status, records, selected, state, healthTone }) {
     const lines = [
-        "Action bar: [r] Refresh  [d] Doctor  [q] Close",
-        "Privacy: metadata-only observability; payload bodies stay redacted.",
-        "Fallback: /black-box-tail",
+        "Shortcuts: r Refresh · d Doctor · q/Esc Close · ↑/↓ PgUp/PgDn Home/End Scroll",
+        "Privacy: metadata-only; payload bodies redacted. Fallback: /black-box-tail",
         "",
         "Status cards",
         `  Recorder  ${status.enabled ? "Enabled " : "Disabled"}  ${fitCell(status.mode ?? "unknown", 8)}  ${status.analytics?.totalRecords ?? records.length} records`,

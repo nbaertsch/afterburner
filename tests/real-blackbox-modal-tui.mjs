@@ -298,6 +298,7 @@ const visualInspectionChecks = () => {
     modalHasBoxChrome: /╭/.test(modalScreen) && /╰/.test(modalScreen),
     modalShowsTitle: /Afterburner Black Box Live/i.test(modalScreen),
     modalShowsNativeOverlaySubtitle: /Native Afterburner modal overlay/i.test(modalScreen),
+    modalShowsShortcutSummary: /Shortcuts:\s*r Refresh\s+·\s+d Doctor\s+·\s+q\/Esc Close/i.test(modalScreen),
     modalShowsActionBar: /\[r\] Refresh\s+\[d\] Doctor\s+\[q\] Close/i.test(modalScreen),
     modalAdvertisesCloseKeys: /Esc\/q closes/i.test(modalScreen),
     modalAdvertisesMetadataOnlyFallback: /metadata-only[\s\S]*\/black-box-tail/i.test(modalScreen),
@@ -331,7 +332,7 @@ const visualEvidenceManifest = () => ({
   },
   primaryModal: {
     screen: "modal-open-screen.png",
-    proves: ["title", "native overlay subtitle", "action bar", "all keyboard hints", "status cards", "timeline table", "scroll position"]
+    proves: ["title", "native overlay subtitle", "shortcut summary", "action bar", "all keyboard hints", "status cards", "timeline table", "scroll position"]
   },
   scrollControls: Object.fromEntries(scrollSteps.map(step => [step.name, {
     screen: `${slugTitle(step.title)}.png`,
