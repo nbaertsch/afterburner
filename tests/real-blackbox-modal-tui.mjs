@@ -91,6 +91,7 @@ const result = (status, extra = {}) => ({
   closeRestored: Boolean(closeRestoredAt),
   openLatencyMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
   closeLatencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null,
+  visibleSelfNoise: visibleSelfNoise(),
   ...extra
 });
 
@@ -175,6 +176,11 @@ const capturedScreens = () => [
   ["Doctor action screen", doctorRaw ? renderTerminalScreen(doctorRaw) : ""],
   ["Close restore screen", closeRestoreRaw ? renderTerminalScreen(closeRestoreRaw) : ""]
 ].filter(([, body]) => body);
+
+const visibleSelfNoise = () => capturedScreens()
+  .filter(([title]) => title !== "Close restore screen")
+  .flatMap(([title, body]) => [...body.matchAll(/\bui\.(?:modal_canvas|host)\.[a-z0-9_.-]+\b/gi)]
+    .map(match => ({ title, eventType: match[0] })));
 
 const visualReport = capture => {
   const body = capturedScreens().map(([title, content]) => `
@@ -368,6 +374,11 @@ child.onData(data => {
     if (/\/ commands|tab next tab|\? help/i.test(afterCloseText)) {
       closeRestoredAt = Date.now();
       closeRestoreRaw = raw;
+      const selfNoise = visibleSelfNoise();
+      if (selfNoise.length > 0) {
+        finish(1, `Black Box modal displayed self-noise events: ${selfNoise.map(item => `${item.title}:${item.eventType}`).join(", ")}`);
+        return;
+      }
       finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} doctorAction=true closeRestored=true`);
     }
   }

@@ -217,5 +217,6 @@ Windows CI also builds amd64/arm64 binaries and validates exact resume forwardin
 the modal broker under a real ConPTY. The interactive picker harness is `tests\native-conpty.mjs`.
 For installed end-to-end modal validation, run `npm run test:real-tui:black-box`; it opens a real
 Afterburner/Copilot TUI, drives `/black-box-modal`, verifies arrow/Page/Home/End scrolling,
-Refresh, Doctor, and close/prompt restore, and writes raw, text, machine-readable latency/result,
-HTML, and SVG visual-inspection captures under `artifacts\real-tui` by default.
+Refresh, Doctor, close/prompt restore, and absence of visible Black Box UI self-noise, and writes
+raw, text, machine-readable latency/result, HTML, and SVG visual-inspection captures under
+`artifacts\real-tui` by default.
