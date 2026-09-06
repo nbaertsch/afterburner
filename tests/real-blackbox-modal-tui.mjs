@@ -168,15 +168,16 @@ let modalOpenRaw = "";
 let doctorRaw = "";
 let closeRestoreRaw = "";
 
+const capturedScreens = () => [
+  ["Modal open screen", modalOpenRaw ? renderTerminalScreen(modalOpenRaw) : ""],
+  ...scrollSteps.map(step => [step.title, scrollRaw[step.name] ? renderTerminalScreen(scrollRaw[step.name]) : ""]),
+  ["Refresh action screen", refreshRaw ? renderTerminalScreen(refreshRaw) : ""],
+  ["Doctor action screen", doctorRaw ? renderTerminalScreen(doctorRaw) : ""],
+  ["Close restore screen", closeRestoreRaw ? renderTerminalScreen(closeRestoreRaw) : ""]
+].filter(([, body]) => body);
+
 const visualReport = capture => {
-  const sections = [
-    ["Modal open screen", modalOpenRaw ? renderTerminalScreen(modalOpenRaw) : ""],
-    ...scrollSteps.map(step => [step.title, scrollRaw[step.name] ? renderTerminalScreen(scrollRaw[step.name]) : ""]),
-    ["Refresh action screen", refreshRaw ? renderTerminalScreen(refreshRaw) : ""],
-    ["Doctor action screen", doctorRaw ? renderTerminalScreen(doctorRaw) : ""],
-    ["Close restore screen", closeRestoreRaw ? renderTerminalScreen(closeRestoreRaw) : ""]
-  ].filter(([, body]) => body);
-  const body = sections.map(([title, content]) => `
+  const body = capturedScreens().map(([title, content]) => `
     <section>
       <h2>${escapeHtml(title)}</h2>
       <pre>${escapeHtml(content)}</pre>
@@ -200,12 +201,39 @@ ${body}
 `;
 };
 
+const svgReport = capture => {
+  const screens = capturedScreens();
+  const charWidth = 8;
+  const lineHeight = 16;
+  const margin = 24;
+  const titleHeight = 28;
+  const summaryLines = JSON.stringify(capture, null, 2).split("\n");
+  const blocks = [["Result", summaryLines.join("\n")], ...screens];
+  const width = 1180;
+  let y = margin;
+  const parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${blocks.reduce((sum, [, content]) => sum + titleHeight + Math.max(1, content.split("\n").length) * lineHeight + margin, margin)}" viewBox="0 0 ${width} ${blocks.reduce((sum, [, content]) => sum + titleHeight + Math.max(1, content.split("\n").length) * lineHeight + margin, margin)}">`,
+    `<rect width="100%" height="100%" fill="#0d1117"/>`];
+  for (const [title, content] of blocks) {
+    const lines = content.split("\n");
+    const blockHeight = titleHeight + Math.max(1, lines.length) * lineHeight + 16;
+    parts.push(`<text x="${margin}" y="${y + 18}" fill="#f0f6fc" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">${escapeHtml(title)}</text>`);
+    parts.push(`<rect x="${margin}" y="${y + titleHeight}" width="${width - margin * 2}" height="${blockHeight - titleHeight}" rx="8" fill="#010409" stroke="#30363d"/>`);
+    lines.forEach((line, index) => {
+      parts.push(`<text x="${margin + 16}" y="${y + titleHeight + 22 + index * lineHeight}" fill="#e6edf3" font-family="Cascadia Mono, Consolas, monospace" font-size="13" xml:space="preserve">${escapeHtml(line.slice(0, Math.floor((width - margin * 2 - 32) / charWidth)))}</text>`);
+    });
+    y += blockHeight + margin;
+  }
+  parts.push("</svg>");
+  return parts.join("\n");
+};
+
 const writeCaptures = (status = "running", extra = {}) => {
   const capture = result(status, extra);
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.raw"), raw, "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.txt"), stripAnsi(raw), "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(capture, null, 2)}\n`, "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-report.html"), visualReport(capture), "utf8");
+  writeFileSync(join(captureDirectory, "blackbox-modal-tui-report.svg"), svgReport(capture), "utf8");
 };
 
 const finish = (code, message) => {
