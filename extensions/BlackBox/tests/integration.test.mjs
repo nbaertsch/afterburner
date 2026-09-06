@@ -786,6 +786,7 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
 
     const openFrame = await modalDefinition.open();
     assert.equal(openFrame.title, "Afterburner Black Box Live");
+    assert.match(openFrame.body, /Storage usage: 0% of/);
     assert.match(openFrame.body, /Status cards/);
     assert.doesNotMatch(openFrame.body, /Needs attention:/);
     assert.match(openFrame.body, /Selected event/);
@@ -875,6 +876,7 @@ test("runtime modal surfaces actionable health warnings", () => {
         },
         records: [{ recordId: "rec_warn", timestamp: "2026-01-01T00:00:00.000Z", kind: "anomaly", eventType: "ui.latency", severity: "warning", attributes: { durationMs: 321, success: false } }]
     });
+    assert.match(frame.body, /Storage usage: 0% of/);
     assert.match(frame.body, /Needs attention: 1 queue write error\(s\) · 7 dropped record\(s\) · 2 anomaly\/anomalies/);
     assert.match(frame.body, /Selected event/);
     assert.match(frame.body, /ui\.latency/);

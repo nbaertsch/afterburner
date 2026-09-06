@@ -72,7 +72,7 @@ let modalCaptureScheduled = false;
 const scrollSteps = [
   { name: "arrowDown", title: "Arrow down scroll screen", key: "\x1b[40;0;0;1;0;1_", want: /lines 2-\d+ of/i },
   { name: "arrowUp", title: "Arrow up scroll screen", key: "\x1b[38;0;0;1;0;1_", want: /lines 1-\d+ of/i },
-  { name: "pageDown", title: "Page down scroll screen", key: "\x1b[34;0;0;1;0;1_", want: /lines (?:[2-9]|1\d)-\d+ of/i },
+  { name: "pageDown", title: "Page down scroll screen", key: "\x1b[34;0;0;1;0;1_", want: /lines (?:[2-9]|[1-9]\d+)-\d+ of/i },
   { name: "pageUp", title: "Page up scroll screen", key: "\x1b[33;0;0;1;0;1_", want: /lines 1-\d+ of/i },
   { name: "end", title: "End scroll screen", key: "\x1b[35;0;0;1;0;1_", want: /lines (?:[2-9]|1\d)-\d+ of/i },
   { name: "home", title: "Home scroll screen", key: "\x1b[36;0;0;1;0;1_", want: /lines 1-\d+ of/i }
@@ -303,6 +303,7 @@ const visualInspectionChecks = () => {
     modalAdvertisesCloseKeys: /Esc\/q closes/i.test(modalScreen),
     modalAdvertisesMetadataOnlyFallback: /metadata-only[\s\S]*\/black-box-tail/i.test(modalScreen),
     modalAdvertisesAllScrollKeys: /↑\/↓ PgUp\/PgDn Home\/End/.test(modalScreen),
+    modalShowsStorageProgress: /Storage usage:\s*\d+% of/i.test(modalScreen),
     modalShowsStatusCards: /Status cards/i.test(modalScreen) && /Recorder/i.test(modalScreen) && /Storage/i.test(modalScreen) && /Signals/i.test(modalScreen) && /Queue/i.test(modalScreen),
     modalShowsActionableHealthCallout: /Needs attention:/i.test(modalScreen),
     modalShowsSelectedEventSummary: /Selected event/i.test(modalScreen) && /session\.info|extension\.discovered|session\.model_change|event|milestone/i.test(modalScreen),
@@ -334,7 +335,7 @@ const visualEvidenceManifest = () => ({
   },
   primaryModal: {
     screen: "modal-open-screen.png",
-    proves: ["title", "native overlay subtitle", "shortcut summary", "action bar", "all keyboard hints", "status cards", "actionable health callout", "selected event summary", "timeline table", "scroll position"]
+    proves: ["title", "native overlay subtitle", "shortcut summary", "action bar", "all keyboard hints", "storage progress", "status cards", "actionable health callout", "selected event summary", "timeline table", "scroll position"]
   },
   scrollControls: Object.fromEntries(scrollSteps.map(step => [step.name, {
     screen: `${slugTitle(step.title)}.png`,

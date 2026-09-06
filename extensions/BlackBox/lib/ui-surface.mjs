@@ -720,11 +720,13 @@ export function buildEnterpriseModalFrame(ui, state = {}, options = {}) {
     const records = filterAndSortRecords(state.records ?? [], state.filter, state.sort).slice(0, state.view?.limit ?? 12);
     const selected = records.find(record => record.recordId === state.selectedRecordId) ?? records[0] ?? null;
     const healthTone = healthToneFor(status, state.lifecycle);
+    const storagePercent = percent(status.storage?.segmentBytes, status.storage?.maxBytes);
+    const progressValue = Number.isFinite(storagePercent) ? Math.min(100, storagePercent) : 0;
     const title = options.title ?? state.title ?? "Afterburner Black Box Live";
     const frame = {
         title,
         status: `${status.storage?.segmentCount ?? 0} segment(s), ${status.analytics?.totalRecords ?? records.length} record(s), ${status.queue?.droppedRecords ?? 0} dropped · metadata-only`,
-        body: modalTextBody({ status, records, selected, state, healthTone }),
+        body: modalTextBody({ status, records, selected, state, healthTone, progressValue }),
         footer: "Esc/q closes · r refresh · d doctor · metadata-only · fallback /black-box-tail",
         actions: [
             { name: "refresh", label: "Refresh", key: "r", description: "Refresh status cards, timeline, and details." },
@@ -732,12 +734,12 @@ export function buildEnterpriseModalFrame(ui, state = {}, options = {}) {
             { name: "close", label: "Close", key: "q", description: "Close the Black Box live modal." }
         ]
     };
-    const document = buildEnterpriseModalDocument(ui, { status, records, selected, state, healthTone, title, frame });
+    const document = buildEnterpriseModalDocument(ui, { status, records, selected, state, healthTone, progressValue, title, frame });
     if (document) frame.document = document;
     return frame;
 }
 
-function buildEnterpriseModalDocument(ui, { status, records, selected, state, healthTone, title, frame }) {
+function buildEnterpriseModalDocument(ui, { status, records, selected, state, healthTone, progressValue, title, frame }) {
     if (!ui?.createUIDocument) return null;
     const c = ui.components ?? ui;
     if (!c?.dialog || !c?.toolbar || !c?.grid || !c?.panel || !c?.table) return null;
@@ -755,6 +757,10 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
                 metricCard(c, "bb-modal-card-signals", "Signals", `${status.analytics?.anomalyCount ?? 0} anomalies`, `${status.analytics?.milestoneCount ?? 0} milestones`, status.analytics?.anomalyCount ? "warning" : "success"),
                 metricCard(c, "bb-modal-card-queue", "Queue", `${status.queue?.records ?? 0} queued`, `${status.queue?.droppedRecords ?? 0} dropped`, status.queue?.droppedRecords ? "warning" : "info")
             ], { id: "bb-modal-status-cards" }),
+            c.progress({ label: "Storage usage", value: progressValue, max: 100, status: `${formatPercent(progressValue)} used`, tone: healthTone }, [], {
+                id: "bb-modal-storage-progress",
+                accessibility: { role: "progressbar", name: "Black Box modal storage usage", valueText: `${formatPercent(progressValue)} used` }
+            }),
             ...modalHealthAlertNodes(c, status, state.lifecycle),
             c.row({ label: "Timeline and detail split", responsive: { collapseBelowColumns: 100, orientation: "vertical" } }, [
                 c.panel({ title: "Metadata timeline", width: "58%" }, [
@@ -792,10 +798,12 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
     }
 }
 
-function modalTextBody({ status, records, selected, state, healthTone }) {
+function modalTextBody({ status, records, selected, state, healthTone, progressValue }) {
     const lines = [
         "Shortcuts: r Refresh · d Doctor · q/Esc Close · ↑/↓ PgUp/PgDn Home/End Scroll",
         "Privacy: metadata-only; payload bodies redacted. Fallback: /black-box-tail",
+        "",
+        `Storage usage: ${formatPercent(progressValue)} of ${formatBytes(status.storage?.maxBytes)} retained`,
         "",
         "Status cards",
         `  Recorder  ${status.enabled ? "Enabled " : "Disabled"}  ${fitCell(status.mode ?? "unknown", 8)}  ${status.analytics?.totalRecords ?? records.length} records`,
