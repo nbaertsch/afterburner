@@ -244,7 +244,7 @@ test("black-box-modal queues a runtime-owned native modal activation", async () 
     const { registration, logs } = await captureSessionRegistration({ service });
     await command(registration, "black-box-modal").handler();
     assert.deepEqual(requests, [{ surfaceId: "afterburner-black-box-live", input: {} }]);
-    assert.deepEqual(logs, ["Black Box live modal opened."]);
+    assert.deepEqual(logs, []);
 });
 
 test("black-box-modal command opens the registered runtime modal when queue is unavailable", async () => {
@@ -258,7 +258,7 @@ test("black-box-modal command opens the registered runtime modal when queue is u
     });
     await command(registration, "black-box-modal").handler();
     assert.deepEqual(opens, [{ id: "afterburner-black-box", input: {} }]);
-    assert.deepEqual(logs, ["Black Box live modal opened."]);
+    assert.deepEqual(logs, []);
 });
 
 test("black-box-modal treats Copilot canvas open snapshots as success", async () => {
@@ -270,7 +270,7 @@ test("black-box-modal treats Copilot canvas open snapshots as success", async ()
         })
     });
     await command(registration, "black-box-modal").handler();
-    assert.deepEqual(logs, ["Black Box live modal opened."]);
+    assert.deepEqual(logs, []);
 });
 
 test("black-box-modal command displays returned brokerless fallback frame", async () => {

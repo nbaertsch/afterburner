@@ -227,7 +227,6 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
                                 modalFallbackText("the host opened a text fallback because no modal broker is attached", await service.status()));
                             return;
                         }
-                        await session.log("Black Box live modal opened.");
                         return;
                     }
                     await session.log(modalFallbackText(result.reason, await service.status()));
