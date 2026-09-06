@@ -221,6 +221,14 @@ const visualInspectionChecks = () => {
   return { passed: Object.values(checks).every(Boolean), checks };
 };
 
+const failIfVisualInspectionFailed = () => {
+  const inspection = visualInspectionChecks();
+  if (inspection.passed) return false;
+  const failed = Object.entries(inspection.checks).filter(([, passed]) => !passed).map(([name]) => name);
+  finish(1, `visual inspection checks failed: ${failed.join(", ")}`);
+  return true;
+};
+
 const writePngReport = capture => {
   if (process.platform !== "win32") return;
   const payloadPath = join(captureDirectory, "blackbox-modal-tui-visual.json");
@@ -460,6 +468,7 @@ child.onData(data => {
     if (/\/ commands|tab next tab|\? help/i.test(afterEscapeText)) {
       escapeRestoredAt = Date.now();
       escapeRestoreRaw = raw;
+      if (failIfVisualInspectionFailed()) return;
       const scrollSummary = scrollSteps.map(step => `${step.name}:${scrollSeenAt[step.name] - scrollSentAt[step.name]}ms`).join(",");
       finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true qCloseLatencyMs=${closeRestoredAt - closeRequestedAt} escapeCloseLatencyMs=${escapeRestoredAt - escapeSentAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")}`);
     }
@@ -469,6 +478,7 @@ child.onData(data => {
 child.onExit(({ exitCode }) => {
   if (finished) return;
   if (modalSeenAt && doctorSeen && closeSent && closeRestoredAt && escapeRestoredAt) {
+    if (failIfVisualInspectionFailed()) return;
     const scrollSummary = scrollSteps.map(step => `${step.name}:${scrollSeenAt[step.name] - scrollSentAt[step.name]}ms`).join(",");
     finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true qCloseLatencyMs=${closeRestoredAt - closeRequestedAt} escapeCloseLatencyMs=${escapeRestoredAt - escapeSentAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")} exitCode=${exitCode}`);
     return;
