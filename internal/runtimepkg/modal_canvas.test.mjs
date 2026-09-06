@@ -155,11 +155,11 @@ test("preissued modal capability does not expose mint authority to monkey patche
   await handle.dispose();
 });
 
-test("broker wire messages omit rich local document", async () => {
+test("broker wire messages preserve rich modal document", async () => {
   const messages = [];
   const pollResolvers = [];
   let closeGeneration = null;
-  const allowed = new Set(["operation", "id", "ownerExtensionId", "canvasId", "surfaceId", "generation", "title", "status", "body", "footer", "actions"]);
+  const allowed = new Set(["operation", "id", "ownerExtensionId", "canvasId", "surfaceId", "generation", "title", "status", "body", "footer", "actions", "document"]);
   const runtime = await loadModalRuntime(async (message) => {
     messages.push(message);
     const unknown = Object.keys(message).filter((key) => !allowed.has(key));
@@ -212,12 +212,12 @@ test("broker wire messages omit rich local document", async () => {
   assert.equal(opened.frame.document.root.children[0].kind, "table");
   assert.equal(messages.at(-1).operation, "poll");
   const openMessage = messages.find((message) => message.operation === "open");
-  assert.deepEqual(Object.keys(openMessage).sort(), ["actions", "body", "canvasId", "footer", "generation", "id", "operation", "ownerExtensionId", "status", "surfaceId", "title"]);
+  assert.deepEqual(Object.keys(openMessage).sort(), ["actions", "body", "canvasId", "document", "footer", "generation", "id", "operation", "ownerExtensionId", "status", "surfaceId", "title"]);
   assert.equal(openMessage.token, undefined);
   assert.equal(openMessage.ownerExtensionId, "test-owner");
   assert.equal(openMessage.canvasId, "wire-document-test");
   assert.equal(openMessage.surfaceId, "wire-document-test");
-  assert.equal(openMessage.document, undefined);
+  assert.equal(openMessage.document.root.children[0].kind, "table");
   assert.equal(openMessage.body, "**rich** body");
   assert.deepEqual(openMessage.actions, [{ name: "refresh", label: "Refresh", key: "r", description: "Refresh document" }]);
 
@@ -225,7 +225,7 @@ test("broker wire messages omit rich local document", async () => {
   assert.equal(updated.ok, true);
   assert.equal(updated.frame.document.surfaceId, "wire-document-test");
   const updateMessage = messages.find((message) => message.operation === "update");
-  assert.equal(updateMessage.document, undefined);
+  assert.equal(updateMessage.document.surfaceId, "wire-document-test");
   assert.equal(updateMessage.body, "updated body");
 
   await handle.close();

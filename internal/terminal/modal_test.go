@@ -245,6 +245,31 @@ func TestTerminalModalRendererEnterpriseOverlayChrome(t *testing.T) {
 	}
 }
 
+func TestTerminalModalRendererProjectsDocumentBody(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 120, Rows: 34})
+	renderer.ShowModal(ModalFrame{
+		Title:  "Document Modal",
+		Status: "Structured",
+		Body:   "legacy body should not render",
+		Footer: "metadata-only fallback /black-box-tail",
+		Actions: []ModalAction{
+			{Name: "refresh", Label: "Refresh", Key: "r"},
+			{Name: "export", Label: "Export", Key: "e"},
+		},
+		Document: json.RawMessage(`{"root":{"kind":"dialog","children":[{"kind":"statusGrid","props":{"label":"Black Box modal status cards"},"children":[{"kind":"card","props":{"title":"Recorder"},"children":[{"kind":"text","props":{"value":"Enabled"}},{"kind":"text","props":{"value":"metadata"}}]}]},{"kind":"progress","props":{"label":"Storage usage","status":"42% used"}},{"kind":"sparkline","props":{"label":"Signal trend","values":[0,1,2,3]}},{"kind":"panel","props":{"title":"Details"},"children":[{"kind":"markdown","props":{"markdown":"Record abc"}}]},{"kind":"panel","props":{"title":"Metadata timeline"},"children":[{"kind":"table","props":{"label":"Timeline table","columns":[{"id":"time","title":"Time"},{"id":"kind","title":"Kind"}],"rows":[{"time":"now","kind":"event"}]}}]}]}}`),
+	})
+	text := output.String()
+	for _, want := range []string{"Document Modal", "Shortcuts: r Refresh · e Export", "metadata-only fallback", "Status cards", "Recorder Enabled metadata", "Storage usage: 42% used", "Signal trend: ▁▃▆█", "Selected event", "Record abc", "Metadata timeline table", "Time │ Kind", "now │ event"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("projected document missing %q: %q", want, text)
+		}
+	}
+	if strings.Contains(text, "legacy body should not render") {
+		t.Fatalf("document projection should take precedence over legacy body: %q", text)
+	}
+}
+
 func TestModalServerScrollsOverflowWithoutExtensionAction(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})

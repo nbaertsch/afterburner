@@ -630,7 +630,8 @@ function modalFrameWireProjection(operation, frame, generation, surface) {
         status: frame.status ?? "",
         body: frame.body ?? "",
         footer: frame.footer ?? "",
-        actions: Array.isArray(frame.actions) ? frame.actions.map(modalActionWireProjection) : []
+        actions: Array.isArray(frame.actions) ? frame.actions.map(modalActionWireProjection) : [],
+        ...(frame.document ? { document: frame.document } : {})
     };
 }
 

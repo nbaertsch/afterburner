@@ -29,12 +29,13 @@ type ModalAction struct {
 // present or update a modal canvas. It intentionally excludes raw ANSI: the
 // host owns rendering, focus, and terminal-mode handling.
 type ModalFrame struct {
-	ID      string        `json:"id"`
-	Title   string        `json:"title"`
-	Status  string        `json:"status"`
-	Body    string        `json:"body"`
-	Footer  string        `json:"footer"`
-	Actions []ModalAction `json:"actions,omitempty"`
+	ID       string          `json:"id"`
+	Title    string          `json:"title"`
+	Status   string          `json:"status"`
+	Body     string          `json:"body"`
+	Footer   string          `json:"footer"`
+	Actions  []ModalAction   `json:"actions,omitempty"`
+	Document json.RawMessage `json:"document,omitempty"`
 }
 
 // ModalEvent is sent back to the extension runtime when a human key maps to
@@ -323,18 +324,19 @@ func (s *ModalServer) authorize(req modalRequest) (modalIdentity, modalResponse)
 }
 
 type modalRequest struct {
-	Operation        string        `json:"operation"`
-	Type             string        `json:"type"`
-	ID               string        `json:"id"`
-	OwnerExtensionID string        `json:"ownerExtensionId"`
-	CanvasID         string        `json:"canvasId"`
-	SurfaceID        string        `json:"surfaceId"`
-	Generation       *int64        `json:"generation"`
-	Title            string        `json:"title"`
-	Status           string        `json:"status"`
-	Body             string        `json:"body"`
-	Footer           string        `json:"footer"`
-	Actions          []ModalAction `json:"actions"`
+	Operation        string          `json:"operation"`
+	Type             string          `json:"type"`
+	ID               string          `json:"id"`
+	OwnerExtensionID string          `json:"ownerExtensionId"`
+	CanvasID         string          `json:"canvasId"`
+	SurfaceID        string          `json:"surfaceId"`
+	Generation       *int64          `json:"generation"`
+	Title            string          `json:"title"`
+	Status           string          `json:"status"`
+	Body             string          `json:"body"`
+	Footer           string          `json:"footer"`
+	Actions          []ModalAction   `json:"actions"`
+	Document         json.RawMessage `json:"document,omitempty"`
 }
 
 type modalResponse struct {
@@ -439,7 +441,7 @@ func (s *ModalServer) handleOne(conn io.Reader, connectionAuthorized bool, allow
 	if req.Generation == nil || *req.Generation < 0 || *req.Generation > modalMaxGeneration {
 		return modalResponse{Error: "modal-invalid-generation"}
 	}
-	if oversized(req.Title) || oversized(req.Status) || oversized(req.Body) || oversized(req.Footer) {
+	if oversized(req.Title) || oversized(req.Status) || oversized(req.Body) || oversized(req.Footer) || len(req.Document) > modalMaxFieldBytes {
 		return modalResponse{Error: "modal-field-too-large"}
 	}
 	if len(req.Actions) > modalMaxActions {
@@ -504,9 +506,18 @@ func copyModalActions(actions []ModalAction) []ModalAction {
 	return copied
 }
 
+func copyModalDocument(document json.RawMessage) json.RawMessage {
+	if len(document) == 0 {
+		return nil
+	}
+	copied := make(json.RawMessage, len(document))
+	copy(copied, document)
+	return copied
+}
+
 func (s *ModalServer) open(req modalRequest, identity modalIdentity) modalResponse {
 	generation := *req.Generation
-	frame := ModalFrame{ID: req.ID, Title: req.Title, Status: req.Status, Body: req.Body, Footer: req.Footer, Actions: copyModalActions(req.Actions)}
+	frame := ModalFrame{ID: req.ID, Title: req.Title, Status: req.Status, Body: req.Body, Footer: req.Footer, Actions: copyModalActions(req.Actions), Document: copyModalDocument(req.Document)}
 	s.mu.Lock()
 	if len(s.order) > 0 && s.order[0] != identity {
 		s.mu.Unlock()
@@ -582,6 +593,9 @@ func mergeModalFrame(previous ModalFrame, req modalRequest) ModalFrame {
 	}
 	if req.Actions != nil {
 		frame.Actions = copyModalActions(req.Actions)
+	}
+	if req.Document != nil {
+		frame.Document = copyModalDocument(req.Document)
 	}
 	return frame
 }
@@ -876,7 +890,7 @@ func nextModalEscapeInputKey(data []byte) (int, string, bool) {
 func consumeModalCSIInput(data []byte) (int, string, bool) {
 	for i := 2; i < len(data); i++ {
 		if data[i] >= 0x40 && data[i] <= 0x7e {
-			return i + 1, modalCSIInputKey(data[2:i+1]), false
+			return i + 1, modalCSIInputKey(data[2 : i+1]), false
 		}
 		if data[i] < 0x20 || data[i] > 0x3f {
 			return 0, "", false
@@ -1152,7 +1166,7 @@ func (r *TerminalModalRenderer) ScrollModal(key string) bool {
 		return false
 	}
 	layout := newModalLayout(r.screen.Snapshot())
-	bodyLines := modalBodyLines(r.activeFrame.Body, layout.innerWidth)
+	bodyLines := modalFrameBodyLines(r.activeFrame, layout.innerWidth)
 	maxScroll := maxInt(0, len(bodyLines)-layout.bodyRows)
 	if maxScroll == 0 {
 		return false
@@ -1187,7 +1201,7 @@ func (r *TerminalModalRenderer) ScrollModal(key string) bool {
 
 func renderModalFrame(snapshot TerminalSnapshot, frame ModalFrame, scrollOffset int) (string, int) {
 	layout := newModalLayout(snapshot)
-	bodyLines := modalBodyLines(frame.Body, layout.innerWidth)
+	bodyLines := modalFrameBodyLines(frame, layout.innerWidth)
 	maxScroll := maxInt(0, len(bodyLines)-layout.bodyRows)
 	scrollOffset = clampInt(scrollOffset, 0, maxScroll)
 
@@ -1397,7 +1411,7 @@ func writeCompactModalPanel(out *strings.Builder, layout modalLayout, frame Moda
 	if frame.Status != "" {
 		content = append(content, printableModalText(frame.Status, false))
 	}
-	content = append(content, modalBodyLines(frame.Body, maxInt(1, width-4))...)
+	content = append(content, modalFrameBodyLines(frame, maxInt(1, width-4))...)
 	for i := 0; i < insideRows; i++ {
 		text := ""
 		if i < len(content) {
@@ -1538,12 +1552,270 @@ func modalActionsText(frame ModalFrame) string {
 	return strings.Join(parts, "  ")
 }
 
+func modalFrameBodyLines(frame ModalFrame, width int) []string {
+	if lines := modalDocumentBodyLines(frame, width); len(lines) > 0 {
+		return lines
+	}
+	return modalBodyLines(frame.Body, width)
+}
+
 func modalBodyLines(text string, width int) []string {
 	lines := wrapModalText(printableModalText(text, true), width)
 	if len(lines) == 0 {
 		return []string{"No live details yet."}
 	}
 	return lines
+}
+
+type modalDocumentTree struct {
+	Root modalDocumentNode `json:"root"`
+}
+
+type modalDocumentNode struct {
+	ID       string              `json:"id"`
+	Kind     string              `json:"kind"`
+	Props    map[string]any      `json:"props,omitempty"`
+	Children []modalDocumentNode `json:"children,omitempty"`
+}
+
+func modalDocumentBodyLines(frame ModalFrame, width int) []string {
+	if len(frame.Document) == 0 {
+		return nil
+	}
+	var tree modalDocumentTree
+	if err := json.Unmarshal(frame.Document, &tree); err != nil || strings.TrimSpace(tree.Root.Kind) == "" {
+		return nil
+	}
+	var raw []string
+	if shortcut := modalShortcutSummary(frame.Actions); shortcut != "" {
+		raw = append(raw, shortcut)
+	}
+	if frame.Footer != "" {
+		raw = append(raw, printableModalText(frame.Footer, true))
+	}
+	raw = append(raw, modalPriorityBodyLines(frame.Body)...)
+	appendModalDocumentNodeLines(&raw, tree.Root, "")
+	return compactModalBodyLines(raw, width)
+}
+
+func modalShortcutSummary(actions []ModalAction) string {
+	if len(actions) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(actions))
+	for _, action := range actions {
+		if strings.EqualFold(action.Name, "close") {
+			continue
+		}
+		label := printableModalText(firstNonEmpty(action.Label, action.Name), false)
+		key := printableModalText(action.Key, false)
+		if key != "" {
+			label = key + " " + label
+		}
+		parts = append(parts, label)
+	}
+	parts = append(parts, "q/Esc Close")
+	return "Shortcuts: " + strings.Join(parts, " · ") + " · ↑/↓ PgUp/PgDn Home/End Scroll"
+}
+
+func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, context string) {
+	kind := strings.TrimSpace(node.Kind)
+	switch kind {
+	case "dialog", "application", "row", "column", "stack", "group", "toolbar", "actionBar":
+		appendModalDocumentChildren(lines, node.Children, context)
+	case "statusGrid", "grid":
+		label := modalStringProp(node.Props, "label")
+		if strings.Contains(strings.ToLower(label), "status cards") {
+			label = "Status cards"
+		}
+		appendModalLine(lines, firstNonEmpty(label, "Status cards"))
+		appendModalDocumentChildren(lines, node.Children, context)
+	case "card":
+		appendModalCardLine(lines, node)
+	case "progress":
+		label := firstNonEmpty(modalStringProp(node.Props, "label"), "Progress")
+		status := modalStringProp(node.Props, "status")
+		if status == "" {
+			status = fmt.Sprint(node.Props["value"])
+		}
+		appendModalLine(lines, label+": "+status)
+	case "sparkline":
+		label := firstNonEmpty(modalStringProp(node.Props, "label"), "Signal trend")
+		appendModalLine(lines, label+": "+modalSparklineProp(node.Props["values"]))
+	case "alert":
+		appendModalLine(lines, firstNonEmpty(modalStringProp(node.Props, "message"), modalStringProp(node.Props, "title")))
+	case "panel":
+		title := modalStringProp(node.Props, "title")
+		if strings.EqualFold(title, "Details") {
+			title = "Selected event"
+		}
+		appendModalLine(lines, "")
+		appendModalLine(lines, title)
+		appendModalDocumentChildren(lines, node.Children, title)
+	case "table":
+		appendModalTableLines(lines, node, context)
+	case "markdown":
+		appendModalLine(lines, modalStringProp(node.Props, "markdown"))
+	case "code":
+		appendModalLine(lines, modalStringProp(node.Props, "code"))
+	case "text":
+		appendModalLine(lines, modalStringProp(node.Props, "value"))
+	case "button":
+		// Buttons are already summarized from frame actions in the modal header/body.
+	default:
+		if title := firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), modalStringProp(node.Props, "message")); title != "" {
+			appendModalLine(lines, title)
+		}
+		appendModalDocumentChildren(lines, node.Children, context)
+	}
+}
+
+func appendModalDocumentChildren(lines *[]string, children []modalDocumentNode, context string) {
+	for _, child := range children {
+		appendModalDocumentNodeLines(lines, child, context)
+	}
+}
+
+func appendModalCardLine(lines *[]string, node modalDocumentNode) {
+	parts := []string{modalStringProp(node.Props, "title")}
+	for _, child := range node.Children {
+		if child.Kind == "text" {
+			parts = append(parts, modalStringProp(child.Props, "value"))
+		}
+	}
+	appendModalLine(lines, "  "+strings.Join(nonEmptyModalParts(parts), "  "))
+}
+
+func appendModalTableLines(lines *[]string, node modalDocumentNode, context string) {
+	label := modalStringProp(node.Props, "label")
+	if strings.EqualFold(context, "Metadata timeline") && strings.EqualFold(label, "Timeline table") {
+		label = "Metadata timeline table"
+	}
+	appendModalLine(lines, firstNonEmpty(label, "Table"))
+	columns, _ := node.Props["columns"].([]any)
+	rows, _ := node.Props["rows"].([]any)
+	columnIDs := make([]string, 0, len(columns))
+	headers := make([]string, 0, len(columns))
+	for _, column := range columns {
+		entry, _ := column.(map[string]any)
+		id := modalStringProp(entry, "id")
+		if id == "" {
+			continue
+		}
+		columnIDs = append(columnIDs, id)
+		header := firstNonEmpty(modalStringProp(entry, "title"), id)
+		if strings.EqualFold(header, "Timestamp") {
+			header = "Time"
+		}
+		headers = append(headers, header)
+	}
+	if len(headers) > 0 {
+		appendModalLine(lines, strings.Join(headers, " │ "))
+	}
+	for index, row := range rows {
+		if index >= 12 {
+			appendModalLine(lines, fmt.Sprintf("… %d more row(s)", len(rows)-index))
+			break
+		}
+		entry, _ := row.(map[string]any)
+		cellValues, _ := entry["cells"].(map[string]any)
+		if cellValues == nil {
+			cellValues = entry
+		}
+		cells := make([]string, 0, len(columnIDs))
+		for _, id := range columnIDs {
+			cells = append(cells, fmt.Sprint(cellValues[id]))
+		}
+		appendModalLine(lines, strings.Join(cells, " │ "))
+	}
+}
+
+func modalPriorityBodyLines(body string) []string {
+	if strings.TrimSpace(body) == "" {
+		return nil
+	}
+	bodyLines := strings.Split(printableModalText(body, true), "\n")
+	var lines []string
+	captureSelected := false
+	for _, line := range bodyLines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			if captureSelected {
+				captureSelected = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Storage usage:") || strings.HasPrefix(trimmed, "Signal trend:") || strings.HasPrefix(trimmed, "Needs attention:") {
+			appendModalLine(&lines, trimmed)
+			continue
+		}
+		if strings.EqualFold(trimmed, "Selected event") {
+			appendModalLine(&lines, "")
+			appendModalLine(&lines, trimmed)
+			captureSelected = true
+			continue
+		}
+		if captureSelected {
+			if strings.HasPrefix(trimmed, "Metadata timeline") {
+				captureSelected = false
+				continue
+			}
+			appendModalLine(&lines, trimmed)
+		}
+	}
+	return lines
+}
+
+func modalStringProp(props map[string]any, key string) string {
+	if props == nil {
+		return ""
+	}
+	value, ok := props[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return fmt.Sprint(value)
+}
+
+func modalSparklineProp(value any) string {
+	values, _ := value.([]any)
+	if len(values) == 0 {
+		return "▁"
+	}
+	bars := []string{"▁", "▃", "▆", "█"}
+	var out strings.Builder
+	for _, entry := range values {
+		level, _ := entry.(float64)
+		index := clampInt(int(level), 0, len(bars)-1)
+		out.WriteString(bars[index])
+	}
+	return out.String()
+}
+
+func appendModalLine(lines *[]string, line string) {
+	line = strings.TrimRight(printableModalText(line, true), " ")
+	if line == "" && (len(*lines) == 0 || (*lines)[len(*lines)-1] == "") {
+		return
+	}
+	*lines = append(*lines, line)
+}
+
+func nonEmptyModalParts(parts []string) []string {
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+func compactModalBodyLines(raw []string, width int) []string {
+	text := strings.TrimSpace(strings.Join(raw, "\n"))
+	if text == "" {
+		return nil
+	}
+	return wrapModalText(text, width)
 }
 
 func wrapModalText(text string, width int) []string {
