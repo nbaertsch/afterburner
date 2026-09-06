@@ -798,6 +798,9 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
     assert.equal(openFrame.document.surfaceId, "afterburner-black-box-live");
     assert.equal(openFrame.document.root.kind, "dialog");
     assert.match(JSON.stringify(openFrame.document), /bb-modal-status-cards/);
+    assert.match(JSON.stringify(openFrame.document), /"kind":"statusGrid"/);
+    assert.match(JSON.stringify(openFrame.document), /bb-modal-action-bar/);
+    assert.match(JSON.stringify(openFrame.document), /"kind":"actionBar"/);
     assert.match(JSON.stringify(openFrame.document), /bb-modal-storage-progress/);
     assert.match(JSON.stringify(openFrame.document), /bb-modal-signal-trend/);
     assert.match(JSON.stringify(openFrame.document), /"kind":"sparkline"/);

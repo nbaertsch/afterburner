@@ -743,15 +743,17 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
     if (!ui?.createUIDocument) return null;
     const c = ui.components ?? ui;
     if (!c?.dialog || !c?.toolbar || !c?.grid || !c?.panel || !c?.table) return null;
+    const actionBar = typeof c.actionBar === "function" ? c.actionBar : c.toolbar;
+    const statusGrid = typeof c.statusGrid === "function" ? c.statusGrid : c.grid;
     try {
         const root = c.dialog({ title, status: frame.status, modal: true }, [
-            c.toolbar({ label: "Black Box action bar" }, frame.actions.map(action =>
+            actionBar({ label: "Black Box action bar" }, frame.actions.map(action =>
                 c.button({ label: action.label, actionId: action.name, keybinding: action.key, description: action.description }, [], {
                     id: `bb-modal-action-${action.name}`,
                     actionBindings: { activate: action.name }
                 })
             ), { id: "bb-modal-action-bar", accessibility: { role: "toolbar", name: "Black Box action bar" } }),
-            c.grid({ label: "Black Box modal status cards", columns: ["recorder", "storage", "signals", "queue"] }, [
+            statusGrid({ label: "Black Box modal status cards", columns: ["recorder", "storage", "signals", "queue"] }, [
                 metricCard(c, "bb-modal-card-recorder", "Recorder", status.enabled ? "Enabled" : "Disabled", `${status.mode ?? "unknown"} · ${status.analytics?.totalRecords ?? records.length} records`, status.enabled ? "success" : "warning"),
                 metricCard(c, "bb-modal-card-storage", "Storage", `${status.storage?.segmentCount ?? 0} segment(s)`, `${formatBytes(status.storage?.segmentBytes)} used`, healthTone),
                 metricCard(c, "bb-modal-card-signals", "Signals", `${status.analytics?.anomalyCount ?? 0} anomalies`, `${status.analytics?.milestoneCount ?? 0} milestones`, status.analytics?.anomalyCount ? "warning" : "success"),
