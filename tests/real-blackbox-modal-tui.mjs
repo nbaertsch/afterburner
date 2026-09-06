@@ -74,6 +74,9 @@ let closeRawLength = 0;
 let closeRestoredAt = 0;
 let finished = false;
 
+const artifactPath = name => join(captureDirectory, name);
+const slugTitle = title => String(title).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
 const result = (status, extra = {}) => ({
   schemaVersion: 1,
   status,
@@ -93,6 +96,13 @@ const result = (status, extra = {}) => ({
   openLatencyMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
   closeLatencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null,
   visibleSelfNoise: visibleSelfNoise(),
+  visualArtifacts: {
+    raw: artifactPath("blackbox-modal-tui.raw"),
+    text: artifactPath("blackbox-modal-tui.txt"),
+    result: artifactPath("blackbox-modal-tui-result.json"),
+    pngReport: artifactPath("blackbox-modal-tui-report.png"),
+    screenPngs: capturedScreens().map(([title]) => artifactPath(`${slugTitle(title)}.png`))
+  },
   ...extra
 });
 
@@ -182,7 +192,7 @@ const writePngReport = capture => {
   const payloadPath = join(captureDirectory, "blackbox-modal-tui-visual.json");
   const scriptPath = join(captureDirectory, "render-blackbox-modal-png.ps1");
   const outputPath = join(captureDirectory, "blackbox-modal-tui-report.png");
-  const payload = { capture, screens: capturedScreens().map(([title, content]) => ({ title, content })) };
+  const payload = { capture, screens: capturedScreens().map(([title, content]) => ({ title, content, file: `${slugTitle(title)}.png` })) };
   writeFileSync(payloadPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   writeFileSync(scriptPath, `param([string]$PayloadPath, [string]$OutputPath)
 Add-Type -AssemblyName System.Drawing
@@ -218,6 +228,23 @@ try {
     $y += $blockHeight + $margin
   }
   $bitmap.Save($OutputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  $outputDirectory = Split-Path -Parent $OutputPath
+  foreach ($screen in @($data.screens)) {
+    $lines = [string]$screen.content -split [char]10
+    $screenHeight = 36 + ([Math]::Max(1, $lines.Count) * $lineHeight) + 16
+    $screenBitmap = [System.Drawing.Bitmap]::new($width, [Math]::Max($screenHeight + $margin, 200))
+    $screenGraphics = [System.Drawing.Graphics]::FromImage($screenBitmap)
+    try {
+      $screenGraphics.Clear([System.Drawing.ColorTranslator]::FromHtml('#0d1117'))
+      $screenGraphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
+      $screenGraphics.DrawString([string]$screen.title, $titleFont, $titleBrush, $margin, $margin)
+      $screenGraphics.FillRectangle($panel, $margin, $margin + 30, $width - ($margin * 2), $screenHeight - 30)
+      $screenGraphics.DrawRectangle($pen, $margin, $margin + 30, $width - ($margin * 2), $screenHeight - 30)
+      $textY = $margin + 38
+      foreach ($line in $lines) { $screenGraphics.DrawString($line, $font, $brush, $margin + 12, $textY); $textY += $lineHeight }
+      $screenBitmap.Save((Join-Path $outputDirectory ([string]$screen.file)), [System.Drawing.Imaging.ImageFormat]::Png)
+    } finally { $screenGraphics.Dispose(); $screenBitmap.Dispose() }
+  }
 } finally {
   $graphics.Dispose(); $bitmap.Dispose(); $font.Dispose(); $titleFont.Dispose(); $brush.Dispose(); $titleBrush.Dispose(); $bg.Dispose(); $panel.Dispose(); $pen.Dispose()
 }

@@ -218,5 +218,5 @@ the modal broker under a real ConPTY. The interactive picker harness is `tests\n
 For installed end-to-end modal validation, run `npm run test:real-tui:black-box`; it opens a real
 Afterburner/Copilot TUI, drives `/black-box-modal`, verifies arrow/Page/Home/End scrolling,
 Refresh, Doctor, close/prompt restore, and absence of visible Black Box UI self-noise, and writes
-raw, text, machine-readable latency/result, and PNG visual-inspection captures under
-`artifacts\real-tui` by default.
+raw, text, machine-readable latency/result, a combined PNG report, and per-screen PNG captures
+under `artifacts\real-tui` by default.
