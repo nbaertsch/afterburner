@@ -236,6 +236,10 @@ export async function startBlackBoxService(options = {}) {
             const kinds = Array.isArray(input.kinds) ? new Set(input.kinds) : null;
             return store.readRecent(limit, record => !kinds || kinds.has(record.kind));
         },
+        async modalActivationWatch() {
+            await mkdir(activationStateDirectory, { recursive: true });
+            return { directory: activationStateDirectory, file: "modal-activation.jsonl" };
+        },
         async requestModalOpen(input = {}) {
             await mkdir(activationAckDirectory, { recursive: true });
             const request = {

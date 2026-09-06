@@ -1,3 +1,4 @@
+import { watch } from "node:fs";
 import { startBlackBoxService } from "../lib/service.mjs";
 import { buildEnterpriseModalFrame, registerEnterpriseSurface, subscribeObservability } from "../lib/ui-surface.mjs";
 
@@ -222,6 +223,7 @@ export async function activate(api = {}) {
         });
         const modal = registerLiveModal(api, service);
         let activationTimer = null;
+        let activationWatcher = null;
         let activationPolling = false;
         const pollActivationRequests = async () => {
             if (!modal || activationPolling) return;
@@ -245,9 +247,25 @@ export async function activate(api = {}) {
                 activationPolling = false;
             }
         };
+        const subscribeActivationWakeups = async () => {
+            if (typeof service.modalActivationWatch !== "function") return null;
+            try {
+                const target = await service.modalActivationWatch();
+                const watcher = watch(target.directory, { persistent: false }, (_event, filename) => {
+                    if (!filename || String(filename) === target.file) void pollActivationRequests();
+                });
+                watcher.unref?.();
+                watcher.on?.("error", () => isolatedWarning("modal-activation-watch-failed"));
+                return watcher;
+            } catch {
+                isolatedWarning("modal-activation-watch-unavailable");
+                return null;
+            }
+        };
         if (modal) {
             activationTimer = setInterval(pollActivationRequests, MODAL_ACTIVATION_POLL_MS);
             activationTimer.unref?.();
+            activationWatcher = await subscribeActivationWakeups();
             await pollActivationRequests();
         }
         if (enterprise && process.env.AFTERBURNER_BLACK_BOX_OPEN_SURFACE_ON_START === "1") {
@@ -271,6 +289,7 @@ export async function activate(api = {}) {
                     else if (typeof observability?.dispose === "function") await observability.dispose();
                 } catch {}
                 try { if (activationTimer) clearInterval(activationTimer); } catch {}
+                try { activationWatcher?.close?.(); } catch {}
                 try { await enterprise?.dispose?.(); } catch {}
                 try { await modal?.close?.(); } catch {}
                 try { modal?.dispose?.(); } catch {}

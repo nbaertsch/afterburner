@@ -688,6 +688,32 @@ test("runtime modal activation poll stays inside interactive latency budget", as
     await instance.dispose();
 });
 
+test("runtime modal activation is woken by filesystem queue changes", async t => {
+    await configureRuntimeEnvironment(t, "runtime-modal-activation-watch");
+    const originalSetInterval = globalThis.setInterval;
+    globalThis.setInterval = (handler, _delayMs, ...args) => originalSetInterval(handler, 10_000, ...args);
+    t.after(() => { globalThis.setInterval = originalSetInterval; });
+
+    let openedAt = 0;
+    const startedAt = Date.now();
+    const instance = await activate({
+        ui: createFakeRuntimeUI(),
+        registerRuntimeObserver: () => () => {},
+        registerModalCanvas: definition => ({
+            open: async () => { openedAt = Date.now(); return definition.open(); },
+            close: async () => ({ ok: true }),
+            dispose() {}
+        })
+    });
+    t.after(() => instance?.dispose());
+
+    const pending = instance.service.requestModalOpen({ timeoutMs: 2000 });
+    await waitFor(() => openedAt > 0, 1000);
+    assert.ok(openedAt - startedAt < 1000, `watched modal activation took ${openedAt - startedAt}ms`);
+    assert.equal((await pending).ok, true);
+    await instance.dispose();
+});
+
 test("runtime modal prefers the top-level native registrar when available", async t => {
     await configureRuntimeEnvironment(t, "runtime-modal-native-preferred");
     const nativeDefinitions = [];
