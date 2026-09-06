@@ -18,7 +18,7 @@ const option = name => {
 const hasFlag = name => process.argv.includes(name);
 
 if (hasFlag("--help") || hasFlag("-h")) {
-  process.stdout.write(`Usage: node tests\\real-blackbox-modal-tui.mjs [afterburn.exe] [capture-dir] [timeout-ms] [options]\n\nOptions:\n  --afterburn <path>          Afterburner executable to launch.\n  --capture-dir <path>       Directory for raw/text/json/png visual artifacts.\n  --timeout-ms <ms>          End-to-end UAT timeout.\n  --max-open-ms <ms>         Native modal first-open latency budget.\n  --max-reopen-ms <ms>       Native modal reopen latency budget.\n  --max-scroll-ms <ms>       Per-key scroll response budget.\n  --max-refresh-ms <ms>      Refresh action response budget.\n  --max-export-ms <ms>       Export action response budget.\n  --max-close-ms <ms>        q close response budget.\n  --max-escape-close-ms <ms> Escape close response budget.\n\nEnvironment overrides use AFTERBURNER_REAL_TUI_* names matching each option.\n`);
+  process.stdout.write(`Usage: node tests\\real-blackbox-modal-tui.mjs [afterburn.exe] [capture-dir] [timeout-ms] [options]\n\nOptions:\n  --afterburn <path>          Afterburner executable to launch.\n  --capture-dir <path>       Directory for raw/text/json/png visual artifacts.\n  --timeout-ms <ms>          End-to-end UAT timeout.\n  --max-open-ms <ms>         Native modal first-open latency budget.\n  --max-reopen-ms <ms>       Native modal reopen latency budget.\n  --max-scroll-ms <ms>       Per-key scroll response budget.\n  --max-refresh-ms <ms>      Refresh action response budget.\n  --max-export-ms <ms>       Export action response budget.\n  --max-close-ms <ms>        q close response budget.\n  --max-escape-close-ms <ms> Escape close response budget.\n\nArtifacts include raw ANSI, reconstructed text, an asciinema-compatible .cast,\ninput/output JSONL, operator JSON/Markdown transcripts, result/evidence JSON,\nand secondary PNG raster captures.\nEnvironment overrides use AFTERBURNER_REAL_TUI_* names matching each option.\n`);
   process.exit(0);
 }
 
@@ -62,6 +62,33 @@ const child = pty.spawn(afterburn, [], {
 });
 
 let raw = "";
+const ioEvents = [];
+const operatorSteps = [];
+const elapsedSeconds = () => Number(((Date.now() - scriptStartedAt) / 1000).toFixed(6));
+const encodeChunk = data => Buffer.from(data, "utf8").toString("base64");
+const printableInput = data => data
+  .replace(/\x1b/g, "<Esc>")
+  .replace(/\r/g, "<Enter>")
+  .replace(/\x15/g, "<Ctrl+U>")
+  .replace(/\t/g, "<Tab>");
+const recordOutput = data => ioEvents.push({ t: elapsedSeconds(), type: "output", bytes: Buffer.byteLength(data), dataBase64: encodeChunk(data) });
+const writeInput = (data, label) => {
+  ioEvents.push({ t: elapsedSeconds(), type: "input", label, display: printableInput(data), bytes: Buffer.byteLength(data), dataBase64: encodeChunk(data) });
+  child.write(data);
+};
+const recordOperatorStep = ({ name, key, startedAt, completedAt, screenTitle, screenRaw, assertions = [] }) => {
+  const screen = screenRaw ? visualScreen(screenRaw, /Afterburner Black Box (?:Live|Doctor|Export)/gi) : "";
+  operatorSteps.push({
+    name,
+    key,
+    startedAt: startedAt ? new Date(startedAt).toISOString() : null,
+    completedAt: completedAt ? new Date(completedAt).toISOString() : null,
+    latencyMs: startedAt && completedAt ? completedAt - startedAt : null,
+    screenTitle,
+    viewportText: screen,
+    assertions
+  });
+};
 let trusted = false;
 let restored = false;
 let approved = false;
@@ -143,11 +170,16 @@ const result = (status, extra = {}) => {
     },
     visualEvidence: visualEvidenceManifest(),
     visualEvidenceValidation: validateVisualEvidenceManifest(),
+    replayValidation: validateReplayArtifacts(),
     visualArtifacts: {
       raw: artifactPath("blackbox-modal-tui.raw"),
       text: artifactPath("blackbox-modal-tui.txt"),
       result: artifactPath("blackbox-modal-tui-result.json"),
       evidenceManifest: artifactPath("blackbox-modal-tui-evidence.json"),
+      operatorJourney: artifactPath("blackbox-modal-tui-operator.json"),
+      operatorTranscript: artifactPath("blackbox-modal-tui-operator.md"),
+      replayCast: artifactPath("blackbox-modal-tui.cast"),
+      ioEvents: artifactPath("blackbox-modal-tui-io.jsonl"),
       pngReport: artifactPath("blackbox-modal-tui-report.png"),
       screenPngs
     },
@@ -579,12 +611,77 @@ try {
   }
 };
 
+const writeReplayArtifacts = capture => {
+  const castEvents = ioEvents.map(event => [event.t, event.type === "input" ? "i" : "o", Buffer.from(event.dataBase64, "base64").toString("utf8")]);
+  const cast = [
+    JSON.stringify({ version: 2, width: terminalColumns, height: terminalRows, timestamp: Math.floor(scriptStartedAt / 1000), env: { TERM: "xterm-256color", SHELL: "afterburn.exe" }, title: "Afterburner Black Box real TUI UAT" }),
+    ...castEvents.map(event => JSON.stringify(event))
+  ].join("\n") + "\n";
+  writeFileSync(join(captureDirectory, "blackbox-modal-tui.cast"), cast, "utf8");
+  writeFileSync(join(captureDirectory, "blackbox-modal-tui-io.jsonl"), ioEvents.map(event => JSON.stringify(event)).join("\n") + "\n", "utf8");
+  const operator = {
+    schemaVersion: 1,
+    generatedAt: capture.completedAt,
+    afterburn,
+    terminal: { columns: terminalColumns, rows: terminalRows, kind: "Windows ConPTY via node-pty" },
+    goal: "Operate /black-box-modal like a keyboard-only user and preserve what the user saw after every action.",
+    inputCount: ioEvents.filter(event => event.type === "input").length,
+    outputChunkCount: ioEvents.filter(event => event.type === "output").length,
+    steps: operatorSteps
+  };
+  writeFileSync(join(captureDirectory, "blackbox-modal-tui-operator.json"), `${JSON.stringify(operator, null, 2)}\n`, "utf8");
+  writeFileSync(join(captureDirectory, "blackbox-modal-tui-operator.md"), [
+    "# Afterburner Black Box real TUI operator transcript",
+    "",
+    `- Terminal: ${terminalColumns}x${terminalRows} Windows ConPTY via node-pty`,
+    `- Input events: ${operator.inputCount}`,
+    `- Output chunks: ${operator.outputChunkCount}`,
+    "",
+    ...operator.steps.flatMap((step, index) => [
+      `## ${index + 1}. ${step.name}`,
+      "",
+      `- Key/input: ${step.key}`,
+      `- Latency: ${step.latencyMs ?? "n/a"} ms`,
+      `- Assertions: ${step.assertions.join("; ")}`,
+      "",
+      "```text",
+      step.viewportText,
+      "```",
+      ""
+    ])
+  ].join("\n"), "utf8");
+};
+
+const validateReplayArtifacts = () => {
+  const inputLabels = ioEvents.filter(event => event.type === "input").map(event => event.label);
+  const requiredLabels = ["submit /black-box-modal", "arrowDown", "arrowUp", "pageDown", "pageUp", "end", "home", "refresh", "doctor", "export", "q close", "submit /black-box-modal for Escape", "escape close"];
+  const missingInputs = requiredLabels.filter(label => !inputLabels.includes(label));
+  const requiredSteps = ["open modal", ...scrollSteps.map(step => step.name), "refresh", "doctor", "export", "q close", "reopen modal", "escape close"];
+  const stepNames = operatorSteps.map(step => step.name);
+  const missingSteps = requiredSteps.filter(name => !stepNames.includes(name));
+  const emptyViewports = operatorSteps.filter(step => !String(step.viewportText ?? "").trim()).map(step => step.name);
+  const outputChunks = ioEvents.filter(event => event.type === "output").length;
+  const requiredFiles = ["blackbox-modal-tui.cast", "blackbox-modal-tui-io.jsonl", "blackbox-modal-tui-operator.json", "blackbox-modal-tui-operator.md"];
+  const missingFiles = requiredFiles.filter(name => !existsSync(join(captureDirectory, name)));
+  return {
+    passed: missingInputs.length === 0 && missingSteps.length === 0 && emptyViewports.length === 0 && outputChunks > 0 && missingFiles.length === 0,
+    inputCount: inputLabels.length,
+    outputChunkCount: outputChunks,
+    missingInputs,
+    missingSteps,
+    emptyViewports,
+    missingFiles
+  };
+};
+
 const writeCaptures = (status = "running", extra = {}) => {
   const capture = result(status, extra);
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.raw"), raw, "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.txt"), stripAnsi(raw), "utf8");
+  writeReplayArtifacts(capture);
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(capture, null, 2)}\n`, "utf8");
   writePngReport(capture);
+  capture.replayValidation = validateReplayArtifacts();
   capture.visualEvidenceValidation = validateVisualEvidenceManifest();
   capture.visualArtifacts.pngValidation = validatePngArtifacts();
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-evidence.json"), `${JSON.stringify({
@@ -595,6 +692,7 @@ const writeCaptures = (status = "running", extra = {}) => {
     latencyBudget: capture.latencyBudget,
     evidence: capture.visualEvidence,
     evidenceValidation: capture.visualEvidenceValidation,
+    replayValidation: capture.replayValidation,
     pngValidation: capture.visualArtifacts.pngValidation
   }, null, 2)}\n`, "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(capture, null, 2)}\n`, "utf8");
@@ -624,6 +722,14 @@ const finish = (code, message) => {
     }
   }
   if (exitCode === 0) {
+    const replayValidation = validateReplayArtifacts();
+    if (!replayValidation.passed) {
+      exitCode = 1;
+      finalMessage = `interactive replay validation failed: missingInputs=${replayValidation.missingInputs.join(",")}; missingSteps=${replayValidation.missingSteps.join(",")}; emptyViewports=${replayValidation.emptyViewports.join(",")}`;
+      writeCaptures("failed", { message: finalMessage });
+    }
+  }
+  if (exitCode === 0) {
     const pngValidation = validatePngArtifacts();
     if (!pngValidation.passed) {
       exitCode = 1;
@@ -637,41 +743,42 @@ const finish = (code, message) => {
   process.exit(exitCode);
 };
 
-const scheduleWrite = (data, delayMs = 150) => setTimeout(() => child.write(data), delayMs).unref?.();
-const scheduleCommand = (command, delayMs = 150, onSubmit = () => {}) => {
+const scheduleWrite = (data, delayMs = 150, label = "input") => setTimeout(() => writeInput(data, label), delayMs).unref?.();
+const scheduleCommand = (command, delayMs = 150, onSubmit = () => {}, label = `submit ${command}`) => {
   setTimeout(() => {
-    child.write("\x15");
-    child.write(`\x1b[200~${command}\x1b[201~`);
+    writeInput("\x15", `${label}: clear prompt`);
+    writeInput(`\x1b[200~${command}\x1b[201~`, `${label}: paste command`);
   }, delayMs).unref?.();
   setTimeout(() => {
     onSubmit();
-    child.write("\r");
+    writeInput("\r", label);
   }, delayMs + 900).unref?.();
 };
 
 child.onData(data => {
+  recordOutput(data);
   raw += data;
   const text = stripAnsi(raw);
   const recent = text.slice(-5000);
 
   if (!trusted && /Do you trust the files in this folder/i.test(recent)) {
     trusted = true;
-    scheduleWrite("\r", 250);
+    scheduleWrite("\r", 250, "trust current folder");
     return;
   }
   if (!restored && /Restore interrupted sessions/i.test(recent)) {
     restored = true;
-    scheduleWrite("\x1b", 250);
+    scheduleWrite("\x1b", 250, "dismiss restore sessions");
     return;
   }
   if (!approved && /wants elevated permissions/i.test(recent)) {
     approved = true;
-    scheduleWrite("\r", 250);
+    scheduleWrite("\r", 250, "approve elevated permissions");
     return;
   }
   if (!terminalSetupDeclined && /Set up terminal for multi-line input support/i.test(recent)) {
     terminalSetupDeclined = true;
-    scheduleWrite("\x1b", 250);
+    scheduleWrite("\x1b", 250, "dismiss terminal setup");
     return;
   }
 
@@ -681,7 +788,7 @@ child.onData(data => {
   const promptReady = /\/ commands|tab next tab|\? help/i.test(recent);
   if (!commandInputStartedAt && runtimeReady && promptReady) {
     commandInputStartedAt = Date.now();
-    scheduleCommand("/black-box-modal", 2500, () => { commandSentAt = Date.now(); });
+    scheduleCommand("/black-box-modal", 2500, () => { commandSentAt = Date.now(); }, "submit /black-box-modal");
     return;
   }
   if (commandSentAt && !modalSeenAt && /Unknown command:\s*\/black-box-modal/i.test(recent)) {
@@ -703,6 +810,7 @@ child.onData(data => {
 
   if (commandSentAt && !modalSeenAt && /Afterburner Black Box Live/i.test(text)) {
     modalSeenAt = Date.now();
+    recordOperatorStep({ name: "open modal", key: "/black-box-modal", startedAt: commandSentAt, completedAt: modalSeenAt, screenTitle: "Modal open screen", screenRaw: raw, assertions: ["native modal title visible", "Copilot backdrop remains present", "keyboard shortcuts advertised"] });
   }
   if (modalSeenAt && !modalCaptureScheduled) {
     modalCaptureScheduled = true;
@@ -711,7 +819,7 @@ child.onData(data => {
       const step = scrollSteps[scrollIndex];
       scrollSentAt[step.name] = Date.now();
       activeScrollRawLength = raw.length;
-      child.write(step.key);
+      writeInput(step.key, step.name);
     }, 500).unref?.();
     return;
   }
@@ -719,17 +827,18 @@ child.onData(data => {
   if (activeStep && scrollSentAt[activeStep.name] && !scrollSeenAt[activeStep.name] && activeStep.want.test(stripAnsi(raw.slice(activeScrollRawLength)))) {
     scrollSeenAt[activeStep.name] = Date.now();
     scrollRaw[activeStep.name] = raw;
+    recordOperatorStep({ name: activeStep.name, key: activeStep.key, startedAt: scrollSentAt[activeStep.name], completedAt: scrollSeenAt[activeStep.name], screenTitle: activeStep.title, screenRaw: raw, assertions: ["scroll position changed as expected", "modal remained focused after navigation key"] });
     scrollIndex++;
     const nextStep = scrollSteps[scrollIndex];
     setTimeout(() => {
       if (nextStep) {
         scrollSentAt[nextStep.name] = Date.now();
         activeScrollRawLength = raw.length;
-        child.write(nextStep.key);
+        writeInput(nextStep.key, nextStep.name);
       } else {
         refreshSentAt = Date.now();
         refreshRawLength = raw.length;
-        child.write("r");
+        writeInput("r", "refresh");
       }
     }, 250).unref?.();
     return;
@@ -737,7 +846,8 @@ child.onData(data => {
   if (refreshSentAt && !refreshSeenAt && /Afterburner Black Box Live/i.test(stripAnsi(raw.slice(refreshRawLength)))) {
     refreshSeenAt = Date.now();
     refreshRaw = raw;
-    setTimeout(() => child.write("d"), 250).unref?.();
+    recordOperatorStep({ name: "refresh", key: "r", startedAt: refreshSentAt, completedAt: refreshSeenAt, screenTitle: "Refresh action screen", screenRaw: raw, assertions: ["Refresh action re-rendered the live modal", "modal stayed open and focused"] });
+    setTimeout(() => writeInput("d", "doctor"), 250).unref?.();
     return;
   }
   if (modalSeenAt && !doctorSeen && /Afterburner Black Box Doctor/i.test(text)) {
@@ -751,6 +861,7 @@ child.onData(data => {
       return;
     }
     doctorSeen = true;
+    recordOperatorStep({ name: "doctor", key: "d", startedAt: refreshSeenAt, completedAt: Date.now(), screenTitle: "Doctor action screen", screenRaw: raw, assertions: ["Doctor view title visible", "health diagnostics visible"] });
   }
   if (doctorSeen && !doctorCaptureScheduled) {
     doctorCaptureScheduled = true;
@@ -758,18 +869,19 @@ child.onData(data => {
       doctorRaw = raw;
       exportSentAt = Date.now();
       exportRawLength = raw.length;
-      child.write("e");
+      writeInput("e", "export");
     }, 500).unref?.();
     return;
   }
   if (exportSentAt && !exportSeenAt && /Afterburner Black Box Export/i.test(stripAnsi(raw.slice(exportRawLength)))) {
     exportSeenAt = Date.now();
     exportRaw = raw;
+    recordOperatorStep({ name: "export", key: "e", startedAt: exportSentAt, completedAt: exportSeenAt, screenTitle: "Export action screen", screenRaw: raw, assertions: ["Export view title visible", "sanitized export result visible in modal"] });
     setTimeout(() => {
       closeSent = true;
       closeRequestedAt = Date.now();
       closeRawLength = raw.length;
-      child.write("q");
+      writeInput("q", "q close");
     }, 500).unref?.();
     return;
   }
@@ -778,6 +890,7 @@ child.onData(data => {
     if (/\/ commands|tab next tab|\? help/i.test(afterCloseText)) {
       closeRestoredAt = Date.now();
       closeRestoreRaw = raw;
+      recordOperatorStep({ name: "q close", key: "q", startedAt: closeRequestedAt, completedAt: closeRestoredAt, screenTitle: "Q close restore screen", screenRaw: raw, assertions: ["q closed the modal", "Copilot prompt restored"] });
       const selfNoise = visibleSelfNoise();
       if (selfNoise.length > 0) {
         finish(1, `Black Box modal displayed self-noise events: ${selfNoise.map(item => `${item.title}:${item.eventType}`).join(", ")}`);
@@ -787,17 +900,18 @@ child.onData(data => {
       scheduleCommand("/black-box-modal", 500, () => {
         escapeCommandSentAt = Date.now();
         escapeCommandRawLength = raw.length;
-      });
+      }, "submit /black-box-modal for Escape");
       return;
     }
   }
   if (escapeCommandSentAt && !escapeModalSeenAt && /Afterburner Black Box Live/i.test(stripAnsi(raw.slice(escapeCommandRawLength)))) {
     escapeModalSeenAt = Date.now();
     escapeModalRaw = raw;
+    recordOperatorStep({ name: "reopen modal", key: "/black-box-modal", startedAt: escapeCommandSentAt, completedAt: escapeModalSeenAt, screenTitle: "Escape close modal screen", screenRaw: raw, assertions: ["modal reopened after q close", "live view visible again"] });
     setTimeout(() => {
       escapeSentAt = Date.now();
       escapeRawLength = raw.length;
-      child.write("\x1b[27;1;0;1;0;1_");
+      writeInput("\x1b[27;1;0;1;0;1_", "escape close");
     }, 500).unref?.();
     return;
   }
@@ -806,6 +920,7 @@ child.onData(data => {
     if (/\/ commands|tab next tab|\? help/i.test(afterEscapeText)) {
       escapeRestoredAt = Date.now();
       escapeRestoreRaw = raw;
+      recordOperatorStep({ name: "escape close", key: "Escape", startedAt: escapeSentAt, completedAt: escapeRestoredAt, screenTitle: "Escape close restore screen", screenRaw: raw, assertions: ["Escape closed the modal", "Copilot prompt restored"] });
       if (failIfVisualInspectionFailed()) return;
       const scrollSummary = scrollSteps.map(step => `${step.name}:${scrollSeenAt[step.name] - scrollSentAt[step.name]}ms`).join(",");
       finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} exportLatencyMs=${exportSeenAt - exportSentAt} doctorAction=true exportAction=true qCloseLatencyMs=${closeRestoredAt - closeRequestedAt} escapeCloseLatencyMs=${escapeRestoredAt - escapeSentAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")}`);

@@ -38,9 +38,9 @@ example `black-box.zip` and `byo-models.zip`) and re-syncs the installed built-i
 before staging the core replacement. If a pinned built-in cannot be fetched or verified, the update
 fails instead of leaving a core/extension mismatch.
 
-`afterburn install <id>` still works as a repair/bootstrap command. It fetches the signed built-in
-release asset matching the running core version when possible and falls back to the copy embedded in
-the running `afterburn.exe` binary via `go:embed` if the network fetch fails.
+`afterburn install <id>` still works as a repair/bootstrap command. It fetches the latest signed
+built-in release asset when possible and falls back to the copy embedded in the running
+`afterburn.exe` binary via `go:embed` if the network fetch fails.
 
 Set `AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH=1` to force `afterburn install` to always use the
 embedded built-in and skip the network fetch entirely.
@@ -216,14 +216,17 @@ npm test
 Windows CI also builds amd64/arm64 binaries and validates exact resume forwarding, Ctrl+C, and
 the modal broker under a real ConPTY. The interactive picker harness is `tests\native-conpty.mjs`.
 For installed end-to-end modal validation, run `npm run test:real-tui:black-box`; it opens a real
-Afterburner/Copilot TUI, bracket-pastes `/black-box-modal` for deterministic command entry, verifies
-the modal remains a bounded overlay on the Copilot backdrop, arrow/Page/Home/End scrolling, Refresh,
-Doctor, close/prompt restore, accessible modal cues, status cards, selected-event summary, timeline table
-semantics, the metadata-only fallback/privacy cue, and absence of visible Black Box UI self-noise, and writes raw,
-text, machine-readable latency/result JSON, a standalone visual evidence manifest JSON, a combined
-PNG report, and per-screen PNG captures
-under `artifacts\real-tui` by default. The run fails unless the PNG report and every per-screen
-PNG are present, non-empty, deduplicated in validation output, have valid PNG signatures, use a supported
-8-bit RGB/RGBA pixel format, meet minimum raster dimensions and nonblank pixel diversity, every visual
-evidence manifest entry names a generated screenshot with proof text, and all open/reopen/scroll/refresh/close interactions stay within the harness latency budgets for agent-run visual QA. Run
+Afterburner/Copilot TUI, bracket-pastes `/black-box-modal` for deterministic command entry, and then
+uses actual keyboard input for arrow/Page/Home/End scrolling, Refresh, Doctor, Export, `q` close,
+reopen, and Escape close. The harness preserves what a keyboard-only user saw after every action in
+`blackbox-modal-tui-operator.json` and `blackbox-modal-tui-operator.md`, and records the full
+bidirectional terminal session as `blackbox-modal-tui.cast` plus `blackbox-modal-tui-io.jsonl` for
+replay/debugging. PNG artifacts are secondary raster evidence: the same run also writes raw ANSI,
+plain text, machine-readable latency/result JSON, a standalone visual evidence manifest JSON, a
+combined PNG report, and per-screen PNG captures under `artifacts\real-tui` by default. The run
+fails unless the operator journey covers every advertised key, each step has a non-empty viewport,
+the replay artifacts exist, every visual evidence entry names generated proof, the modal remains a
+bounded overlay on the Copilot backdrop, accessible cues/status/timeline/export/privacy content are
+visible, no Black Box UI self-noise leaks into the modal, PNGs are valid/nonblank, and all
+open/reopen/scroll/refresh/export/close interactions stay within latency budgets. Run
 `node tests\real-blackbox-modal-tui.mjs --help` for artifact and latency-budget options.
