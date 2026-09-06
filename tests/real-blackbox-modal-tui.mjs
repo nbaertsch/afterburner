@@ -46,6 +46,7 @@ let trusted = false;
 let restored = false;
 let approved = false;
 let terminalSetupDeclined = false;
+let commandInputStartedAt = 0;
 let commandSentAt = 0;
 let modalSeenAt = 0;
 let modalCaptureScheduled = false;
@@ -83,7 +84,8 @@ const result = (status, extra = {}) => ({
   afterburn,
   startedAt: new Date(scriptStartedAt).toISOString(),
   completedAt: new Date().toISOString(),
-  commandSent: Boolean(commandSentAt),
+  commandInputStarted: Boolean(commandInputStartedAt),
+  commandSubmitted: Boolean(commandSentAt),
   modalSeen: Boolean(modalSeenAt),
   scroll: Object.fromEntries(scrollSteps.map(step => [step.name, {
     passed: Boolean(scrollSeenAt[step.name]),
@@ -275,9 +277,12 @@ const finish = (code, message) => {
 };
 
 const scheduleWrite = (data, delayMs = 150) => setTimeout(() => child.write(data), delayMs).unref?.();
-const scheduleCommand = (command, delayMs = 150) => {
+const scheduleCommand = (command, delayMs = 150, onSubmit = () => {}) => {
   [...command].forEach((character, index) => scheduleWrite(character, delayMs + index * 35));
-  scheduleWrite("\r", delayMs + command.length * 35 + 1200);
+  setTimeout(() => {
+    onSubmit();
+    child.write("\r");
+  }, delayMs + command.length * 35 + 1200).unref?.();
 };
 
 child.onData(data => {
@@ -310,9 +315,9 @@ child.onData(data => {
     /activated Afterburner extension 'black-box'/i.test(text) &&
     /registered picker adapter/i.test(text);
   const promptReady = /\/ commands|tab next tab|\? help/i.test(recent);
-  if (!commandSentAt && runtimeReady && promptReady) {
-    commandSentAt = Date.now();
-    scheduleCommand("/black-box-modal", 2500);
+  if (!commandInputStartedAt && runtimeReady && promptReady) {
+    commandInputStartedAt = Date.now();
+    scheduleCommand("/black-box-modal", 2500, () => { commandSentAt = Date.now(); });
     return;
   }
   if (commandSentAt && !modalSeenAt && /Unknown command:\s*\/black-box-modal/i.test(recent)) {
