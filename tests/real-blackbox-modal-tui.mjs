@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { inflateSync } from "node:zlib";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import pty from "node-pty";
@@ -365,26 +366,76 @@ const expectedPngArtifacts = () => [...new Set([
   ...evidenceScreenNames(visualEvidenceManifest()).map(artifactPath)
 ])];
 
+const paeth = (a, b, c) => {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  return pb <= pc ? b : c;
+};
+
+const pngPixelStats = buffer => {
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  const bitDepth = buffer[24];
+  const colorType = buffer[25];
+  const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : 0;
+  if (bitDepth !== 8 || channels === 0) return { width, height, colorType, bitDepth, distinctColors: 0, nonBackgroundPixels: 0 };
+  const idat = [];
+  for (let offset = 8; offset < buffer.length;) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    if (type === "IDAT") idat.push(buffer.subarray(offset + 8, offset + 8 + length));
+    offset += length + 12;
+  }
+  const data = inflateSync(Buffer.concat(idat));
+  const stride = width * channels;
+  const colors = new Set();
+  let nonBackgroundPixels = 0;
+  let input = 0;
+  let previous = Buffer.alloc(stride);
+  for (let y = 0; y < height; y++) {
+    const filter = data[input++];
+    const row = Buffer.alloc(stride);
+    for (let x = 0; x < stride; x++) {
+      const left = x >= channels ? row[x - channels] : 0;
+      const up = previous[x] ?? 0;
+      const upLeft = x >= channels ? previous[x - channels] : 0;
+      const rawByte = data[input++];
+      row[x] = (rawByte + (filter === 1 ? left : filter === 2 ? up : filter === 3 ? Math.floor((left + up) / 2) : filter === 4 ? paeth(left, up, upLeft) : 0)) & 0xff;
+    }
+    for (let x = 0; x < width; x++) {
+      const base = x * channels;
+      const key = `${row[base]},${row[base + 1]},${row[base + 2]}`;
+      if (colors.size < 512) colors.add(key);
+      if (key !== "13,17,23" && key !== "1,4,9") nonBackgroundPixels++;
+    }
+    previous = row;
+  }
+  return { width, height, colorType, bitDepth, distinctColors: colors.size, nonBackgroundPixels };
+};
+
 const readPngMetadata = path => {
-  if (!existsSync(path)) return { path, exists: false, validSignature: false, bytes: 0, width: null, height: null };
+  if (!existsSync(path)) return { path, exists: false, validSignature: false, bytes: 0, width: null, height: null, distinctColors: 0, nonBackgroundPixels: 0 };
   const stat = statSync(path);
-  const header = readFileSync(path).subarray(0, 24);
+  const buffer = readFileSync(path);
   const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const validSignature = header.length >= 24 && header.subarray(0, 8).equals(signature);
+  const validSignature = buffer.length >= 24 && buffer.subarray(0, 8).equals(signature);
+  const stats = validSignature ? pngPixelStats(buffer) : { width: null, height: null, distinctColors: 0, nonBackgroundPixels: 0 };
   return {
     path,
     exists: true,
     validSignature,
     bytes: stat.size,
-    width: validSignature ? header.readUInt32BE(16) : null,
-    height: validSignature ? header.readUInt32BE(20) : null
+    ...stats
   };
 };
 
 const validatePngArtifacts = () => {
   if (process.platform !== "win32") return { passed: false, message: "PNG visual artifacts are only rendered on Windows", artifacts: [] };
   const artifacts = expectedPngArtifacts().map(readPngMetadata);
-  const invalid = artifacts.filter(item => !item.exists || !item.validSignature || item.bytes < 1024 || (item.width ?? 0) < 800 || (item.height ?? 0) < 150);
+  const invalid = artifacts.filter(item => !item.exists || !item.validSignature || item.bytes < 1024 || (item.width ?? 0) < 800 || (item.height ?? 0) < 150 || item.distinctColors < 3 || item.nonBackgroundPixels < 100);
   const generated = new Set(generatedScreenPngArtifacts().map(path => resolve(path).toLowerCase()));
   const referenced = new Set(evidenceScreenNames(visualEvidenceManifest()).map(name => resolve(captureDirectory, name).toLowerCase()));
   const missingEvidenceRefs = [...referenced].filter(path => !generated.has(path));
