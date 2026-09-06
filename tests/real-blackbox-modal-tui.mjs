@@ -24,6 +24,7 @@ const positionalAfterburn = /(?:^|[\\/])[^\\/]+\.exe$/i.test(positional[0] ?? ""
 const afterburn = resolve(option("--afterburn") ?? positionalAfterburn ?? process.env.AFTERBURNER_EXE ?? join(homedir(), ".afterburner", "bin", "afterburn.exe"));
 const captureDirectory = resolve(option("--capture-dir") ?? positional[0] ?? join(process.cwd(), "artifacts", "real-tui"));
 const timeoutMs = Number(option("--timeout-ms") ?? positional[1] ?? process.env.AFTERBURNER_REAL_TUI_TIMEOUT_MS ?? 90_000);
+const scriptStartedAt = Date.now();
 mkdirSync(captureDirectory, { recursive: true });
 
 const env = { ...process.env, COPILOT_RUNTIME_EXTENSION_DEBUG: "1" };
@@ -57,7 +58,7 @@ const result = (status, extra = {}) => ({
   schemaVersion: 1,
   status,
   afterburn,
-  startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+  startedAt: new Date(scriptStartedAt).toISOString(),
   completedAt: new Date().toISOString(),
   commandSent: Boolean(commandSentAt),
   modalSeen: Boolean(modalSeenAt),
@@ -68,10 +69,55 @@ const result = (status, extra = {}) => ({
   ...extra
 });
 
+const escapeHtml = value => String(value)
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;");
+
+const excerptAround = (text, pattern, radius = 2200) => {
+  const index = text.search(pattern);
+  if (index < 0) return "";
+  return text.slice(Math.max(0, index - radius), Math.min(text.length, index + radius));
+};
+
+const visualReport = capture => {
+  const text = stripAnsi(raw);
+  const sections = [
+    ["Modal open", excerptAround(text, /Afterburner Black Box Live/i)],
+    ["Doctor action", excerptAround(text, /Afterburner Black Box Doctor/i)],
+    ["Close restore", closeRawLength ? stripAnsi(raw.slice(closeRawLength)).slice(0, 3000) : ""]
+  ].filter(([, body]) => body);
+  const body = sections.map(([title, content]) => `
+    <section>
+      <h2>${escapeHtml(title)}</h2>
+      <pre>${escapeHtml(content)}</pre>
+    </section>`).join("\n");
+  return `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Black Box Modal TUI Visual Report</title>
+<style>
+  :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; background: #0d1117; color: #e6edf3; }
+  body { margin: 24px; }
+  h1, h2 { color: #f0f6fc; }
+  .summary { border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px; background: #161b22; }
+  pre { overflow: auto; white-space: pre-wrap; border: 1px solid #30363d; border-radius: 8px; padding: 16px; background: #010409; line-height: 1.25; }
+  code { color: #7ee787; }
+</style>
+<h1>Black Box Modal TUI Visual Report</h1>
+<div class="summary"><pre>${escapeHtml(JSON.stringify(capture, null, 2))}</pre></div>
+${body}
+</html>
+`;
+};
+
 const writeCaptures = (status = "running", extra = {}) => {
+  const capture = result(status, extra);
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.raw"), raw, "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.txt"), stripAnsi(raw), "utf8");
-  writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(result(status, extra), null, 2)}\n`, "utf8");
+  writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(capture, null, 2)}\n`, "utf8");
+  writeFileSync(join(captureDirectory, "blackbox-modal-tui-report.html"), visualReport(capture), "utf8");
 };
 
 const finish = (code, message) => {
@@ -86,6 +132,10 @@ const finish = (code, message) => {
 };
 
 const scheduleWrite = (data, delayMs = 150) => setTimeout(() => child.write(data), delayMs).unref?.();
+const scheduleCommand = (command, delayMs = 150) => {
+  [...command].forEach((character, index) => scheduleWrite(character, delayMs + index * 35));
+  scheduleWrite("\r", delayMs + command.length * 35 + 1200);
+};
 
 child.onData(data => {
   raw += data;
@@ -119,7 +169,7 @@ child.onData(data => {
   const promptReady = /\/ commands|tab next tab|\? help/i.test(recent);
   if (!commandSentAt && runtimeReady && promptReady) {
     commandSentAt = Date.now();
-    scheduleWrite("/black-box-modal\r", 2500);
+    scheduleCommand("/black-box-modal", 2500);
     return;
   }
   if (commandSentAt && !modalSeenAt && /Unknown command:\s*\/black-box-modal/i.test(recent)) {
@@ -128,6 +178,10 @@ child.onData(data => {
   }
   if (commandSentAt && !modalSeenAt && /Black Box modal unavailable/i.test(recent)) {
     finish(1, "Black Box reported modal unavailable instead of opening native modal");
+    return;
+  }
+  if (commandSentAt && !modalSeenAt && /Canvas opened:\s*Afterburner Black Box/i.test(recent)) {
+    finish(1, "Copilot opened the Black Box canvas instead of the native modal");
     return;
   }
 
