@@ -225,9 +225,8 @@ func runExtensionCommand(route Route, opts Options) (int, error) {
 	if strings.TrimSpace(os.Getenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE")) == "" &&
 		strings.TrimSpace(os.Getenv("AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH")) == "" {
 		manager.BuiltinFetcher = updater.BuiltinReleaseFetcher{
-			Client:  updater.NewClient(context.Background()),
-			Root:    layout.Root,
-			Version: opts.Version,
+			Client: updater.NewClient(context.Background()),
+			Root:   layout.Root,
 		}
 	}
 	switch route.Command {
