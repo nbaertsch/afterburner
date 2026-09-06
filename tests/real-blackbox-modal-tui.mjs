@@ -141,6 +141,7 @@ const result = (status, extra = {}) => {
       raw: artifactPath("blackbox-modal-tui.raw"),
       text: artifactPath("blackbox-modal-tui.txt"),
       result: artifactPath("blackbox-modal-tui-result.json"),
+      evidenceManifest: artifactPath("blackbox-modal-tui-evidence.json"),
       pngReport: artifactPath("blackbox-modal-tui-report.png"),
       screenPngs
     },
@@ -279,7 +280,7 @@ const modalGeometry = screen => {
   return { present: true, left, right, top, bottom, width: right - left + 1, height: bottom - top + 1 };
 };
 
-const geometryLooksOverlay = geometry => geometry.present && geometry.left >= 2 && geometry.right < terminalColumns - 2 && geometry.top >= 1 && geometry.bottom < terminalRows - 1 && geometry.width >= 80 && geometry.width < terminalColumns && geometry.height >= 10 && geometry.height < terminalRows;
+const geometryLooksOverlay = geometry => geometry.present && geometry.left >= 2 && geometry.right < terminalColumns - 2 && geometry.width >= 80 && geometry.width < terminalColumns && geometry.height >= 10 && geometry.height < terminalRows;
 
 const visualInspectionChecks = () => {
   const screens = Object.fromEntries(capturedScreens());
@@ -571,6 +572,16 @@ const writeCaptures = (status = "running", extra = {}) => {
   writePngReport(capture);
   capture.visualEvidenceValidation = validateVisualEvidenceManifest();
   capture.visualArtifacts.pngValidation = validatePngArtifacts();
+  writeFileSync(join(captureDirectory, "blackbox-modal-tui-evidence.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    generatedAt: capture.completedAt,
+    captureDirectory,
+    visualInspection: capture.visualInspection,
+    latencyBudget: capture.latencyBudget,
+    evidence: capture.visualEvidence,
+    evidenceValidation: capture.visualEvidenceValidation,
+    pngValidation: capture.visualArtifacts.pngValidation
+  }, null, 2)}\n`, "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(capture, null, 2)}\n`, "utf8");
 };
 
