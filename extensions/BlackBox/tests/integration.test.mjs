@@ -52,7 +52,7 @@ test("modal activation requests wait for runtime acknowledgement", async t => {
     assert.equal((await pending).ok, true);
 });
 
-test("runtime observer ignores modal update self-noise", async t => {
+test("runtime observer ignores Black Box modal self-noise", async t => {
     const home = await workDirectory("modal-self-noise");
     t.after(() => cleanup(home));
     const configPath = join(home, "config", "black-box.json");
@@ -63,9 +63,12 @@ test("runtime observer ignores modal update self-noise", async t => {
         env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
     });
     t.after(() => service.close());
-    assert.equal(await service.observeRuntime({ type: "ui.modal_canvas.updated", metadata: { modalId: "afterburner-black-box-live" } }), false);
+    for (const type of ["ui.modal_canvas.opened", "ui.modal_canvas.updated", "ui.modal_canvas.action_started", "ui.modal_canvas.action_completed", "ui.modal_canvas.closed"]) {
+        assert.equal(await service.observeRuntime({ type, metadata: { modalId: "afterburner-black-box-live" } }), false, type);
+    }
+    assert.equal(await service.observeRuntime({ type: "ui.modal_canvas.opened", metadata: { modalId: "other-modal" } }), true);
     const status = await service.status();
-    assert.equal(status.analytics.totalRecords, 0);
+    assert.equal(status.analytics.totalRecords, 1);
 });
 
 function fakePanelService(records = []) {

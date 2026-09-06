@@ -44,7 +44,8 @@ function safeLimit(value, fallback, maximum) {
 
 function shouldIgnoreRuntimeObservation(event) {
     const type = typeof event?.type === "string" ? event.type : "";
-    if (type === "ui.modal_canvas.updated") return true;
+    const modalId = event?.metadata?.modalId ?? event?.data?.modalId;
+    if (modalId === "afterburner-black-box-live" && type.startsWith("ui.modal_canvas.")) return true;
     return false;
 }
 
