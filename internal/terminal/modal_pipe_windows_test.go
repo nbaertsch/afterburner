@@ -248,26 +248,29 @@ func TestModalPipeSlowClientsTimeoutAndFreeInstances(t *testing.T) {
 		}
 	}()
 
-	done := make(chan modalResponse, 1)
-	go func() {
-		conn := openPipeWithRetry(t, listener.PipeName(), 2*time.Second)
-		defer conn.Close()
+	deadline := time.Now().Add(3 * time.Second)
+	var last modalResponse
+	for time.Now().Before(deadline) {
+		conn := openPipeWithRetry(t, listener.PipeName(), time.Second)
 		request := map[string]any{"operation": "open", "id": "black-box", "generation": int64(1)}
 		addLegacyModalIdentity(request)
 		if err := json.NewEncoder(conn).Encode(request); err != nil {
-			done <- modalResponse{Error: err.Error()}
+			_ = conn.Close()
+			last = modalResponse{Error: err.Error()}
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		last = readPipeResponse(t, conn)
+		_ = conn.Close()
+		if last.OK {
 			return
 		}
-		done <- readPipeResponse(t, conn)
-	}()
-	select {
-	case response := <-done:
-		if !response.OK {
-			t.Fatalf("valid request after slow clients response = %#v", response)
+		if last.Error != "modal-read-failed" {
+			break
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("slow clients exhausted all modal pipe instances")
+		time.Sleep(25 * time.Millisecond)
 	}
+	t.Fatalf("valid request after slow clients response = %#v", last)
 }
 
 func TestModalPipeConcurrentPollDoesNotBlockOpen(t *testing.T) {

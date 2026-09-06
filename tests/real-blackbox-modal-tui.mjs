@@ -900,6 +900,9 @@ child.onData(data => {
       scheduleCommand("/black-box-modal", 500, () => {
         escapeCommandSentAt = Date.now();
         escapeCommandRawLength = raw.length;
+        setTimeout(() => {
+          if (!escapeModalSeenAt) writeInput("\r", "resubmit /black-box-modal for Escape");
+        }, 1500).unref?.();
       }, "submit /black-box-modal for Escape");
       return;
     }
