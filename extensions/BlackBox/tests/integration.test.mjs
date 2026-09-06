@@ -66,9 +66,13 @@ test("runtime observer ignores Black Box modal self-noise", async t => {
     for (const type of ["ui.modal_canvas.opened", "ui.modal_canvas.updated", "ui.modal_canvas.action_started", "ui.modal_canvas.action_completed", "ui.modal_canvas.closed"]) {
         assert.equal(await service.observeRuntime({ type, metadata: { modalId: "afterburner-black-box-live" } }), false, type);
     }
+    for (const type of ["ui.host.lifecycle", "ui.host.patch", "ui.host.recovery", "ui.host.quota"]) {
+        assert.equal(await service.observeRuntime({ type, metadata: { surfaceId: "afterburner-black-box-live" } }), false, type);
+    }
     assert.equal(await service.observeRuntime({ type: "ui.modal_canvas.opened", metadata: { modalId: "other-modal" } }), true);
+    assert.equal(await service.observeRuntime({ type: "ui.host.lifecycle", metadata: { surfaceId: "other-surface" } }), true);
     const status = await service.status();
-    assert.equal(status.analytics.totalRecords, 1);
+    assert.equal(status.analytics.totalRecords, 2);
 });
 
 function fakePanelService(records = []) {

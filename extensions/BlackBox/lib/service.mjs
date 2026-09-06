@@ -44,8 +44,11 @@ function safeLimit(value, fallback, maximum) {
 
 function shouldIgnoreRuntimeObservation(event) {
     const type = typeof event?.type === "string" ? event.type : "";
-    const modalId = event?.metadata?.modalId ?? event?.data?.modalId;
+    const data = event?.metadata ?? event?.data ?? {};
+    const modalId = data.modalId;
+    const surfaceId = data.surfaceId;
     if (modalId === "afterburner-black-box-live" && type.startsWith("ui.modal_canvas.")) return true;
+    if (surfaceId === "afterburner-black-box-live" && type.startsWith("ui.host.")) return true;
     return false;
 }
 
