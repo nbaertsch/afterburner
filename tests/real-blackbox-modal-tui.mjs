@@ -73,6 +73,13 @@ let closeSent = false;
 let closeRequestedAt = 0;
 let closeRawLength = 0;
 let closeRestoredAt = 0;
+let escapeCommandInputStartedAt = 0;
+let escapeCommandSentAt = 0;
+let escapeCommandRawLength = 0;
+let escapeModalSeenAt = 0;
+let escapeSentAt = 0;
+let escapeRawLength = 0;
+let escapeRestoredAt = 0;
 let finished = false;
 
 const artifactPath = name => join(captureDirectory, name);
@@ -95,8 +102,11 @@ const result = (status, extra = {}) => ({
   refreshLatencyMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null,
   doctorAction: doctorSeen,
   closeRestored: Boolean(closeRestoredAt),
+  escapeClose: Boolean(escapeRestoredAt),
   openLatencyMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
+  reopenLatencyMs: escapeCommandSentAt && escapeModalSeenAt ? escapeModalSeenAt - escapeCommandSentAt : null,
   closeLatencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null,
+  escapeCloseLatencyMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null,
   visibleSelfNoise: visibleSelfNoise(),
   visualArtifacts: {
     raw: artifactPath("blackbox-modal-tui.raw"),
@@ -175,13 +185,17 @@ const renderTerminalScreen = (value, columns = 140, rows = 40) => {
 let modalOpenRaw = "";
 let doctorRaw = "";
 let closeRestoreRaw = "";
+let escapeModalRaw = "";
+let escapeRestoreRaw = "";
 
 const capturedScreens = () => [
   ["Modal open screen", modalOpenRaw ? renderTerminalScreen(modalOpenRaw) : ""],
   ...scrollSteps.map(step => [step.title, scrollRaw[step.name] ? renderTerminalScreen(scrollRaw[step.name]) : ""]),
   ["Refresh action screen", refreshRaw ? renderTerminalScreen(refreshRaw) : ""],
   ["Doctor action screen", doctorRaw ? renderTerminalScreen(doctorRaw) : ""],
-  ["Close restore screen", closeRestoreRaw ? renderTerminalScreen(closeRestoreRaw) : ""]
+  ["Q close restore screen", closeRestoreRaw ? renderTerminalScreen(closeRestoreRaw) : ""],
+  ["Escape close modal screen", escapeModalRaw ? renderTerminalScreen(escapeModalRaw) : ""],
+  ["Escape close restore screen", escapeRestoreRaw ? renderTerminalScreen(escapeRestoreRaw) : ""]
 ].filter(([, body]) => body);
 
 const visibleSelfNoise = () => capturedScreens()
@@ -405,17 +419,40 @@ child.onData(data => {
         finish(1, `Black Box modal displayed self-noise events: ${selfNoise.map(item => `${item.title}:${item.eventType}`).join(", ")}`);
         return;
       }
+      escapeCommandInputStartedAt = Date.now();
+      scheduleCommand("/black-box-modal", 500, () => {
+        escapeCommandSentAt = Date.now();
+        escapeCommandRawLength = raw.length;
+      });
+      return;
+    }
+  }
+  if (escapeCommandSentAt && !escapeModalSeenAt && /Afterburner Black Box Live/i.test(stripAnsi(raw.slice(escapeCommandRawLength)))) {
+    escapeModalSeenAt = Date.now();
+    escapeModalRaw = raw;
+    setTimeout(() => {
+      escapeSentAt = Date.now();
+      escapeRawLength = raw.length;
+      child.write("\x1b[27;1;0;1;0;1_");
+    }, 500).unref?.();
+    return;
+  }
+  if (escapeSentAt && !escapeRestoredAt) {
+    const afterEscapeText = stripAnsi(raw.slice(escapeRawLength));
+    if (/\/ commands|tab next tab|\? help/i.test(afterEscapeText)) {
+      escapeRestoredAt = Date.now();
+      escapeRestoreRaw = raw;
       const scrollSummary = scrollSteps.map(step => `${step.name}:${scrollSeenAt[step.name] - scrollSentAt[step.name]}ms`).join(",");
-      finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true closeRestored=true closeLatencyMs=${closeRestoredAt - closeRequestedAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")}`);
+      finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true qCloseLatencyMs=${closeRestoredAt - closeRequestedAt} escapeCloseLatencyMs=${escapeRestoredAt - escapeSentAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")}`);
     }
   }
 });
 
 child.onExit(({ exitCode }) => {
   if (finished) return;
-  if (modalSeenAt && doctorSeen && closeSent && closeRestoredAt) {
+  if (modalSeenAt && doctorSeen && closeSent && closeRestoredAt && escapeRestoredAt) {
     const scrollSummary = scrollSteps.map(step => `${step.name}:${scrollSeenAt[step.name] - scrollSentAt[step.name]}ms`).join(",");
-    finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true closeRestored=true closeLatencyMs=${closeRestoredAt - closeRequestedAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")} exitCode=${exitCode}`);
+    finish(0, `real-blackbox-modal-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} scroll=${scrollSummary} refreshLatencyMs=${refreshSeenAt - refreshSentAt} doctorAction=true qCloseLatencyMs=${closeRestoredAt - closeRequestedAt} escapeCloseLatencyMs=${escapeRestoredAt - escapeSentAt} report=${join(captureDirectory, "blackbox-modal-tui-report.png")} exitCode=${exitCode}`);
     return;
   }
   finish(1, `afterburn exited before modal validation completed: ${exitCode}`);
@@ -430,7 +467,11 @@ const timeout = setTimeout(() => {
   }
   else if (!refreshSeenAt) finish(1, "timed out before Black Box refresh action rendered");
   else if (!doctorSeen) finish(1, "timed out before Black Box doctor action rendered");
-  else if (!closeSent) finish(1, "timed out before Black Box close key was sent");
-  else finish(1, "timed out before Black Box modal close restored the Copilot prompt");
+  else if (!closeSent) finish(1, "timed out before Black Box q close key was sent");
+  else if (!closeRestoredAt) finish(1, "timed out before Black Box q close restored the Copilot prompt");
+  else if (!escapeCommandSentAt) finish(1, "timed out before reopening Black Box modal for Escape close validation");
+  else if (!escapeModalSeenAt) finish(1, "timed out before reopened Black Box modal appeared");
+  else if (!escapeSentAt) finish(1, "timed out before Black Box Escape close key was sent");
+  else finish(1, "timed out before Black Box Escape close restored the Copilot prompt");
 }, timeoutMs);
 timeout.unref?.();
