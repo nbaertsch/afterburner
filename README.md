@@ -220,7 +220,8 @@ Afterburner/Copilot TUI, bracket-pastes `/black-box-modal` for deterministic com
 the modal remains an overlay on the Copilot backdrop, arrow/Page/Home/End scrolling, Refresh, Doctor,
 close/prompt restore, accessible modal cues, status cards, timeline table semantics, the metadata-only
 fallback/privacy cue, and absence of visible Black Box UI self-noise, and writes raw,
-text, machine-readable latency/result, a combined PNG report, and per-screen PNG captures
+text, machine-readable latency/result with a visual evidence manifest, a combined PNG report, and
+per-screen PNG captures
 under `artifacts\real-tui` by default. The run fails unless the PNG report and every per-screen
 PNG are present, non-empty, have valid PNG signatures, meet minimum raster dimensions, and all
 open/reopen/scroll/refresh/close interactions stay within the harness latency budgets for

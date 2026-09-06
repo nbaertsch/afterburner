@@ -120,6 +120,7 @@ const result = (status, extra = {}) => {
     visibleSelfNoise: visibleSelfNoise(),
     latencyBudget: validateLatencyBudgets(),
     visualInspection: visualInspectionChecks(),
+    visualEvidence: visualEvidenceManifest(),
     visualArtifacts: {
       raw: artifactPath("blackbox-modal-tui.raw"),
       text: artifactPath("blackbox-modal-tui.txt"),
@@ -284,6 +285,27 @@ const failIfVisualInspectionFailed = () => {
   finish(1, `visual inspection checks failed: ${failed.join(", ")}`);
   return true;
 };
+
+const visualEvidenceManifest = () => ({
+  modalOverlay: {
+    screen: "modal-overlay-full-screen.png",
+    proves: ["native modal is visible", "Copilot backdrop remains visible behind the overlay"]
+  },
+  primaryModal: {
+    screen: "modal-open-screen.png",
+    proves: ["title", "secure-canvas subtitle", "action bar", "all keyboard hints", "status cards", "timeline table", "scroll position"]
+  },
+  scrollControls: Object.fromEntries(scrollSteps.map(step => [step.name, {
+    screen: `${slugTitle(step.title)}.png`,
+    key: step.key,
+    latencyMs: scrollSentAt[step.name] && scrollSeenAt[step.name] ? scrollSeenAt[step.name] - scrollSentAt[step.name] : null
+  }])),
+  refresh: { screen: "refresh-action-screen.png", key: "r", latencyMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null },
+  doctor: { screen: "doctor-action-screen.png", key: "d", proves: ["Doctor view opens", "recorder/storage/queue health is visible"] },
+  doctorOverlay: { screen: "doctor-overlay-full-screen.png", proves: ["Doctor view preserves Copilot backdrop"] },
+  close: { screen: "q-close-restore-screen.png", key: "q", latencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null },
+  escapeClose: { screen: "escape-close-restore-screen.png", key: "Escape", latencyMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null }
+});
 
 const measuredLatencies = () => ({
   openMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
