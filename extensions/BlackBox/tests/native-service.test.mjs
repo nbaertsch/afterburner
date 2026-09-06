@@ -61,6 +61,39 @@ test("native JSONL tailing persists durable byte offsets and metadata references
     await recoveredService.close();
 });
 
+test("native tailing ignores Black Box UI self-noise", async t => {
+    const root = await workDirectory("native-self-noise");
+    t.after(() => cleanup(root));
+    const eventsPath = join(root, "native", "events.jsonl");
+    await mkdir(dirname(eventsPath), { recursive: true });
+    const events = [
+        { id: "modal", timestamp: "2026-09-02T10:00:00.000Z", type: "ui.modal_canvas.updated", data: { modalId: "afterburner-black-box-live", revision: 7 } },
+        { id: "host", timestamp: "2026-09-02T10:00:01.000Z", type: "ui.host.patch", data: { surfaceId: "afterburner-black-box-live", revision: 8 } },
+        { id: "other", timestamp: "2026-09-02T10:00:02.000Z", type: "ui.modal_canvas.updated", data: { modalId: "other-modal", revision: 9 } }
+    ];
+    await writeFile(eventsPath, `${events.map(event => JSON.stringify(event)).join("\n")}\n`, "utf8");
+    const service = await startBlackBoxService({
+        root,
+        config: completeConfig({
+            storage: { maxBytes: 100000, segmentBytes: 4096, maxRecordBytes: 2048 },
+            queue: { maxRecords: 100, maxBytes: 100000 },
+            native: { maxReadBytes: 4096, maxLineBytes: 65536, maxEventsPerPoll: 100, startPosition: "start" }
+        }),
+        nativeEventsPath: eventsPath,
+        startTailer: false,
+        salt: "stable-test-salt",
+        env: { COPILOT_AGENT_SESSION_ID: "session" },
+        processId: 24,
+        runId: "self-noise"
+    });
+    assert.equal(await service.pollNative(), 3);
+    const records = await service.tail({ limit: 20 });
+    assert.equal(records.some(record => record.attributes.modalId === "afterburner-black-box-live"), false);
+    assert.equal(records.some(record => record.attributes.surfaceId === "afterburner-black-box-live"), false);
+    assert.equal(records.filter(record => record.eventType === "ui.modal_canvas.updated").length, 1);
+    await service.close();
+});
+
 test("doctor treats a configured not-yet-created native event file as waiting", async t => {
     const root = await workDirectory("native-waiting");
     t.after(() => cleanup(root));

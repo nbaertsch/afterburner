@@ -146,6 +146,7 @@ export async function startBlackBoxService(options = {}) {
             internal.disabledDrops++;
             return false;
         }
+        if (shouldIgnoreRuntimeObservation(rawEvent)) return false;
         try {
             const record = sanitizeNativeEvent(rawEvent, {
                 kind: source.kind ?? (mode === "runtime" ? "runtime-observer" : "black-box"),
