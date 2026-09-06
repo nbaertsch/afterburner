@@ -787,6 +787,7 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
     const openFrame = await modalDefinition.open();
     assert.equal(openFrame.title, "Afterburner Black Box Live");
     assert.match(openFrame.body, /Storage usage: 0% of/);
+    assert.match(openFrame.body, /Signal trend: ▁▁▁▁ no recent events/);
     assert.match(openFrame.body, /Status cards/);
     assert.doesNotMatch(openFrame.body, /Needs attention:/);
     assert.match(openFrame.body, /Selected event/);
@@ -797,6 +798,9 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
     assert.equal(openFrame.document.surfaceId, "afterburner-black-box-live");
     assert.equal(openFrame.document.root.kind, "dialog");
     assert.match(JSON.stringify(openFrame.document), /bb-modal-status-cards/);
+    assert.match(JSON.stringify(openFrame.document), /bb-modal-storage-progress/);
+    assert.match(JSON.stringify(openFrame.document), /bb-modal-signal-trend/);
+    assert.match(JSON.stringify(openFrame.document), /"kind":"sparkline"/);
     assert.match(JSON.stringify(openFrame.document), /bb-modal-timeline-table/);
     assert.match(JSON.stringify(openFrame.document), /bb-modal-detail-panel/);
 
@@ -877,6 +881,7 @@ test("runtime modal surfaces actionable health warnings", () => {
         records: [{ recordId: "rec_warn", timestamp: "2026-01-01T00:00:00.000Z", kind: "anomaly", eventType: "ui.latency", severity: "warning", attributes: { durationMs: 321, success: false } }]
     });
     assert.match(frame.body, /Storage usage: 0% of/);
+    assert.match(frame.body, /Signal trend: █/);
     assert.match(frame.body, /Needs attention: 1 queue write error\(s\) · 7 dropped record\(s\) · 2 anomaly\/anomalies/);
     assert.match(frame.body, /Selected event/);
     assert.match(frame.body, /ui\.latency/);

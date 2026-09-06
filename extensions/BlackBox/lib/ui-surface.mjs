@@ -761,6 +761,7 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
                 id: "bb-modal-storage-progress",
                 accessibility: { role: "progressbar", name: "Black Box modal storage usage", valueText: `${formatPercent(progressValue)} used` }
             }),
+            ...modalSignalTrendNodes(c, records),
             ...modalHealthAlertNodes(c, status, state.lifecycle),
             c.row({ label: "Timeline and detail split", responsive: { collapseBelowColumns: 100, orientation: "vertical" } }, [
                 c.panel({ title: "Metadata timeline", width: "58%" }, [
@@ -804,6 +805,7 @@ function modalTextBody({ status, records, selected, state, healthTone, progressV
         "Privacy: metadata-only; payload bodies redacted. Fallback: /black-box-tail",
         "",
         `Storage usage: ${formatPercent(progressValue)} of ${formatBytes(status.storage?.maxBytes)} retained`,
+        `Signal trend: ${modalSignalTrend(records)}`,
         "",
         "Status cards",
         `  Recorder  ${status.enabled ? "Enabled " : "Disabled"}  ${fitCell(status.mode ?? "unknown", 8)}  ${status.analytics?.totalRecords ?? records.length} records`,
@@ -884,6 +886,21 @@ function modalHealthAlertNodes(c, status, lifecycle = {}) {
     return [c.alert({ severity: "warning", message: `Needs attention: ${issues.join(" · ")}` }, [], {
         id: "bb-modal-health-alert",
         accessibility: { role: "alert", name: "Black Box health warnings" }
+    })];
+}
+
+function modalSignalTrend(records = []) {
+    const values = records.slice(0, 12).reverse().map(record => record.kind === "anomaly" ? 3 : record.kind === "milestone" ? 2 : record.severity === "warning" ? 2 : 1);
+    const bars = ["▁", "▃", "▆", "█"];
+    return values.length ? values.map(value => bars[Math.max(0, Math.min(bars.length - 1, value))]).join("") : "▁▁▁▁ no recent events";
+}
+
+function modalSignalTrendNodes(c, records = []) {
+    if (typeof c.sparkline !== "function") return [];
+    const values = records.slice(0, 12).reverse().map(record => record.kind === "anomaly" ? 3 : record.kind === "milestone" ? 2 : record.severity === "warning" ? 2 : 1);
+    return [c.sparkline({ label: "Signal trend", values: values.length ? values : [0], tone: values.some(value => value >= 3) ? "warning" : "info" }, [], {
+        id: "bb-modal-signal-trend",
+        accessibility: { role: "img", name: "Black Box recent signal trend" }
     })];
 }
 

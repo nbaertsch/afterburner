@@ -74,7 +74,7 @@ const scrollSteps = [
   { name: "arrowUp", title: "Arrow up scroll screen", key: "\x1b[38;0;0;1;0;1_", want: /lines 1-\d+ of/i },
   { name: "pageDown", title: "Page down scroll screen", key: "\x1b[34;0;0;1;0;1_", want: /lines (?:[2-9]|[1-9]\d+)-\d+ of/i },
   { name: "pageUp", title: "Page up scroll screen", key: "\x1b[33;0;0;1;0;1_", want: /lines 1-\d+ of/i },
-  { name: "end", title: "End scroll screen", key: "\x1b[35;0;0;1;0;1_", want: /lines (?:[2-9]|1\d)-\d+ of/i },
+  { name: "end", title: "End scroll screen", key: "\x1b[35;0;0;1;0;1_", want: /lines (?:[2-9]|[1-9]\d+)-\d+ of/i },
   { name: "home", title: "Home scroll screen", key: "\x1b[36;0;0;1;0;1_", want: /lines 1-\d+ of/i }
 ];
 let scrollIndex = 0;
@@ -304,6 +304,7 @@ const visualInspectionChecks = () => {
     modalAdvertisesMetadataOnlyFallback: /metadata-only[\s\S]*\/black-box-tail/i.test(modalScreen),
     modalAdvertisesAllScrollKeys: /↑\/↓ PgUp\/PgDn Home\/End/.test(modalScreen),
     modalShowsStorageProgress: /Storage usage:\s*\d+% of/i.test(modalScreen),
+    modalShowsSignalTrend: /Signal trend:\s*[▁▃▆█]+/i.test(modalScreen),
     modalShowsStatusCards: /Status cards/i.test(modalScreen) && /Recorder/i.test(modalScreen) && /Storage/i.test(modalScreen) && /Signals/i.test(modalScreen) && /Queue/i.test(modalScreen),
     modalShowsActionableHealthCallout: /Needs attention:/i.test(modalScreen),
     modalShowsSelectedEventSummary: /Selected event/i.test(modalScreen) && /session\.info|extension\.discovered|session\.model_change|event|milestone/i.test(modalScreen),

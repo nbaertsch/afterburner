@@ -18,15 +18,20 @@ const (
 	KindStack           Kind = "stack"
 	KindRow             Kind = "row"
 	KindGrid            Kind = "grid"
+	KindStatusGrid      Kind = "statusGrid"
 	KindPanel           Kind = "panel"
 	KindCard            Kind = "card"
 	KindSeparator       Kind = "separator"
 	KindSpacer          Kind = "spacer"
+	KindEmpty           Kind = "empty"
 	KindText            Kind = "text"
 	KindMarkdown        Kind = "markdown"
 	KindCode            Kind = "code"
 	KindIcon            Kind = "icon"
 	KindBadge           Kind = "badge"
+	KindKeyValue        Kind = "keyValue"
+	KindDetail          Kind = "detail"
+	KindAlert           Kind = "alert"
 	KindButton          Kind = "button"
 	KindLink            Kind = "link"
 	KindTextInput       Kind = "textInput"
@@ -37,12 +42,14 @@ const (
 	KindToggle          Kind = "toggle"
 	KindSlider          Kind = "slider"
 	KindProgress        Kind = "progress"
+	KindSparkline       Kind = "sparkline"
 	KindSpinner         Kind = "spinner"
 	KindList            Kind = "list"
 	KindTable           Kind = "table"
 	KindTree            Kind = "tree"
 	KindForm            Kind = "form"
 	KindToolbar         Kind = "toolbar"
+	KindActionBar       Kind = "actionBar"
 	KindTabs            Kind = "tabs"
 	KindBreadcrumb      Kind = "breadcrumb"
 	KindDialog          Kind = "dialog"
@@ -112,15 +119,20 @@ func PublicCatalog() []CatalogEntry {
 		{KindStack, StabilityStable, "One-dimensional vertical layout."},
 		{KindRow, StabilityStable, "One-dimensional horizontal layout."},
 		{KindGrid, StabilityStable, "Two-dimensional layout."},
+		{KindStatusGrid, StabilityStable, "Dashboard-style status grid for health and metrics."},
 		{KindPanel, StabilityStable, "Grouped content panel."},
 		{KindCard, StabilityStable, "Elevated content region."},
 		{KindSeparator, StabilityStable, "Visual or semantic separator."},
 		{KindSpacer, StabilityStable, "Intentional empty layout space."},
+		{KindEmpty, StabilityStable, "Purposeful empty-state message."},
 		{KindText, StabilityStable, "Plain text content."},
 		{KindMarkdown, StabilityStable, "Sanitized Markdown content."},
 		{KindCode, StabilityStable, "Code block or inline code content."},
 		{KindIcon, StabilityStable, "Decorative or semantic icon."},
 		{KindBadge, StabilityStable, "Compact status label."},
+		{KindKeyValue, StabilityStable, "Compact key/value facts and metadata."},
+		{KindDetail, StabilityStable, "Detailed record inspection content."},
+		{KindAlert, StabilityStable, "Prominent status, warning, or error callout."},
 		{KindButton, StabilityStable, "User-invoked action control."},
 		{KindLink, StabilityStable, "Navigation or external reference."},
 		{KindTextInput, StabilityStable, "Single-line text input."},
@@ -131,12 +143,14 @@ func PublicCatalog() []CatalogEntry {
 		{KindToggle, StabilityStable, "Binary switch control."},
 		{KindSlider, StabilityStable, "Continuous or stepped numeric input."},
 		{KindProgress, StabilityStable, "Progress indicator."},
+		{KindSparkline, StabilityStable, "Compact inline trend visualization."},
 		{KindSpinner, StabilityStable, "Indeterminate progress indicator."},
 		{KindList, StabilityStable, "Linear collection."},
 		{KindTable, StabilityStable, "Tabular data collection."},
 		{KindTree, StabilityStable, "Hierarchical data collection."},
 		{KindForm, StabilityStable, "Validated input group."},
 		{KindToolbar, StabilityStable, "Action strip."},
+		{KindActionBar, StabilityStable, "Primary command/action strip with keyboard affordances."},
 		{KindTabs, StabilityStable, "Tabbed content switcher."},
 		{KindBreadcrumb, StabilityStable, "Navigation path."},
 		{KindDialog, StabilityStable, "Modal or non-modal dialog."},

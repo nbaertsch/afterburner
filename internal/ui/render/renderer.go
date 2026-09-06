@@ -269,9 +269,9 @@ func (rc *renderContext) renderNode(node component.Node, width int) (string, err
 		out, err = rc.renderContainer(node, available)
 	case component.KindStack, kindColumn, component.KindForm:
 		out, err = rc.renderStack(node, available)
-	case component.KindRow, component.KindToolbar, kindActionBar:
+	case component.KindRow, component.KindToolbar, component.KindActionBar:
 		out, err = rc.renderRow(node, available)
-	case component.KindGrid, kindStatusGrid:
+	case component.KindGrid, component.KindStatusGrid:
 		out, err = rc.renderGrid(node, available)
 	case kindBox, component.KindPanel, component.KindCard, kindSection, component.KindDialog:
 		out, err = rc.renderBox(node, available)
@@ -289,13 +289,13 @@ func (rc *renderContext) renderNode(node component.Node, width int) (string, err
 		out = ""
 	case component.KindText, component.KindMarkdown, component.KindCode, component.KindIcon:
 		out = rc.renderTextLike(kind, props, available)
-	case kindKeyValue, kindDetail:
+	case component.KindKeyValue, component.KindDetail:
 		out = rc.renderKeyValue(props, available)
 	case component.KindBadge:
 		out = rc.styled("badge", " "+sanitize(props.First("label", "text", "status", "value"))+" ")
 	case component.KindLink:
 		out = rc.renderLink(props, available)
-	case kindEmpty:
+	case component.KindEmpty:
 		out = rc.styled("empty", sanitize(props.StringDefault("message", "No content")))
 	case component.KindTable:
 		out = rc.renderTable(props, available)
@@ -309,7 +309,7 @@ func (rc *renderContext) renderNode(node component.Node, width int) (string, err
 		out = rc.renderList("log", props, available)
 	case component.KindProgress, kindMeter, kindBar:
 		out = rc.renderProgress(props, available)
-	case kindSparkline, component.KindChart:
+	case component.KindSparkline, component.KindChart:
 		out = rc.renderSparkline(props, available)
 	case component.KindTextInput, kindPasswordInput, kindSearchInput, kindNumberInput, component.KindTextArea, component.KindSelect, component.KindCheckbox, component.KindRadioGroup, component.KindToggle, component.KindSlider, kindDateInput, kindFileInput:
 		out = rc.renderInput(kind, props, available)
@@ -325,7 +325,7 @@ func (rc *renderContext) renderNode(node component.Node, width int) (string, err
 		out = rc.renderPagination(props, available)
 	case kindHelp, component.KindKeybindingHint:
 		out = rc.renderHelp(props, available)
-	case kindAlert, component.KindToast:
+	case component.KindAlert, component.KindToast:
 		out = rc.renderAlert(kind, props, available)
 	case kindLoading, component.KindSpinner:
 		out = rc.renderLoading(props, available)

@@ -36,7 +36,7 @@
       "additionalProperties": false
     },
     "kind": {
-      "enum": ["application", "window", "surface", "viewport", "stack", "row", "grid", "panel", "card", "separator", "spacer", "text", "markdown", "code", "icon", "badge", "button", "link", "textInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "progress", "spinner", "list", "table", "tree", "form", "toolbar", "tabs", "breadcrumb", "dialog", "toast", "terminal", "canvas", "image", "video", "chart", "commandPalette", "keybindingHint", "extensionOutlet"]
+      "enum": ["application", "window", "surface", "viewport", "stack", "row", "grid", "statusGrid", "panel", "card", "separator", "spacer", "empty", "text", "markdown", "code", "icon", "badge", "keyValue", "detail", "alert", "button", "link", "textInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "progress", "sparkline", "spinner", "list", "table", "tree", "form", "toolbar", "actionBar", "tabs", "breadcrumb", "dialog", "toast", "terminal", "canvas", "image", "video", "chart", "commandPalette", "keybindingHint", "extensionOutlet"]
     }
   }
 }

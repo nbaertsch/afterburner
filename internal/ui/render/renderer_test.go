@@ -145,7 +145,7 @@ func TestRendererConsumesSDKShapedCatalogProps(t *testing.T) {
 		t.Fatalf("code/language props not rendered: frame=%q err=%v", codeFrame.Plain, err)
 	}
 	failover := NewFailoverRenderer(failingEngine{}, NewPlainRenderer(testOptions(80, ColorModeMono, true, DefaultTheme())))
-	fallback, err := failover.RenderFrame(context.Background(), sdkContractTree(t, kindStatusGrid))
+	fallback, err := failover.RenderFrame(context.Background(), sdkContractTree(t, component.KindStatusGrid))
 	if err != nil || fallback.Renderer != RendererPlain || !strings.Contains(fallback.Plain, "ok") {
 		t.Fatalf("failover SDK fixture mismatch: frame=%#v err=%v", fallback, err)
 	}
@@ -373,11 +373,11 @@ func sdkContractNode(t *testing.T, kind component.Kind) component.Node {
 	id := "sdk-" + strings.ToLower(strings.ReplaceAll(string(kind), ".", "-"))
 	child := nodeWithProps(t, component.KindText, map[string]any{"value": "child content"})
 	switch kind {
-	case component.KindApplication, component.KindWindow, component.KindSurface, component.KindViewport, component.KindStack, kindColumn, component.KindRow, component.KindPanel, component.KindCard, kindBox, kindSection, kindSplit, component.KindForm, component.KindToolbar, kindActionBar, component.KindCanvas, component.KindExtensionOutlet, kindRoot:
+	case component.KindApplication, component.KindWindow, component.KindSurface, component.KindViewport, component.KindStack, kindColumn, component.KindRow, component.KindPanel, component.KindCard, kindBox, kindSection, kindSplit, component.KindForm, component.KindToolbar, component.KindActionBar, component.KindCanvas, component.KindExtensionOutlet, kindRoot:
 		return component.Node{ID: id, Kind: kind, Props: mustJSON(t, map[string]any{"title": string(kind) + " title"}), Children: []component.Node{child}}
 	case component.KindGrid:
 		return component.Node{ID: id, Kind: kind, Props: mustJSON(t, map[string]any{"columns": 2}), Children: []component.Node{child, nodeWithProps(t, component.KindText, map[string]any{"value": "second cell"})}}
-	case kindStatusGrid:
+	case component.KindStatusGrid:
 		return nodeWithProps(t, kind, sdkTableProps(string(kind), "ok", 50))
 	case component.KindText:
 		return nodeWithProps(t, kind, map[string]any{"value": "SDK text value"})
@@ -387,7 +387,7 @@ func sdkContractNode(t *testing.T, kind component.Kind) component.Node {
 		return nodeWithProps(t, kind, map[string]any{"code": "fmt.Println(\"sdk\")", "language": "go"})
 	case component.KindIcon, component.KindBadge, component.KindLink, component.KindKeybindingHint:
 		return nodeWithProps(t, kind, map[string]any{"label": string(kind) + " label", "href": "https://example.invalid"})
-	case kindKeyValue, kindDetail:
+	case component.KindKeyValue, component.KindDetail:
 		return nodeWithProps(t, kind, map[string]any{"items": []map[string]any{{"key": "sdk", "value": string(kind)}}})
 	case component.KindTable:
 		return nodeWithProps(t, kind, sdkTableProps(string(kind), "ok", 65))
@@ -395,7 +395,7 @@ func sdkContractNode(t *testing.T, kind component.Kind) component.Node {
 		return nodeWithProps(t, kind, map[string]any{"items": []string{"alpha", "beta"}, "selected": "alpha"})
 	case component.KindProgress, kindMeter, kindBar:
 		return nodeWithProps(t, kind, map[string]any{"value": 65, "min": 0, "max": 100, "label": string(kind)})
-	case kindSparkline, component.KindChart:
+	case component.KindSparkline, component.KindChart:
 		return nodeWithProps(t, kind, map[string]any{"value": 0.65, "label": string(kind)})
 	case component.KindTextInput, kindPasswordInput, kindSearchInput, kindNumberInput, component.KindTextArea, component.KindSelect, component.KindCheckbox, component.KindRadioGroup, component.KindToggle, component.KindSlider, kindDateInput, kindFileInput:
 		return nodeWithProps(t, kind, map[string]any{"label": string(kind) + " control", "value": "sample", "checked": true, "options": []string{"one", "two"}})
@@ -411,7 +411,7 @@ func sdkContractNode(t *testing.T, kind component.Kind) component.Node {
 		return nodeWithProps(t, kind, map[string]any{"label": "separator"})
 	case component.KindSpacer:
 		return nodeWithProps(t, kind, map[string]any{"size": 1})
-	case kindEmpty:
+	case component.KindEmpty:
 		return nodeWithProps(t, kind, map[string]any{"message": "empty state"})
 	case component.KindCommandPalette:
 		return nodeWithProps(t, kind, map[string]any{"query": "deploy", "items": []string{"Deploy"}})
@@ -421,7 +421,7 @@ func sdkContractNode(t *testing.T, kind component.Kind) component.Node {
 		return nodeWithProps(t, kind, map[string]any{"page": 1, "total": 2})
 	case kindHelp:
 		return nodeWithProps(t, kind, map[string]any{"title": "help title"})
-	case kindAlert, component.KindToast:
+	case component.KindAlert, component.KindToast:
 		return nodeWithProps(t, kind, map[string]any{"message": string(kind) + " message", "severity": "info"})
 	case kindLoading, component.KindSpinner:
 		return nodeWithProps(t, kind, map[string]any{"message": "loading"})
@@ -456,9 +456,9 @@ func sampleNode(t *testing.T, kind component.Kind) component.Node {
 	t.Helper()
 	base := map[string]any{"title": string(kind), "label": string(kind), "text": string(kind) + " text with unicode Ω and ansi \x1b[31mred\x1b[0m", "value": string(kind) + " value"}
 	switch kind {
-	case component.KindGrid, kindStatusGrid:
+	case component.KindGrid, component.KindStatusGrid:
 		return component.Node{ID: string(kind), Kind: kind, Props: mustJSON(t, map[string]any{"columns": 2}), Children: []component.Node{nodeWithProps(t, "text", map[string]any{"text": "cell 1"}), nodeWithProps(t, "text", map[string]any{"text": "cell 2"})}}
-	case component.KindRow, component.KindToolbar, kindActionBar, kindSplit, component.KindForm:
+	case component.KindRow, component.KindToolbar, component.KindActionBar, kindSplit, component.KindForm:
 		return component.Node{ID: string(kind), Kind: kind, Children: []component.Node{nodeWithProps(t, "button", map[string]any{"label": "Run"}), nodeWithProps(t, "badge", map[string]any{"label": "OK"})}}
 	case component.KindStack, kindColumn, component.KindApplication, component.KindWindow, component.KindSurface, component.KindViewport, kindRoot:
 		return component.Node{ID: string(kind), Kind: kind, Children: []component.Node{nodeWithProps(t, "text", base)}}
@@ -476,9 +476,9 @@ func sampleNode(t *testing.T, kind component.Kind) component.Node {
 		return nodeWithProps(t, kind, map[string]any{"items": []any{"alpha", map[string]any{"label": "beta"}}, "selected": 1, "virtualized": true, "total": 4})
 	case component.KindProgress, kindMeter, kindBar:
 		return nodeWithProps(t, kind, map[string]any{"percent": 0.42})
-	case kindSparkline, component.KindChart:
+	case component.KindSparkline, component.KindChart:
 		return nodeWithProps(t, kind, map[string]any{"values": []float64{1, 4, 2, 8, 3}})
-	case kindKeyValue, kindDetail, kindHelp, component.KindKeybindingHint:
+	case component.KindKeyValue, component.KindDetail, kindHelp, component.KindKeybindingHint:
 		return nodeWithProps(t, kind, map[string]any{"items": []map[string]any{{"key": "Esc", "value": "Close"}, {"key": "Enter", "value": "Accept"}}})
 	case component.KindCheckbox:
 		return nodeWithProps(t, kind, map[string]any{"label": "Agree", "checked": true})
@@ -486,7 +486,7 @@ func sampleNode(t *testing.T, kind component.Kind) component.Node {
 		return nodeWithProps(t, kind, map[string]any{"label": string(kind), "options": []string{"a", "b"}, "selected": "a"})
 	case component.KindSlider:
 		return nodeWithProps(t, kind, map[string]any{"label": "Volume", "percent": 0.7})
-	case kindAlert, component.KindToast:
+	case component.KindAlert, component.KindToast:
 		return nodeWithProps(t, kind, map[string]any{"severity": "warning", "message": "Heads up"})
 	case kindLoading, component.KindSpinner:
 		return nodeWithProps(t, kind, map[string]any{"message": "Loading"})
@@ -531,7 +531,7 @@ func walkSDKProps(t *testing.T, node component.Node, sawTable, sawProgress *bool
 	t.Helper()
 	props := parseProps(node.Props)
 	switch node.Kind {
-	case component.KindTable, kindStatusGrid:
+	case component.KindTable, component.KindStatusGrid:
 		columns, rows := props.Array("columns"), props.Array("rows")
 		if len(columns) == 0 || len(rows) == 0 {
 			t.Fatalf("%s fixture table missing columns/rows", node.ID)
