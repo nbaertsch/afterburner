@@ -270,7 +270,7 @@ func TestModalServerScrollsOverflowWithoutExtensionAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := output.String()
-	for _, want := range []string{"line 02", "lines 2-", "[↑/↓] Scroll"} {
+	for _, want := range []string{"line 02", "lines 2-", "[↑/↓ PgUp/PgDn Home/End] Scroll"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("scrolled overlay missing %q: %q", want, text)
 		}
@@ -335,6 +335,34 @@ func TestModalServerScrollsSplitAndModifiedArrowSequences(t *testing.T) {
 	}
 	if text := output.String(); !strings.Contains(text, "lines 1-") || !strings.Contains(text, "line 01") {
 		t.Fatalf("Windows VT up arrow did not scroll modal homeward: %q", text)
+	}
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b[34;0;0;1;0;1_")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "line 04") || !strings.Contains(text, "lines 4-") {
+		t.Fatalf("Windows VT page down did not scroll modal by page: %q", text)
+	}
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b[33;0;0;1;0;1_")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "line 01") || !strings.Contains(text, "lines 1-") {
+		t.Fatalf("Windows VT page up did not scroll modal homeward: %q", text)
+	}
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b[35;0;0;1;0;1_")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "line 18") || !strings.Contains(text, "lines 18-") {
+		t.Fatalf("Windows VT end did not scroll modal to bottom: %q", text)
+	}
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b[36;0;0;1;0;1_")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "line 01") || !strings.Contains(text, "lines 1-") {
+		t.Fatalf("Windows VT home did not scroll modal to top: %q", text)
 	}
 }
 

@@ -228,7 +228,7 @@ func NewModalServer(broker *Broker, renderer ModalRenderer) (*ModalServer, error
 		events:               make(map[modalEventKey][]ModalEvent),
 		renderer:             renderer,
 		pollTimeout:          30 * time.Second,
-		pendingEscapeDelay:   10 * time.Second,
+		pendingEscapeDelay:   200 * time.Millisecond,
 	}
 	return server, nil
 }
@@ -1500,7 +1500,7 @@ func writeModalFooter(out *strings.Builder, layout modalLayout, frame ModalFrame
 			actions = "[Esc] Close"
 		}
 		if maxScroll > 0 {
-			actions += "  [↑/↓] Scroll"
+			actions += "  [↑/↓ PgUp/PgDn Home/End] Scroll"
 		}
 		writeModalText(out, row, layout.innerLeft, layout.innerWidth, styles.actions, actions)
 	}

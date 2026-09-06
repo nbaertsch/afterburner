@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const defaultTerminalQueryReplyTimeout = 1 * time.Second
+const defaultTerminalQueryReplyTimeout = 100 * time.Millisecond
 
 type BrokerOptions struct {
 	InitialOwner              Owner

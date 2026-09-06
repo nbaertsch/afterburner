@@ -48,12 +48,19 @@ let terminalSetupDeclined = false;
 let commandSentAt = 0;
 let modalSeenAt = 0;
 let modalCaptureScheduled = false;
-let arrowDownSentAt = 0;
-let arrowDownRawLength = 0;
-let arrowDownSeenAt = 0;
-let arrowUpSentAt = 0;
-let arrowUpRawLength = 0;
-let arrowUpSeenAt = 0;
+const scrollSteps = [
+  { name: "arrowDown", title: "Arrow down scroll screen", key: "\x1b[40;0;0;1;0;1_", want: /lines 2-\d+ of/i },
+  { name: "arrowUp", title: "Arrow up scroll screen", key: "\x1b[38;0;0;1;0;1_", want: /lines 1-\d+ of/i },
+  { name: "pageDown", title: "Page down scroll screen", key: "\x1b[34;0;0;1;0;1_", want: /lines (?:[2-9]|1\d)-\d+ of/i },
+  { name: "pageUp", title: "Page up scroll screen", key: "\x1b[33;0;0;1;0;1_", want: /lines 1-\d+ of/i },
+  { name: "end", title: "End scroll screen", key: "\x1b[35;0;0;1;0;1_", want: /lines (?:[2-9]|1\d)-\d+ of/i },
+  { name: "home", title: "Home scroll screen", key: "\x1b[36;0;0;1;0;1_", want: /lines 1-\d+ of/i }
+];
+let scrollIndex = 0;
+let activeScrollRawLength = 0;
+const scrollSentAt = {};
+const scrollSeenAt = {};
+const scrollRaw = {};
 let doctorSeen = false;
 let doctorCaptureScheduled = false;
 let closeSent = false;
@@ -70,13 +77,13 @@ const result = (status, extra = {}) => ({
   completedAt: new Date().toISOString(),
   commandSent: Boolean(commandSentAt),
   modalSeen: Boolean(modalSeenAt),
-  arrowDownScrolled: Boolean(arrowDownSeenAt),
-  arrowUpScrolled: Boolean(arrowUpSeenAt),
+  scroll: Object.fromEntries(scrollSteps.map(step => [step.name, {
+    passed: Boolean(scrollSeenAt[step.name]),
+    latencyMs: scrollSentAt[step.name] && scrollSeenAt[step.name] ? scrollSeenAt[step.name] - scrollSentAt[step.name] : null
+  }])),
   doctorAction: doctorSeen,
   closeRestored: Boolean(closeRestoredAt),
   openLatencyMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
-  arrowDownLatencyMs: arrowDownSentAt && arrowDownSeenAt ? arrowDownSeenAt - arrowDownSentAt : null,
-  arrowUpLatencyMs: arrowUpSentAt && arrowUpSeenAt ? arrowUpSeenAt - arrowUpSentAt : null,
   closeLatencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null,
   ...extra
 });
@@ -152,16 +159,13 @@ const renderTerminalScreen = (value, columns = 140, rows = 40) => {
 };
 
 let modalOpenRaw = "";
-let arrowDownRaw = "";
-let arrowUpRaw = "";
 let doctorRaw = "";
 let closeRestoreRaw = "";
 
 const visualReport = capture => {
   const sections = [
     ["Modal open screen", modalOpenRaw ? renderTerminalScreen(modalOpenRaw) : ""],
-    ["Arrow down scroll screen", arrowDownRaw ? renderTerminalScreen(arrowDownRaw) : ""],
-    ["Arrow up scroll screen", arrowUpRaw ? renderTerminalScreen(arrowUpRaw) : ""],
+    ...scrollSteps.map(step => [step.title, scrollRaw[step.name] ? renderTerminalScreen(scrollRaw[step.name]) : ""]),
     ["Doctor action screen", doctorRaw ? renderTerminalScreen(doctorRaw) : ""],
     ["Close restore screen", closeRestoreRaw ? renderTerminalScreen(closeRestoreRaw) : ""]
   ].filter(([, body]) => body);
@@ -269,31 +273,34 @@ child.onData(data => {
     modalCaptureScheduled = true;
     setTimeout(() => {
       modalOpenRaw = raw;
-      arrowDownSentAt = Date.now();
-      arrowDownRawLength = raw.length;
-      child.write("\x1b[40;0;0;1;0;1_");
+      const step = scrollSteps[scrollIndex];
+      scrollSentAt[step.name] = Date.now();
+      activeScrollRawLength = raw.length;
+      child.write(step.key);
     }, 500).unref?.();
     return;
   }
-  if (arrowDownSentAt && !arrowDownSeenAt && /lines 2-\d+ of/i.test(stripAnsi(raw.slice(arrowDownRawLength)))) {
-    arrowDownSeenAt = Date.now();
-    arrowDownRaw = raw;
+  const activeStep = scrollSteps[scrollIndex];
+  if (activeStep && scrollSentAt[activeStep.name] && !scrollSeenAt[activeStep.name] && activeStep.want.test(stripAnsi(raw.slice(activeScrollRawLength)))) {
+    scrollSeenAt[activeStep.name] = Date.now();
+    scrollRaw[activeStep.name] = raw;
+    scrollIndex++;
+    const nextStep = scrollSteps[scrollIndex];
     setTimeout(() => {
-      arrowUpSentAt = Date.now();
-      arrowUpRawLength = raw.length;
-      child.write("\x1b[38;0;0;1;0;1_");
+      if (nextStep) {
+        scrollSentAt[nextStep.name] = Date.now();
+        activeScrollRawLength = raw.length;
+        child.write(nextStep.key);
+      } else {
+        child.write("d");
+      }
     }, 250).unref?.();
     return;
   }
-  if (arrowUpSentAt && !arrowUpSeenAt && /lines 1-\d+ of/i.test(stripAnsi(raw.slice(arrowUpRawLength)))) {
-    arrowUpSeenAt = Date.now();
-    arrowUpRaw = raw;
-    setTimeout(() => child.write("d"), 250).unref?.();
-    return;
-  }
   if (modalSeenAt && !doctorSeen && /Afterburner Black Box Doctor/i.test(text)) {
-    if (!arrowDownSeenAt || !arrowUpSeenAt) {
-      finish(1, "Doctor action rendered before arrow-key scroll validation completed");
+    const missing = scrollSteps.filter(step => !scrollSeenAt[step.name]).map(step => step.name);
+    if (missing.length > 0) {
+      finish(1, `Doctor action rendered before scroll validation completed: ${missing.join(", ")}`);
       return;
     }
     doctorSeen = true;
@@ -331,8 +338,10 @@ child.onExit(({ exitCode }) => {
 const timeout = setTimeout(() => {
   if (!commandSentAt) finish(1, "timed out before Copilot prompt accepted /black-box-modal");
   else if (!modalSeenAt) finish(1, "timed out before Black Box modal appeared");
-  else if (!arrowDownSeenAt) finish(1, "timed out before Down arrow scrolled the Black Box modal");
-  else if (!arrowUpSeenAt) finish(1, "timed out before Up arrow restored the Black Box modal scroll position");
+  else if (scrollSteps.some(step => !scrollSeenAt[step.name])) {
+    const missing = scrollSteps.filter(step => !scrollSeenAt[step.name]).map(step => step.name).join(", ");
+    finish(1, `timed out before Black Box scroll validation completed: ${missing}`);
+  }
   else if (!doctorSeen) finish(1, "timed out before Black Box doctor action rendered");
   else if (!closeSent) finish(1, "timed out before Black Box close key was sent");
   else finish(1, "timed out before Black Box modal close restored the Copilot prompt");
