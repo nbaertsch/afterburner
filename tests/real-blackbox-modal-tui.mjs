@@ -330,9 +330,21 @@ const validateLatencyBudgets = () => {
   return { passed: failures.length === 0, budgets: latencyBudgets, measured, failures };
 };
 
+const evidenceScreenNames = evidence => {
+  const names = [];
+  const visit = value => {
+    if (!value || typeof value !== "object") return;
+    if (typeof value.screen === "string") names.push(value.screen);
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(evidence);
+  return [...new Set(names)];
+};
+
 const expectedPngArtifacts = () => [
   artifactPath("blackbox-modal-tui-report.png"),
-  ...capturedScreens().map(([title]) => artifactPath(`${slugTitle(title)}.png`))
+  ...capturedScreens().map(([title]) => artifactPath(`${slugTitle(title)}.png`)),
+  ...evidenceScreenNames(visualEvidenceManifest()).map(artifactPath)
 ];
 
 const readPngMetadata = path => {
@@ -355,9 +367,12 @@ const validatePngArtifacts = () => {
   if (process.platform !== "win32") return { passed: false, message: "PNG visual artifacts are only rendered on Windows", artifacts: [] };
   const artifacts = expectedPngArtifacts().map(readPngMetadata);
   const invalid = artifacts.filter(item => !item.exists || !item.validSignature || item.bytes < 1024 || (item.width ?? 0) < 800 || (item.height ?? 0) < 150);
-  return invalid.length === 0
-    ? { passed: true, message: "PNG visual artifacts are present with valid raster dimensions", artifacts }
-    : { passed: false, message: `missing, invalid, or too-small PNG visual artifacts: ${invalid.map(item => item.path).join(", ")}`, artifacts };
+  const expected = new Set(expectedPngArtifacts().map(path => resolve(path).toLowerCase()));
+  const referenced = new Set(evidenceScreenNames(visualEvidenceManifest()).map(name => resolve(captureDirectory, name).toLowerCase()));
+  const missingEvidenceRefs = [...referenced].filter(path => !expected.has(path));
+  return invalid.length === 0 && missingEvidenceRefs.length === 0
+    ? { passed: true, message: "PNG visual artifacts are present with valid raster dimensions and evidence references", artifacts, missingEvidenceRefs }
+    : { passed: false, message: `missing, invalid, too-small, or ungenerated PNG visual artifacts: ${[...invalid.map(item => item.path), ...missingEvidenceRefs].join(", ")}`, artifacts, missingEvidenceRefs };
 };
 
 const writePngReport = capture => {
