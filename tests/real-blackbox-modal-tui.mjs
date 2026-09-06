@@ -85,39 +85,42 @@ let finished = false;
 const artifactPath = name => join(captureDirectory, name);
 const slugTitle = title => String(title).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
-const result = (status, extra = {}) => ({
-  schemaVersion: 1,
-  status,
-  afterburn,
-  startedAt: new Date(scriptStartedAt).toISOString(),
-  completedAt: new Date().toISOString(),
-  commandInputStarted: Boolean(commandInputStartedAt),
-  commandSubmitted: Boolean(commandSentAt),
-  modalSeen: Boolean(modalSeenAt),
-  scroll: Object.fromEntries(scrollSteps.map(step => [step.name, {
-    passed: Boolean(scrollSeenAt[step.name]),
-    latencyMs: scrollSentAt[step.name] && scrollSeenAt[step.name] ? scrollSeenAt[step.name] - scrollSentAt[step.name] : null
-  }])),
-  refreshAction: Boolean(refreshSeenAt),
-  refreshLatencyMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null,
-  doctorAction: doctorSeen,
-  closeRestored: Boolean(closeRestoredAt),
-  escapeClose: Boolean(escapeRestoredAt),
-  openLatencyMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
-  reopenLatencyMs: escapeCommandSentAt && escapeModalSeenAt ? escapeModalSeenAt - escapeCommandSentAt : null,
-  closeLatencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null,
-  escapeCloseLatencyMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null,
-  visibleSelfNoise: visibleSelfNoise(),
-  visualInspection: visualInspectionChecks(),
-  visualArtifacts: {
-    raw: artifactPath("blackbox-modal-tui.raw"),
-    text: artifactPath("blackbox-modal-tui.txt"),
-    result: artifactPath("blackbox-modal-tui-result.json"),
-    pngReport: artifactPath("blackbox-modal-tui-report.png"),
-    screenPngs: capturedScreens().map(([title]) => artifactPath(`${slugTitle(title)}.png`))
-  },
-  ...extra
-});
+const result = (status, extra = {}) => {
+  const screenPngs = capturedScreens().map(([title]) => artifactPath(`${slugTitle(title)}.png`));
+  return {
+    schemaVersion: 1,
+    status,
+    afterburn,
+    startedAt: new Date(scriptStartedAt).toISOString(),
+    completedAt: new Date().toISOString(),
+    commandInputStarted: Boolean(commandInputStartedAt),
+    commandSubmitted: Boolean(commandSentAt),
+    modalSeen: Boolean(modalSeenAt),
+    scroll: Object.fromEntries(scrollSteps.map(step => [step.name, {
+      passed: Boolean(scrollSeenAt[step.name]),
+      latencyMs: scrollSentAt[step.name] && scrollSeenAt[step.name] ? scrollSeenAt[step.name] - scrollSentAt[step.name] : null
+    }])),
+    refreshAction: Boolean(refreshSeenAt),
+    refreshLatencyMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null,
+    doctorAction: doctorSeen,
+    closeRestored: Boolean(closeRestoredAt),
+    escapeClose: Boolean(escapeRestoredAt),
+    openLatencyMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
+    reopenLatencyMs: escapeCommandSentAt && escapeModalSeenAt ? escapeModalSeenAt - escapeCommandSentAt : null,
+    closeLatencyMs: closeRequestedAt && closeRestoredAt ? closeRestoredAt - closeRequestedAt : null,
+    escapeCloseLatencyMs: escapeSentAt && escapeRestoredAt ? escapeRestoredAt - escapeSentAt : null,
+    visibleSelfNoise: visibleSelfNoise(),
+    visualInspection: visualInspectionChecks(),
+    visualArtifacts: {
+      raw: artifactPath("blackbox-modal-tui.raw"),
+      text: artifactPath("blackbox-modal-tui.txt"),
+      result: artifactPath("blackbox-modal-tui-result.json"),
+      pngReport: artifactPath("blackbox-modal-tui-report.png"),
+      screenPngs
+    },
+    ...extra
+  };
+};
 
 const renderTerminalScreen = (value, columns = 140, rows = 40) => {
   const screen = Array.from({ length: rows }, () => Array(columns).fill(" "));
@@ -253,18 +256,29 @@ const expectedPngArtifacts = () => [
   ...capturedScreens().map(([title]) => artifactPath(`${slugTitle(title)}.png`))
 ];
 
-const validatePngArtifacts = () => {
-  if (process.platform !== "win32") return { passed: false, message: "PNG visual artifacts are only rendered on Windows" };
+const readPngMetadata = path => {
+  if (!existsSync(path)) return { path, exists: false, validSignature: false, bytes: 0, width: null, height: null };
+  const stat = statSync(path);
+  const header = readFileSync(path).subarray(0, 24);
   const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const invalid = expectedPngArtifacts().filter(path => {
-    if (!existsSync(path)) return true;
-    const stat = statSync(path);
-    if (stat.size < 1024) return true;
-    return !readFileSync(path).subarray(0, 8).equals(signature);
-  });
+  const validSignature = header.length >= 24 && header.subarray(0, 8).equals(signature);
+  return {
+    path,
+    exists: true,
+    validSignature,
+    bytes: stat.size,
+    width: validSignature ? header.readUInt32BE(16) : null,
+    height: validSignature ? header.readUInt32BE(20) : null
+  };
+};
+
+const validatePngArtifacts = () => {
+  if (process.platform !== "win32") return { passed: false, message: "PNG visual artifacts are only rendered on Windows", artifacts: [] };
+  const artifacts = expectedPngArtifacts().map(readPngMetadata);
+  const invalid = artifacts.filter(item => !item.exists || !item.validSignature || item.bytes < 1024 || (item.width ?? 0) < 800 || (item.height ?? 0) < 150);
   return invalid.length === 0
-    ? { passed: true, message: "PNG visual artifacts are present and valid" }
-    : { passed: false, message: `missing or invalid PNG visual artifacts: ${invalid.join(", ")}` };
+    ? { passed: true, message: "PNG visual artifacts are present with valid raster dimensions", artifacts }
+    : { passed: false, message: `missing, invalid, or too-small PNG visual artifacts: ${invalid.map(item => item.path).join(", ")}`, artifacts };
 };
 
 const writePngReport = capture => {
@@ -341,6 +355,8 @@ const writeCaptures = (status = "running", extra = {}) => {
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.txt"), stripAnsi(raw), "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(capture, null, 2)}\n`, "utf8");
   writePngReport(capture);
+  capture.visualArtifacts.pngValidation = validatePngArtifacts();
+  writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(capture, null, 2)}\n`, "utf8");
 };
 
 const finish = (code, message) => {
