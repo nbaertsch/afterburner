@@ -878,4 +878,8 @@ test("runtime modal surfaces actionable health warnings", () => {
     assert.match(frame.body, /Needs attention: 1 queue write error\(s\) · 7 dropped record\(s\) · 2 anomaly\/anomalies/);
     assert.match(frame.body, /Selected event/);
     assert.match(frame.body, /ui\.latency/);
+    const document = JSON.stringify(frame.document);
+    assert.match(document, /bb-modal-health-alert/);
+    assert.match(document, /\"kind\":\"alert\"/);
+    assert.match(document, /Black Box health warnings/);
 });

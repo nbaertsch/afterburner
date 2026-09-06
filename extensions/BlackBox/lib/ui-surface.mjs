@@ -755,6 +755,7 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
                 metricCard(c, "bb-modal-card-signals", "Signals", `${status.analytics?.anomalyCount ?? 0} anomalies`, `${status.analytics?.milestoneCount ?? 0} milestones`, status.analytics?.anomalyCount ? "warning" : "success"),
                 metricCard(c, "bb-modal-card-queue", "Queue", `${status.queue?.records ?? 0} queued`, `${status.queue?.droppedRecords ?? 0} dropped`, status.queue?.droppedRecords ? "warning" : "info")
             ], { id: "bb-modal-status-cards" }),
+            ...modalHealthAlertNodes(c, status, state.lifecycle),
             c.row({ label: "Timeline and detail split", responsive: { collapseBelowColumns: 100, orientation: "vertical" } }, [
                 c.panel({ title: "Metadata timeline", width: "58%" }, [
                     c.table({
@@ -855,13 +856,27 @@ function modalSelectedSummaryLines(record) {
     ];
 }
 
-function modalHealthCalloutLines(status, lifecycle = {}) {
+function modalHealthIssues(status, lifecycle = {}) {
     const issues = [];
     if (lifecycle.backpressure) issues.push("live stream backpressure");
     if (status.queue?.writeErrors) issues.push(`${status.queue.writeErrors} queue write error(s)`);
     if (status.queue?.droppedRecords) issues.push(`${status.queue.droppedRecords} dropped record(s)`);
     if (status.analytics?.anomalyCount) issues.push(`${status.analytics.anomalyCount} anomaly/anomalies`);
+    return issues;
+}
+
+function modalHealthCalloutLines(status, lifecycle = {}) {
+    const issues = modalHealthIssues(status, lifecycle);
     return issues.length ? ["", `Needs attention: ${issues.join(" · ")}`] : [];
+}
+
+function modalHealthAlertNodes(c, status, lifecycle = {}) {
+    const issues = modalHealthIssues(status, lifecycle);
+    if (!issues.length || typeof c.alert !== "function") return [];
+    return [c.alert({ severity: "warning", message: `Needs attention: ${issues.join(" · ")}` }, [], {
+        id: "bb-modal-health-alert",
+        accessibility: { role: "alert", name: "Black Box health warnings" }
+    })];
 }
 
 function modalDetailLines(record) {
