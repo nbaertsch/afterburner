@@ -15,6 +15,13 @@ const option = name => {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : undefined;
 };
+const hasFlag = name => process.argv.includes(name);
+
+if (hasFlag("--help") || hasFlag("-h")) {
+  process.stdout.write(`Usage: node tests\\real-blackbox-modal-tui.mjs [afterburn.exe] [capture-dir] [timeout-ms] [options]\n\nOptions:\n  --afterburn <path>          Afterburner executable to launch.\n  --capture-dir <path>       Directory for raw/text/json/png visual artifacts.\n  --timeout-ms <ms>          End-to-end UAT timeout.\n  --max-open-ms <ms>         Native modal first-open latency budget.\n  --max-reopen-ms <ms>       Native modal reopen latency budget.\n  --max-scroll-ms <ms>       Per-key scroll response budget.\n  --max-refresh-ms <ms>      Refresh action response budget.\n  --max-close-ms <ms>        q close response budget.\n  --max-escape-close-ms <ms> Escape close response budget.\n\nEnvironment overrides use AFTERBURNER_REAL_TUI_* names matching each option.\n`);
+  process.exit(0);
+}
+
 const positional = [];
 for (let index = 2; index < process.argv.length; index++) {
   const value = process.argv[index];

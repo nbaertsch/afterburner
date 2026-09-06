@@ -225,4 +225,5 @@ per-screen PNG captures
 under `artifacts\real-tui` by default. The run fails unless the PNG report and every per-screen
 PNG are present, non-empty, deduplicated in validation output, have valid PNG signatures, use a supported
 8-bit RGB/RGBA pixel format, meet minimum raster dimensions and nonblank pixel diversity, every visual
-evidence manifest entry names a generated screenshot with proof text, and all open/reopen/scroll/refresh/close interactions stay within the harness latency budgets for agent-run visual QA.
+evidence manifest entry names a generated screenshot with proof text, and all open/reopen/scroll/refresh/close interactions stay within the harness latency budgets for agent-run visual QA. Run
+`node tests\real-blackbox-modal-tui.mjs --help` for artifact and latency-budget options.
