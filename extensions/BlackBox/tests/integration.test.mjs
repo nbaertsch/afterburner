@@ -786,6 +786,8 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
     const openFrame = await modalDefinition.open();
     assert.equal(openFrame.title, "Afterburner Black Box Live");
     assert.match(openFrame.body, /Status cards/);
+    assert.match(openFrame.body, /Selected event/);
+    assert.match(openFrame.body, /No metadata event selected/);
     assert.match(openFrame.body, /Metadata timeline table/);
     assert.match(openFrame.body, /Details/);
     assert.match(openFrame.body, /No metadata events recorded yet/);

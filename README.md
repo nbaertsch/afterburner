@@ -218,8 +218,8 @@ the modal broker under a real ConPTY. The interactive picker harness is `tests\n
 For installed end-to-end modal validation, run `npm run test:real-tui:black-box`; it opens a real
 Afterburner/Copilot TUI, bracket-pastes `/black-box-modal` for deterministic command entry, verifies
 the modal remains a bounded overlay on the Copilot backdrop, arrow/Page/Home/End scrolling, Refresh,
-Doctor, close/prompt restore, accessible modal cues, status cards, timeline table semantics, the metadata-only
-fallback/privacy cue, and absence of visible Black Box UI self-noise, and writes raw,
+Doctor, close/prompt restore, accessible modal cues, status cards, selected-event summary, timeline table
+semantics, the metadata-only fallback/privacy cue, and absence of visible Black Box UI self-noise, and writes raw,
 text, machine-readable latency/result JSON, a standalone visual evidence manifest JSON, a combined
 PNG report, and per-screen PNG captures
 under `artifacts\real-tui` by default. The run fails unless the PNG report and every per-screen

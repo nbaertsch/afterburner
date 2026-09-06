@@ -802,6 +802,9 @@ function modalTextBody({ status, records, selected, state, healthTone }) {
         `  Signals   ${fitCell(`${status.analytics?.anomalyCount ?? 0} anomalies`, 12)}  ${status.analytics?.milestoneCount ?? 0} milestones  ${status.queue?.droppedRecords ?? 0} dropped`,
         `  Queue     ${fitCell(`${status.queue?.records ?? 0} queued`, 12)}  ${fitCell(formatBytes(status.queue?.bytes ?? 0), 10)}  ${status.queue?.writeErrors ?? 0} write errors`,
         "",
+        "Selected event",
+        ...(selected ? modalSelectedSummaryLines(selected) : ["  No metadata event selected."]),
+        "",
         "Metadata timeline table",
         ...modalTimelineLines(records),
         "",
@@ -840,6 +843,15 @@ function modalTimelineRow(record, widths) {
         fitCell(Number.isFinite(attributes.durationMs) ? `${attributes.durationMs}ms` : "", widths.duration),
         fitCell(typeof attributes.success === "boolean" ? String(attributes.success) : "", widths.success)
     ].join(" │ ");
+}
+
+function modalSelectedSummaryLines(record) {
+    const attributes = sanitizeAttributes(record.attributes ?? {});
+    const latency = Number.isFinite(attributes.durationMs) ? `${attributes.durationMs}ms` : "duration n/a";
+    const outcome = typeof attributes.success === "boolean" ? (attributes.success ? "success" : "failed") : "outcome n/a";
+    return [
+        `  ${fitCell(shortTimestamp(record.timestamp), 18)}  ${fitCell(record.kind ?? "event", 9)}  ${fitCell(record.eventType ?? "unknown", 34)}  ${fitCell(record.severity ?? "info", 8)}  ${latency}  ${outcome}`
+    ];
 }
 
 function modalDetailLines(record) {
