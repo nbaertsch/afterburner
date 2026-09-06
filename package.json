@@ -7,7 +7,7 @@
     "test": "go test ./... && npm run test:black-box && npm run test:compatibility",
     "test:native": "go test ./...",
     "test:black-box": "npm test --prefix extensions/BlackBox",
-    "test:compatibility": "node --test tests/request-compatibility.test.mjs",
+    "test:compatibility": "node --test tests/request-compatibility.test.mjs tests/replay-blackbox-tui.test.mjs",
     "test:real-tui:black-box": "node tests/real-blackbox-modal-tui.mjs",
     "replay:real-tui:black-box": "node tests/replay-blackbox-tui.mjs"
   },
