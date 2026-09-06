@@ -50,16 +50,30 @@ let doctorSeen = false;
 let closeSent = false;
 let finished = false;
 
-const writeCaptures = () => {
+const result = (status, extra = {}) => ({
+  schemaVersion: 1,
+  status,
+  afterburn,
+  startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+  completedAt: new Date().toISOString(),
+  commandSent: Boolean(commandSentAt),
+  modalSeen: Boolean(modalSeenAt),
+  doctorAction: doctorSeen,
+  openLatencyMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
+  ...extra
+});
+
+const writeCaptures = (status = "running", extra = {}) => {
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.raw"), raw, "utf8");
   writeFileSync(join(captureDirectory, "blackbox-modal-tui.txt"), stripAnsi(raw), "utf8");
+  writeFileSync(join(captureDirectory, "blackbox-modal-tui-result.json"), `${JSON.stringify(result(status, extra), null, 2)}\n`, "utf8");
 };
 
 const finish = (code, message) => {
   if (finished) return;
   finished = true;
   clearTimeout(timeout);
-  writeCaptures();
+  writeCaptures(code === 0 ? "passed" : "failed", { message });
   try { child.kill(); } catch {}
   if (code === 0) process.stdout.write(`${message}\n`);
   else process.stderr.write(`${message}\n--- tail ---\n${stripAnsi(raw).slice(-6000)}\n`);
@@ -101,6 +115,14 @@ child.onData(data => {
   if (!commandSentAt && runtimeReady && promptReady) {
     commandSentAt = Date.now();
     scheduleWrite("/black-box-modal\r", 2500);
+    return;
+  }
+  if (commandSentAt && !modalSeenAt && /Unknown command:\s*\/black-box-modal/i.test(recent)) {
+    finish(1, "Copilot rejected /black-box-modal as an unknown command");
+    return;
+  }
+  if (commandSentAt && !modalSeenAt && /Black Box modal unavailable/i.test(recent)) {
+    finish(1, "Black Box reported modal unavailable instead of opening native modal");
     return;
   }
 
