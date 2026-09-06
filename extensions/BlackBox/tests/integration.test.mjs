@@ -14,7 +14,7 @@ import {
     registerEnterpriseSurface,
     subscribeObservability
 } from "../lib/ui-surface.mjs";
-import { activate } from "../runtime/extension.mjs";
+import { MODAL_ACTIVATION_POLL_MS, activate } from "../runtime/extension.mjs";
 import { cleanup, completeConfig, workDirectory } from "./helpers.mjs";
 
 test("configuration defaults use 500 MiB retention and 8 MiB segments", async t => {
@@ -661,6 +661,30 @@ test("installed-like activation uses runtime api.ui without repository UI import
     assert.equal(rendered[0].id, "afterburner-black-box-live");
     assert.equal(rendered[0].document.surfaceId, "afterburner-black-box-live");
     assert.equal(modalDefinitions[0].id, "afterburner-black-box-live");
+    await instance.dispose();
+});
+
+test("runtime modal activation poll stays inside interactive latency budget", async t => {
+    await configureRuntimeEnvironment(t, "runtime-modal-activation-latency");
+    const intervals = [];
+    const originalSetInterval = globalThis.setInterval;
+    globalThis.setInterval = (handler, delayMs, ...args) => {
+        intervals.push(delayMs);
+        return originalSetInterval(handler, delayMs, ...args);
+    };
+    t.after(() => { globalThis.setInterval = originalSetInterval; });
+
+    const instance = await activate({
+        ui: createFakeRuntimeUI(),
+        registerRuntimeObserver: () => () => {},
+        registerModalCanvas: definition => ({ open: async () => definition.open(), close: async () => ({ ok: true }), dispose() {} })
+    });
+    t.after(() => instance?.dispose());
+
+    assert.ok(MODAL_ACTIVATION_POLL_MS <= 100, `modal activation poll ${MODAL_ACTIVATION_POLL_MS}ms exceeds latency budget`);
+    assert.ok(intervals.includes(MODAL_ACTIVATION_POLL_MS));
+    const opened = await instance.service.requestModalOpen({ timeoutMs: 2000 });
+    assert.equal(opened.ok, true);
     await instance.dispose();
 });
 

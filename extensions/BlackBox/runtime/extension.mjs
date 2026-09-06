@@ -3,6 +3,7 @@ import { buildEnterpriseModalFrame, registerEnterpriseSurface, subscribeObservab
 
 const INSTANCE = Symbol.for("afterburner.black-box.runtime");
 const LIVE_MODAL_ID = "afterburner-black-box-live";
+export const MODAL_ACTIVATION_POLL_MS = 100;
 const MODAL_REFRESH_THROTTLE_MS = 1000;
 
 function isolatedWarning(code) {
@@ -221,24 +222,31 @@ export async function activate(api = {}) {
         });
         const modal = registerLiveModal(api, service);
         let activationTimer = null;
+        let activationPolling = false;
         const pollActivationRequests = async () => {
-            if (!modal) return;
-            let requests = [];
-            try { requests = await service.consumeModalOpenRequests(); }
-            catch { return; }
-            for (const request of requests) {
-                if (request.surfaceId !== "afterburner-black-box-live") continue;
-                try {
-                    await modal.open(request.input ?? {});
-                    await service.completeModalOpenRequest(request, { ok: true });
-                } catch {
-                    isolatedWarning("modal-canvas-open-failed");
-                    await service.completeModalOpenRequest(request, { ok: false, error: "modal-canvas-open-failed" }).catch(() => {});
+            if (!modal || activationPolling) return;
+            activationPolling = true;
+            try {
+                let requests = [];
+                try { requests = await service.consumeModalOpenRequests(); }
+                catch { return; }
+                for (const request of requests) {
+                    if (request.surfaceId !== "afterburner-black-box-live") continue;
+                    try {
+                        await modal.open(request.input ?? {});
+                        await service.completeModalOpenRequest(request, { ok: true });
+                    } catch {
+                        isolatedWarning("modal-canvas-open-failed");
+                        await service.completeModalOpenRequest(request, { ok: false, error: "modal-canvas-open-failed" }).catch(() => {});
+                    }
                 }
+            }
+            finally {
+                activationPolling = false;
             }
         };
         if (modal) {
-            activationTimer = setInterval(pollActivationRequests, 500);
+            activationTimer = setInterval(pollActivationRequests, MODAL_ACTIVATION_POLL_MS);
             activationTimer.unref?.();
             await pollActivationRequests();
         }
