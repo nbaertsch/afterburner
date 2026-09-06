@@ -61,6 +61,10 @@ let activeScrollRawLength = 0;
 const scrollSentAt = {};
 const scrollSeenAt = {};
 const scrollRaw = {};
+let refreshSentAt = 0;
+let refreshSeenAt = 0;
+let refreshRawLength = 0;
+let refreshRaw = "";
 let doctorSeen = false;
 let doctorCaptureScheduled = false;
 let closeSent = false;
@@ -81,6 +85,8 @@ const result = (status, extra = {}) => ({
     passed: Boolean(scrollSeenAt[step.name]),
     latencyMs: scrollSentAt[step.name] && scrollSeenAt[step.name] ? scrollSeenAt[step.name] - scrollSentAt[step.name] : null
   }])),
+  refreshAction: Boolean(refreshSeenAt),
+  refreshLatencyMs: refreshSentAt && refreshSeenAt ? refreshSeenAt - refreshSentAt : null,
   doctorAction: doctorSeen,
   closeRestored: Boolean(closeRestoredAt),
   openLatencyMs: commandSentAt && modalSeenAt ? modalSeenAt - commandSentAt : null,
@@ -166,6 +172,7 @@ const visualReport = capture => {
   const sections = [
     ["Modal open screen", modalOpenRaw ? renderTerminalScreen(modalOpenRaw) : ""],
     ...scrollSteps.map(step => [step.title, scrollRaw[step.name] ? renderTerminalScreen(scrollRaw[step.name]) : ""]),
+    ["Refresh action screen", refreshRaw ? renderTerminalScreen(refreshRaw) : ""],
     ["Doctor action screen", doctorRaw ? renderTerminalScreen(doctorRaw) : ""],
     ["Close restore screen", closeRestoreRaw ? renderTerminalScreen(closeRestoreRaw) : ""]
   ].filter(([, body]) => body);
@@ -292,15 +299,27 @@ child.onData(data => {
         activeScrollRawLength = raw.length;
         child.write(nextStep.key);
       } else {
-        child.write("d");
+        refreshSentAt = Date.now();
+        refreshRawLength = raw.length;
+        child.write("r");
       }
     }, 250).unref?.();
+    return;
+  }
+  if (refreshSentAt && !refreshSeenAt && /Afterburner Black Box Live/i.test(stripAnsi(raw.slice(refreshRawLength)))) {
+    refreshSeenAt = Date.now();
+    refreshRaw = raw;
+    setTimeout(() => child.write("d"), 250).unref?.();
     return;
   }
   if (modalSeenAt && !doctorSeen && /Afterburner Black Box Doctor/i.test(text)) {
     const missing = scrollSteps.filter(step => !scrollSeenAt[step.name]).map(step => step.name);
     if (missing.length > 0) {
       finish(1, `Doctor action rendered before scroll validation completed: ${missing.join(", ")}`);
+      return;
+    }
+    if (!refreshSeenAt) {
+      finish(1, "Doctor action rendered before refresh validation completed");
       return;
     }
     doctorSeen = true;
@@ -342,6 +361,7 @@ const timeout = setTimeout(() => {
     const missing = scrollSteps.filter(step => !scrollSeenAt[step.name]).map(step => step.name).join(", ");
     finish(1, `timed out before Black Box scroll validation completed: ${missing}`);
   }
+  else if (!refreshSeenAt) finish(1, "timed out before Black Box refresh action rendered");
   else if (!doctorSeen) finish(1, "timed out before Black Box doctor action rendered");
   else if (!closeSent) finish(1, "timed out before Black Box close key was sent");
   else finish(1, "timed out before Black Box modal close restored the Copilot prompt");
