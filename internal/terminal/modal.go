@@ -1628,29 +1628,34 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 		if strings.Contains(strings.ToLower(label), "status cards") {
 			label = "Status cards"
 		}
-		appendModalLine(lines, firstNonEmpty(label, "Status cards"))
+		appendModalSection(lines, firstNonEmpty(label, "Status cards"))
 		appendModalDocumentChildren(lines, node.Children, context)
 	case "card":
 		appendModalCardLine(lines, node)
 	case "progress":
 		label := firstNonEmpty(modalStringProp(node.Props, "label"), "Progress")
+		if modalHasLinePrefix(*lines, label+":") {
+			return
+		}
 		status := modalStringProp(node.Props, "status")
 		if status == "" {
 			status = fmt.Sprint(node.Props["value"])
 		}
-		appendModalLine(lines, label+": "+status)
+		appendModalLine(lines, label+": "+modalProgressBar(firstNonEmpty(status, fmt.Sprint(node.Props["value"])))+" "+status)
 	case "sparkline":
 		label := firstNonEmpty(modalStringProp(node.Props, "label"), "Signal trend")
+		if modalHasLinePrefix(*lines, label+":") {
+			return
+		}
 		appendModalLine(lines, label+": "+modalSparklineProp(node.Props["values"]))
 	case "alert":
-		appendModalLine(lines, firstNonEmpty(modalStringProp(node.Props, "message"), modalStringProp(node.Props, "title")))
+		appendModalLine(lines, "⚠ "+firstNonEmpty(modalStringProp(node.Props, "message"), modalStringProp(node.Props, "title")))
 	case "panel":
 		title := modalStringProp(node.Props, "title")
 		if strings.EqualFold(title, "Details") {
 			title = "Selected event"
 		}
-		appendModalLine(lines, "")
-		appendModalLine(lines, title)
+		appendModalSection(lines, title)
 		appendModalDocumentChildren(lines, node.Children, title)
 	case "table":
 		appendModalTableLines(lines, node, context)
@@ -1683,7 +1688,14 @@ func appendModalCardLine(lines *[]string, node modalDocumentNode) {
 			parts = append(parts, modalStringProp(child.Props, "value"))
 		}
 	}
-	appendModalLine(lines, "  "+strings.Join(nonEmptyModalParts(parts), "  "))
+	cleaned := nonEmptyModalParts(parts)
+	if len(cleaned) == 0 {
+		return
+	}
+	if len(cleaned) >= 2 {
+		cleaned[1] = modalToneGlyph(firstNonEmpty(modalStringProp(node.Props, "tone"), cleaned[1])) + " " + cleaned[1]
+	}
+	appendModalLine(lines, "  • "+strings.Join(cleaned, "  │  "))
 }
 
 func appendModalTableLines(lines *[]string, node modalDocumentNode, context string) {
@@ -1709,11 +1721,13 @@ func appendModalTableLines(lines *[]string, node modalDocumentNode, context stri
 		}
 		headers = append(headers, header)
 	}
+	columnWidths := modalTableColumnWidths(headers, 0)
 	if len(headers) > 0 {
-		appendModalLine(lines, strings.Join(headers, " │ "))
+		appendModalLine(lines, modalTableRow(headers, columnWidths))
+		appendModalLine(lines, modalTableDivider(columnWidths))
 	}
 	for index, row := range rows {
-		if index >= 12 {
+		if index >= 10 {
 			appendModalLine(lines, fmt.Sprintf("… %d more row(s)", len(rows)-index))
 			break
 		}
@@ -1724,9 +1738,9 @@ func appendModalTableLines(lines *[]string, node modalDocumentNode, context stri
 		}
 		cells := make([]string, 0, len(columnIDs))
 		for _, id := range columnIDs {
-			cells = append(cells, fmt.Sprint(cellValues[id]))
+			cells = append(cells, modalTableCellValue(id, cellValues[id]))
 		}
-		appendModalLine(lines, strings.Join(cells, " │ "))
+		appendModalLine(lines, modalTableRow(cells, columnWidths))
 	}
 }
 
@@ -1737,22 +1751,45 @@ func modalPriorityBodyLines(body string) []string {
 	bodyLines := strings.Split(printableModalText(body, true), "\n")
 	var lines []string
 	captureSelected := false
+	captureResult := false
 	for _, line := range bodyLines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			if captureSelected {
 				captureSelected = false
 			}
+			if captureResult {
+				captureResult = false
+			}
 			continue
 		}
-		if strings.HasPrefix(trimmed, "Storage usage:") || strings.HasPrefix(trimmed, "Signal trend:") || strings.HasPrefix(trimmed, "Needs attention:") {
-			appendModalLine(&lines, trimmed)
+		if strings.HasPrefix(trimmed, "Storage usage:") {
+			appendModalLine(&lines, modalProgressText(trimmed))
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Signal trend:") {
+			appendModalLine(&lines, "Signal trend: "+strings.TrimSpace(strings.TrimPrefix(trimmed, "Signal trend:")))
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Needs attention:") {
+			appendModalLine(&lines, "⚠ "+trimmed)
+			continue
+		}
+		if strings.EqualFold(trimmed, "Doctor") || strings.EqualFold(trimmed, "Export") {
+			appendModalSection(&lines, trimmed)
+			captureResult = true
 			continue
 		}
 		if strings.EqualFold(trimmed, "Selected event") {
-			appendModalLine(&lines, "")
-			appendModalLine(&lines, trimmed)
+			appendModalSection(&lines, trimmed)
 			captureSelected = true
+			continue
+		}
+		if captureResult {
+			if strings.EqualFold(trimmed, "Selected event") {
+				captureResult = false
+			}
+			appendModalLine(&lines, "  "+trimmed)
 			continue
 		}
 		if captureSelected {
@@ -1760,10 +1797,142 @@ func modalPriorityBodyLines(body string) []string {
 				captureSelected = false
 				continue
 			}
-			appendModalLine(&lines, trimmed)
+			appendModalLine(&lines, "  "+trimmed)
 		}
 	}
 	return lines
+}
+
+func appendModalSection(lines *[]string, title string) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return
+	}
+	appendModalLine(lines, "")
+	appendModalLine(lines, "▌ "+title)
+}
+
+func modalToneGlyph(value string) string {
+	lower := strings.ToLower(value)
+	switch {
+	case strings.Contains(lower, "success"), strings.Contains(lower, "enabled"), strings.Contains(lower, "healthy"):
+		return "✓"
+	case strings.Contains(lower, "warning"), strings.Contains(lower, "failed"), strings.Contains(lower, "error"), strings.Contains(lower, "dropped"), strings.Contains(lower, "disabled"):
+		return "!"
+	default:
+		return "•"
+	}
+}
+
+func modalHasLinePrefix(lines []string, prefix string) bool {
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func modalProgressText(line string) string {
+	percent := modalFirstPercent(line)
+	if percent < 0 {
+		return line
+	}
+	return line + "  " + modalProgressBar(percent)
+}
+
+func modalFirstPercent(line string) int {
+	for index := 0; index < len(line); index++ {
+		if line[index] < '0' || line[index] > '9' {
+			continue
+		}
+		end := index
+		for end < len(line) && line[end] >= '0' && line[end] <= '9' {
+			end++
+		}
+		if end < len(line) && line[end] == '%' {
+			value, err := strconv.Atoi(line[index:end])
+			if err == nil {
+				return clampInt(value, 0, 100)
+			}
+		}
+		index = end
+	}
+	return -1
+}
+
+func modalProgressBar(value any) string {
+	percent := 0
+	switch typed := value.(type) {
+	case float64:
+		percent = int(typed)
+	case int:
+		percent = typed
+	case string:
+		percent = modalFirstPercent(typed + "%")
+	}
+	percent = clampInt(percent, 0, 100)
+	filled := percent * 10 / 100
+	if percent > 0 && filled == 0 {
+		filled = 1
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", 10-filled)
+}
+
+func modalTableColumnWidths(headers []string, _ int) []int {
+	defaults := []int{20, 9, 30, 8, 8, 7}
+	widths := make([]int, len(headers))
+	for i := range headers {
+		if i < len(defaults) {
+			widths[i] = defaults[i]
+		} else {
+			widths[i] = 12
+		}
+	}
+	return widths
+}
+
+func modalTableRow(cells []string, widths []int) string {
+	parts := make([]string, 0, len(cells))
+	for i, cell := range cells {
+		width := 12
+		if i < len(widths) {
+			width = widths[i]
+		}
+		parts = append(parts, modalFitCell(cell, width))
+	}
+	return strings.Join(parts, " │ ")
+}
+
+func modalTableDivider(widths []int) string {
+	parts := make([]string, 0, len(widths))
+	for _, width := range widths {
+		parts = append(parts, strings.Repeat("─", width))
+	}
+	return strings.Join(parts, "─┼─")
+}
+
+func modalTableCellValue(id string, value any) string {
+	text := fmt.Sprint(value)
+	if text == "<nil>" {
+		return ""
+	}
+	if strings.EqualFold(id, "timestamp") && len(text) >= len("2006-01-02T15:04:05") {
+		text = strings.Replace(text[5:19], "T", " ", 1)
+	}
+	return text
+}
+
+func modalFitCell(value string, width int) string {
+	value = strings.TrimSpace(value)
+	for lipgloss.Width(value) > width && value != "" {
+		runes := []rune(value)
+		value = string(runes[:len(runes)-1])
+	}
+	if lipgloss.Width(value) == width {
+		return value
+	}
+	return value + strings.Repeat(" ", maxInt(0, width-lipgloss.Width(value)))
 }
 
 func modalStringProp(props map[string]any, key string) string {
