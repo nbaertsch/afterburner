@@ -11,6 +11,7 @@ import (
 	"github.com/nbaertsch/afterburner/internal/ui/policy"
 	"github.com/nbaertsch/afterburner/internal/ui/protocol"
 	"github.com/nbaertsch/afterburner/internal/ui/render"
+	"github.com/nbaertsch/afterburner/internal/ui/surface"
 )
 
 type SimulationOptions struct {
@@ -114,6 +115,7 @@ func Doctor(homeRoot string) Report {
 	report := NewReport("", "")
 	report.Add("doctor.protocol", "protocol", StatusPass, "afterburner.ui protocol is available", protocol.CurrentRevision())
 	report.Add("doctor.components", "components", StatusPass, "component catalog is available", map[string]any{"supported": len(SortedSupportedComponentKinds())})
+	report.Add("doctor.surfaces", "surfaces", StatusPass, "surface catalog is available", map[string]any{"supported": len(surface.PublicCatalog())})
 	report.Add("doctor.capabilities", "capabilities", StatusPass, "core UI capability descriptors are available", map[string]any{"count": len(capability.CoreDescriptors())})
 	if _, err := LoadFixture("all-components"); err != nil {
 		report.Add("doctor.fixtures", "fixtures", StatusFail, err.Error(), nil)

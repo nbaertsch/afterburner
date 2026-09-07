@@ -164,6 +164,20 @@ func TestGrantServicePersistsDeterministically(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsSurfaceCatalog(t *testing.T) {
+	report := Doctor("")
+	found := false
+	for _, check := range report.Checks {
+		if check.ID == "doctor.surfaces" && check.Status == StatusPass && strings.Contains(check.Message, "surface catalog") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("doctor did not report surface catalog health: %#v", report.Checks)
+	}
+}
+
 func TestManifestBriefIncludesUICapabilities(t *testing.T) {
 	entry := registry.Entry{
 		Manifest: registry.Manifest{
