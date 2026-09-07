@@ -1165,7 +1165,8 @@ func (r *TerminalModalRenderer) ScrollModal(key string) bool {
 	if !r.active || r.writer == nil {
 		return false
 	}
-	layout := newModalLayout(r.screen.Snapshot())
+	snapshot := r.screen.Snapshot()
+	layout := newModalLayout(snapshot)
 	bodyLines := modalFrameBodyLines(r.activeFrame, layout.innerWidth)
 	maxScroll := maxInt(0, len(bodyLines)-layout.bodyRows)
 	if maxScroll == 0 {
@@ -1193,7 +1194,7 @@ func (r *TerminalModalRenderer) ScrollModal(key string) bool {
 	if r.scrollOffset == oldOffset {
 		return false
 	}
-	body, scrollOffset := renderModalFrame(r.screen.Snapshot(), r.activeFrame, r.scrollOffset)
+	body, scrollOffset := renderModalFrame(snapshot, r.activeFrame, r.scrollOffset)
 	r.scrollOffset = scrollOffset
 	_, _ = io.WriteString(r.writer, body)
 	return true
