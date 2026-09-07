@@ -9,6 +9,13 @@ const publicKinds = [
 
 test("runtime SDK exposes every public component kind as a composable builder", async () => {
   assert.deepEqual(ui.componentKinds, publicKinds);
+  assert.deepEqual(ui.componentCatalog.map(entry => entry.kind), publicKinds);
+  assert.ok(Object.isFrozen(ui.componentCatalog));
+  for (const entry of ui.componentCatalog) {
+    assert.equal(entry.stability, "stable", `catalog stability for ${entry.kind}`);
+    assert.equal(typeof entry.description, "string", `catalog description for ${entry.kind}`);
+    assert.ok(entry.description.length > 0, `catalog description for ${entry.kind}`);
+  }
   for (const kind of publicKinds) {
     assert.equal(typeof ui.components[kind], "function", `components.${kind}`);
     assert.equal(typeof ui[kind], "function", `named export ${kind}`);
