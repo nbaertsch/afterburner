@@ -287,7 +287,8 @@ function surfaceMetadata() {
             navigation: ["Tab", "Shift+Tab", "ArrowUp", "ArrowDown", "PageUp", "PageDown"],
             shortcuts: { refresh: "r", doctor: "d", export: "e", close: "q", commandPalette: "Ctrl+K" }
         },
-        mouse: { selectableRows: true, toolbarButtons: true, splitPaneResize: "host-mediated" },
+        richPanelMouse: { selectableRows: true, toolbarButtons: true, splitPaneResize: "host-mediated" },
+        nativeTerminalModal: { input: "keyboard-only", mouse: false },
         accessibility: {
             role: "application",
             label: "Afterburner Black Box metadata observability surface",

@@ -477,6 +477,9 @@ test("enterprise surface defines schema, accessible tree, actions, fallback, pat
     assert.equal(registered[0].kind, "panel");
     assert.deepEqual(registered[0].actions.map(action => action.id), ["refresh", "doctor", "export", "select", "filter", "sort", "close"]);
     assert.equal(registered[0].metadata.privacy.metadataOnly, true);
+    assert.equal(registered[0].metadata.nativeTerminalModal.input, "keyboard-only");
+    assert.equal(registered[0].metadata.nativeTerminalModal.mouse, false);
+    assert.equal(registered[0].metadata.richPanelMouse.toolbarButtons, true);
     assert.ok(registered[0].metadata.grants.some(grant => grant.capability === "ui.observability.black-box.sink"));
 
     const opened = await enterprise.open({ filter: "model", sort: { field: "timestamp", direction: "desc" } });

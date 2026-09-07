@@ -35,7 +35,7 @@ explicitly runs `/black-box`, `/black-box-modal`, `/black-box-tail`, `/black-box
 - `/black-box-export [N]` writes a sanitized local export bundle.
 - `/black-box-doctor` checks configuration, storage, native event tailing, and recovery health.
 
-Inside the native terminal modal:
+Inside the native terminal modal (keyboard-only by design):
 
 - `Tab` and `Shift+Tab` move focus across the action bar.
 - `Enter` or `Space` activates the focused action.
@@ -67,7 +67,8 @@ responsive timeline/detail split, anomaly and milestone sections, storage health
 command palette, and refresh/doctor/export/close/select/filter/sort actions. The native terminal
 modal is opened only through the runtime-owned activation queue; Black Box does not register a
 generic Copilot canvas fallback. The surface declares its UI grants in `afterburner.json`, carries
-keyboard, accessibility, and localization metadata, coalesces live updates into bounded patches, and
+keyboard, accessibility, and localization metadata, and scopes mouse affordances to rich panel hosts
+only; the native terminal modal is keyboard-only. It coalesces live updates into bounded patches and
 preserves selection/filter/sort across reconnect recovery.
 
 Black Box also registers the optional `black-box.ui.events` observability sink. It accepts only UI
