@@ -307,12 +307,20 @@ func roleForKind(kind string) Role {
 }
 
 func accessibleName(source SourceNode) string {
-	for _, key := range []string{"ariaLabel", "label", "title", "name", "text", "value", "markdown", "code", "message", "content", "placeholder", "alt"} {
+	keys := []string{"ariaLabel", "label", "title", "name", "text", "value", "markdown", "code", "message", "content", "placeholder", "alt"}
+	if isSecretInput(source) {
+		keys = []string{"ariaLabel", "label", "title", "name", "placeholder"}
+	}
+	for _, key := range keys {
 		if value := stringProp(source.Props, key); value != "" {
 			return value
 		}
 	}
 	return source.ID
+}
+
+func isSecretInput(source SourceNode) bool {
+	return strings.Contains(strings.ToLower(source.Kind), "password") || strings.EqualFold(stringProp(source.Props, "type"), "password") || boolProp(source.Props, "secret", false)
 }
 
 func isDialogKind(kind string) bool {

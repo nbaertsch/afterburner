@@ -87,6 +87,21 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 	}
 }
 
+func TestSecretInputsDoNotExposeValueAsAccessibleName(t *testing.T) {
+	tree := SourceTree{SurfaceID: "s", Root: SourceNode{ID: "root", Kind: "application", Children: []SourceNode{
+		{ID: "password", Kind: "passwordInput", Props: map[string]any{"value": "super-secret", "placeholder": "Password"}},
+		{ID: "typed", Kind: "textInput", Props: map[string]any{"type": "password", "value": "hidden-token"}},
+	}}}
+	projected := Project(tree, ProjectionOptions{KeyboardOnly: true, Now: func() time.Time { return time.Unix(4, 0).UTC() }})
+	lines := strings.Join(Linearize(projected), "\n")
+	if strings.Contains(lines, "super-secret") || strings.Contains(lines, "hidden-token") {
+		t.Fatalf("secret input value leaked in accessibility projection: %q", lines)
+	}
+	if !strings.Contains(lines, "Password") || !strings.Contains(lines, "typed") {
+		t.Fatalf("secret inputs should keep safe labels or IDs: %q", lines)
+	}
+}
+
 func TestLiveRegionThrottlerSummarizes(t *testing.T) {
 	throttler := LiveRegionThrottler{MinInterval: time.Second, MaxItems: 2}
 	now := time.Unix(1, 0)
