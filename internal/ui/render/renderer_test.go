@@ -93,6 +93,21 @@ func TestSupportedCatalogIncludesW0RequestedComponents(t *testing.T) {
 	}
 }
 
+func TestRendererSupportedKindsArePublicExceptRoot(t *testing.T) {
+	public := map[component.Kind]bool{}
+	for _, entry := range component.PublicCatalog() {
+		public[entry.Kind] = true
+	}
+	for _, kind := range SupportedComponentKinds() {
+		if kind == kindRoot {
+			continue
+		}
+		if !public[kind] {
+			t.Fatalf("renderer supports non-public component kind %q", kind)
+		}
+	}
+}
+
 func TestRendererConsumesSDKShapedCatalogProps(t *testing.T) {
 	kinds := SupportedComponentKinds()
 	for _, kind := range kinds {
