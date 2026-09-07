@@ -18,11 +18,13 @@ under `AFTERBURNER_HOME\extension-data\black-box` and exposes `/black-box`, `/bl
 When the Afterburner terminal broker is attached, the runtime opens a host-rendered overlay with
 Copilot still running underneath. When the UI host, terminal broker, or required grant is absent,
 Black Box prints an explicit deterministic text fallback instead of claiming that an interactive
-view opened.
+view opened. Pending modal activation requests are session-scoped and startup-scoped so stale
+requests from earlier runs are discarded instead of auto-opening the modal on startup.
 
 Black Box is silent by default: it never writes automatic event or anomaly messages into the user
-timeline. Timeline output occurs only after the user explicitly runs `/black-box`, `/black-box-modal`,
-`/black-box-tail`, `/black-box-doctor`, or `/black-box-export`.
+timeline and never auto-opens the modal. Timeline or modal output occurs only after the user
+explicitly runs `/black-box`, `/black-box-modal`, `/black-box-tail`, `/black-box-doctor`, or
+`/black-box-export`.
 
 ## Commands and modal controls
 
