@@ -33,10 +33,11 @@ Discover the host-supported UI contract before authoring or reviewing an extensi
 ```powershell
 afterburn ui catalog
 afterburn ui catalog components
-afterburn ui catalog capabilities --json
+afterburn ui catalog --find observability
+afterburn ui catalog capabilities --find sink --json
 ```
 
-The catalog output is generated from the same component, surface, and capability registries enforced by validation, so it is the source of truth for manifest `ui.components`, `ui.surfaces[].kind`, and `ui.capabilities` values. Filter by `components`, `surfaces`, or `capabilities` when reviewing one part of the contract.
+The catalog output is generated from the same component, surface, and capability registries enforced by validation, so it is the source of truth for manifest `ui.components`, `ui.surfaces[].kind`, and `ui.capabilities` values. Filter by `components`, `surfaces`, or `capabilities` when reviewing one part of the contract, and add `--find <text>` to search names, stability, and descriptions.
 
 ## Components and lifecycle
 

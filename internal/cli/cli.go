@@ -603,7 +603,7 @@ func runUICommand(ctx context.Context, args []string, opts Options) (int, error)
 		io.WriteString(opts.Stdout, tooling.HumanReport(report))
 		return statusExit(report), nil
 	case "catalog":
-		section, asJSON, err := parseCatalogArgs(args)
+		section, query, asJSON, err := parseCatalogArgs(args)
 		if err != nil {
 			return 2, err
 		}
@@ -611,6 +611,7 @@ func runUICommand(ctx context.Context, args []string, opts Options) (int, error)
 		if err != nil {
 			return 2, err
 		}
+		catalog = tooling.SearchCatalog(catalog, query)
 		if asJSON {
 			return writeToolingJSON(opts.Stdout, catalog)
 		}
@@ -808,23 +809,31 @@ func runUICommand(ctx context.Context, args []string, opts Options) (int, error)
 	}
 }
 
-func parseCatalogArgs(args []string) (string, bool, error) {
+func parseCatalogArgs(args []string) (string, string, bool, error) {
 	asJSON := false
 	section := "all"
-	usage := "usage: afterburn ui catalog [--json] [components|surfaces|capabilities]"
-	for _, arg := range args {
+	query := ""
+	usage := "usage: afterburn ui catalog [--json] [--find <text>] [components|surfaces|capabilities]"
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		switch arg {
 		case "--json":
 			asJSON = true
+		case "--find":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return "", "", false, errors.New(usage)
+			}
+			i++
+			query = args[i]
 		default:
 			if section == "all" {
 				section = arg
 			} else {
-				return "", false, errors.New(usage)
+				return "", "", false, errors.New(usage)
 			}
 		}
 	}
-	return section, asJSON, nil
+	return section, query, asJSON, nil
 }
 
 func parseTraceArgs(args []string) (string, bool, bool, error) {
@@ -1028,7 +1037,7 @@ Usage:
   afterburn extension <command>
   afterburn core install
   afterburn ui doctor [--json]
-  afterburn ui catalog [--json] [components|surfaces|capabilities]
+  afterburn ui catalog [--json] [--find <text>] [components|surfaces|capabilities]
   afterburn ui inspect [--json] <extension>
   afterburn ui trace --extension <id> --redacted [--json]
   afterburn ui validate-manifest [--json] <path>

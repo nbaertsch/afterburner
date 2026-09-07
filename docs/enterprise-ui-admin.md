@@ -7,12 +7,13 @@ Afterburner exposes UI diagnostics and policy operations under `afterburn ui ...
 ```powershell
 afterburn ui doctor --json
 afterburn ui catalog
-afterburn ui catalog capabilities --json
+afterburn ui catalog --find observability
+afterburn ui catalog capabilities --find sink --json
 afterburn ui inspect --json black-box
 afterburn ui trace --extension black-box --redacted --json
 ```
 
-Catalog output is generated from the same public component, surface, and capability registries that manifest and grant validation enforce. Use it during reviews to catch unsupported surface kinds, component declarations, or capability grants before installation. Trace output is deterministic and metadata-first. When Black Box is installed, the viewer reads its metadata-only JSONL records from `extension-data\black-box` and keeps prompt, response, source, token, and tool body fields redacted.
+Catalog output is generated from the same public component, surface, and capability registries that manifest and grant validation enforce. Use it during reviews to catch unsupported surface kinds, component declarations, or capability grants before installation; add `--find <text>` to search names and descriptions without paging through the full contract. Trace output is deterministic and metadata-first. When Black Box is installed, the viewer reads its metadata-only JSONL records from `extension-data\black-box` and keeps prompt, response, source, token, and tool body fields redacted.
 
 ## Policy and grants
 

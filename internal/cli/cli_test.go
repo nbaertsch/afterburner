@@ -90,6 +90,26 @@ func TestUICatalogCommandCanFilterSections(t *testing.T) {
 	}
 }
 
+func TestUICatalogCommandCanSearch(t *testing.T) {
+	var stdout bytes.Buffer
+	code, err := Run(context.Background(), []string{"ui", "catalog", "--find", "observability"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("Run returned code=%d err=%v output=%s", code, err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Capabilities") || !strings.Contains(stdout.String(), "ui.observability.black-box.sink") || strings.Contains(stdout.String(), "button") {
+		t.Fatalf("searched catalog output is wrong: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	code, err = Run(context.Background(), []string{"ui", "catalog", "components", "--find", "markdown", "--json"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("Run returned code=%d err=%v output=%s", code, err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "\"kind\": \"markdown\"") || strings.Contains(stdout.String(), "\"surfaces\": [") || strings.Contains(stdout.String(), "\"capabilities\": [") {
+		t.Fatalf("searched JSON catalog output is wrong: %q", stdout.String())
+	}
+}
+
 func TestUIValidateManifestCommand(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "extension.mjs"), []byte("export {};"), 0o600); err != nil {

@@ -45,6 +45,39 @@ func FilterCatalog(catalog PublicCatalog, section string) (PublicCatalog, error)
 	return filtered, nil
 }
 
+func SearchCatalog(catalog PublicCatalog, query string) PublicCatalog {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return catalog
+	}
+	filtered := PublicCatalog{Protocol: catalog.Protocol}
+	for _, entry := range catalog.Components {
+		if catalogTextMatches(query, string(entry.Kind), string(entry.Stability), entry.Description) {
+			filtered.Components = append(filtered.Components, entry)
+		}
+	}
+	for _, entry := range catalog.Surfaces {
+		if catalogTextMatches(query, string(entry.Kind), string(entry.Stability), entry.Description) {
+			filtered.Surfaces = append(filtered.Surfaces, entry)
+		}
+	}
+	for _, entry := range catalog.Capabilities {
+		if catalogTextMatches(query, string(entry.ID), string(entry.Stability), entry.Description) {
+			filtered.Capabilities = append(filtered.Capabilities, entry)
+		}
+	}
+	return filtered
+}
+
+func catalogTextMatches(query string, values ...string) bool {
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), query) {
+			return true
+		}
+	}
+	return false
+}
+
 func FormatCatalog(catalog PublicCatalog) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "Afterburner UI %s revision %d\n", catalog.Protocol.Protocol, catalog.Protocol.Revision)
