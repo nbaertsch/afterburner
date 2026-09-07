@@ -1917,6 +1917,16 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 		}
 		appendModalSection(lines, title)
 		appendModalDocumentChildren(lines, node.Children, title)
+	case "list", "tree":
+		appendModalListLines(lines, node)
+	case "timeline", "log":
+		appendModalTimelineLines(lines, node)
+	case "tabs":
+		appendModalLine(lines, modalTabsLine(node))
+	case "commandPalette":
+		appendModalLine(lines, modalCommandPaletteLine(node))
+	case "keybindingHint":
+		appendModalLine(lines, modalKeybindingHintLine(node))
 	case "table":
 		appendModalTableLines(lines, node, context)
 	case "markdown":
@@ -2028,6 +2038,104 @@ func modalChoiceText(props map[string]any) string {
 		}
 	}
 	return firstNonEmpty(selected, modalStringProp(props, "placeholder"), "none")
+}
+
+func appendModalListLines(lines *[]string, node modalDocumentNode) {
+	appendModalSection(lines, firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), strings.Title(node.Kind)))
+	items, _ := node.Props["items"].([]any)
+	if len(items) == 0 && len(node.Children) > 0 {
+		for _, child := range node.Children {
+			appendModalLine(lines, "  • "+modalNodeSummary(child))
+		}
+		return
+	}
+	for index, item := range items {
+		if index >= 12 {
+			appendModalLine(lines, fmt.Sprintf("  … %d more item(s)", len(items)-index))
+			break
+		}
+		appendModalLine(lines, "  • "+modalValueSummary(item))
+	}
+}
+
+func appendModalTimelineLines(lines *[]string, node modalDocumentNode) {
+	appendModalSection(lines, firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), strings.Title(node.Kind)))
+	items, _ := node.Props["items"].([]any)
+	if len(items) == 0 && len(node.Children) > 0 {
+		for _, child := range node.Children {
+			appendModalLine(lines, "  • "+modalNodeSummary(child))
+		}
+		return
+	}
+	for index, item := range items {
+		if index >= 12 {
+			appendModalLine(lines, fmt.Sprintf("  … %d more event(s)", len(items)-index))
+			break
+		}
+		entry, _ := item.(map[string]any)
+		if entry == nil {
+			appendModalLine(lines, "  • "+modalValueSummary(item))
+			continue
+		}
+		timeText := firstNonEmpty(modalStringProp(entry, "time"), modalStringProp(entry, "timestamp"))
+		label := firstNonEmpty(modalStringProp(entry, "label"), modalStringProp(entry, "title"), modalStringProp(entry, "message"), modalStringProp(entry, "value"))
+		appendModalLine(lines, "  • "+strings.TrimSpace(strings.Join(nonEmptyModalParts([]string{timeText, label}), " — ")))
+	}
+}
+
+func modalTabsLine(node modalDocumentNode) string {
+	items, _ := node.Props["items"].([]any)
+	if len(items) == 0 {
+		items, _ = node.Props["tabs"].([]any)
+	}
+	active := firstNonEmpty(modalStringProp(node.Props, "active"), modalStringProp(node.Props, "activeId"), modalStringProp(node.Props, "value"))
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		entry, _ := item.(map[string]any)
+		label := modalValueSummary(item)
+		if entry != nil {
+			value := firstNonEmpty(modalStringProp(entry, "id"), modalStringProp(entry, "value"), label)
+			label = firstNonEmpty(modalStringProp(entry, "label"), modalStringProp(entry, "title"), value)
+			if modalBoolProp(entry, "active") || (active != "" && value == active) || (active != "" && label == active) {
+				label = "[" + label + "]"
+			}
+		}
+		parts = append(parts, label)
+	}
+	return "Tabs: " + strings.Join(parts, "  ")
+}
+
+func modalCommandPaletteLine(node modalDocumentNode) string {
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "title"), "Command palette")
+	query := firstNonEmpty(modalStringProp(node.Props, "query"), modalStringProp(node.Props, "value"), modalStringProp(node.Props, "placeholder"))
+	if query == "" {
+		return label + ": ready"
+	}
+	return label + ": ‹" + printableModalText(query, false) + "›"
+}
+
+func modalKeybindingHintLine(node modalDocumentNode) string {
+	key := firstNonEmpty(modalStringProp(node.Props, "key"), modalStringProp(node.Props, "keybinding"), modalStringProp(node.Props, "shortcut"))
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "description"), modalStringProp(node.Props, "action"))
+	if key == "" {
+		return label
+	}
+	if label == "" {
+		return "[" + printableModalText(key, false) + "]"
+	}
+	return "[" + printableModalText(key, false) + "] " + printableModalText(label, false)
+}
+
+func modalNodeSummary(node modalDocumentNode) string {
+	return firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "title"), modalStringProp(node.Props, "message"), modalStringProp(node.Props, "value"), node.ID, node.Kind)
+}
+
+func modalValueSummary(value any) string {
+	entry, _ := value.(map[string]any)
+	if entry == nil {
+		return printableModalText(fmt.Sprint(value), false)
+	}
+	return firstNonEmpty(modalStringProp(entry, "label"), modalStringProp(entry, "title"), modalStringProp(entry, "message"), modalStringProp(entry, "value"), modalStringProp(entry, "id"))
 }
 
 func appendModalTableLines(lines *[]string, node modalDocumentNode, context string) {

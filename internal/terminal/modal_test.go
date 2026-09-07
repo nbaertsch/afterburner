@@ -299,6 +299,22 @@ func TestTerminalModalRendererProjectsDocumentFormControls(t *testing.T) {
 	}
 }
 
+func TestTerminalModalRendererProjectsDocumentCollectionsAndNavigation(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 120, Rows: 34})
+	renderer.ShowModal(ModalFrame{
+		Title:    "Collection Modal",
+		Status:   "Document",
+		Document: json.RawMessage(`{"root":{"kind":"dialog","children":[{"kind":"tabs","props":{"active":"logs","items":[{"id":"overview","label":"Overview"},{"id":"logs","label":"Logs"}]}},{"kind":"commandPalette","props":{"label":"Command palette","placeholder":"type a command"}},{"kind":"keybindingHint","props":{"key":"Ctrl+K","label":"Open commands"}},{"kind":"list","props":{"label":"Deployments","items":[{"label":"api-service"},{"label":"worker-service"}]}},{"kind":"timeline","props":{"label":"Recent activity","items":[{"timestamp":"12:00","message":"deployed api"},{"timestamp":"12:03","message":"health check passed"}]}},{"kind":"log","props":{"label":"Audit log","items":["operator approved","rollout completed"]}}]}}`),
+	})
+	text := output.String()
+	for _, want := range []string{"Tabs: Overview [Logs]", "Command palette: ‹type a command›", "[Ctrl+K] Open commands", "▌ Deployments", "• api-service", "• worker-service", "▌ Recent activity", "12:00 — deployed api", "12:03 — health check passed", "▌ Audit log", "operator approved", "rollout completed"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("projected collection/navigation node missing %q: %q", want, text)
+		}
+	}
+}
+
 func TestModalServerScrollsOverflowWithoutExtensionAction(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})
