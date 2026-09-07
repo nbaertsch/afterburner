@@ -338,7 +338,7 @@ const visualInspectionChecks = () => {
     modalShowsTitle: /Afterburner Black Box Live/i.test(modalScreen),
     modalShowsNativeOverlaySubtitle: /Native Afterburner modal overlay/i.test(modalScreen),
     modalShowsShortcutSummary: /Shortcuts:\s*r Refresh\s+·\s+d Doctor\s+·\s+e Export\s+·\s+q\/Esc Close/i.test(modalScreen),
-    modalShowsActionBar: /\[r\] Refresh\s+\[d\] Doctor\s+\[e\] Export\s+\[q\] Close/i.test(modalScreen),
+    modalShowsActionBar: /(?:▶\s*)?\[r\] Refresh(?:\s*◀)?\s+(?:▶\s*)?\[d\] Doctor(?:\s*◀)?\s+(?:▶\s*)?\[e\] Export(?:\s*◀)?\s+(?:▶\s*)?\[q\] Close(?:\s*◀)?/i.test(modalScreen),
     modalAdvertisesCloseKeys: /Esc\/q closes/i.test(modalScreen),
     modalAdvertisesMetadataOnlyFallback: /metadata-only[\s\S]*\/black-box-tail/i.test(modalScreen),
     modalAdvertisesAllScrollKeys: /↑\/↓ PgUp\/PgDn Home\/End/.test(modalScreen),
@@ -779,6 +779,11 @@ child.onData(data => {
   if (!terminalSetupDeclined && /Set up terminal for multi-line input support/i.test(recent)) {
     terminalSetupDeclined = true;
     scheduleWrite("\x1b", 250, "dismiss terminal setup");
+    return;
+  }
+
+  if (!commandSentAt && /Afterburner Black Box Live/i.test(recent)) {
+    finish(1, "Black Box modal auto-opened before explicit /black-box-modal command");
     return;
   }
 

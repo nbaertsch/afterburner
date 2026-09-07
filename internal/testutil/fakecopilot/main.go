@@ -378,7 +378,7 @@ func exerciseModalPipe() (*modalExerciseCapture, error) {
 	if os.Getenv("AFTERBURNER_TEST_MODAL_EXIT_OPEN") == "1" || os.Getenv("AFTERBURNER_TEST_MODAL_CRASH_OPEN") == "1" {
 		return result, nil
 	}
-	if os.Getenv("AFTERBURNER_TEST_MODAL_ACTIONS") == "1" {
+	if os.Getenv("AFTERBURNER_TEST_MODAL_ACTIONS") == "1" || os.Getenv("AFTERBURNER_TEST_MODAL_FOCUS_ACTIONS") == "1" {
 		if err := exerciseModalActionRouting(pipeName, result, generation, actions); err != nil {
 			return result, err
 		}
@@ -400,7 +400,7 @@ func exerciseModalPipe() (*modalExerciseCapture, error) {
 }
 
 func modalActionsForTest() []map[string]string {
-	if os.Getenv("AFTERBURNER_TEST_MODAL_ACTIONS") != "1" {
+	if os.Getenv("AFTERBURNER_TEST_MODAL_ACTIONS") != "1" && os.Getenv("AFTERBURNER_TEST_MODAL_FOCUS_ACTIONS") != "1" {
 		return []map[string]string{{"name": "close", "label": "Close", "key": "q"}}
 	}
 	return []map[string]string{
@@ -411,14 +411,25 @@ func modalActionsForTest() []map[string]string {
 }
 
 func exerciseModalActionRouting(pipeName string, result *modalExerciseCapture, generation int64, actions []map[string]string) error {
-	for _, expected := range []struct {
+	expectedEvents := []struct {
 		name string
 		key  string
 	}{
 		{"refresh", "r"},
 		{"doctor", "d"},
 		{"close", "q"},
-	} {
+	}
+	if os.Getenv("AFTERBURNER_TEST_MODAL_FOCUS_ACTIONS") == "1" {
+		expectedEvents = []struct {
+			name string
+			key  string
+		}{
+			{"doctor", "enter"},
+			{"refresh", "space"},
+			{"close", "enter"},
+		}
+	}
+	for _, expected := range expectedEvents {
 		event, err := pollModalEvent(pipeName, "black-box", generation)
 		if err != nil {
 			return err

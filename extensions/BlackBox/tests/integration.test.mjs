@@ -53,6 +53,53 @@ test("modal activation requests wait for runtime acknowledgement", async t => {
     assert.equal((await pending).ok, true);
 });
 
+test("modal activation requests from other sessions are discarded on runtime startup", async t => {
+    const home = await workDirectory("modal-activation-other-session");
+    t.after(() => cleanup(home));
+    const configPath = join(home, "config", "black-box.json");
+    await mkdir(join(home, "config"), { recursive: true });
+    await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
+    const stateDirectory = join(home, "extension-data", "black-box", "state");
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(join(stateDirectory, "modal-activation.jsonl"), JSON.stringify({
+        schemaVersion: 1,
+        requestId: "other-session-request",
+        sessionId: "previous-session",
+        surfaceId: "afterburner-black-box-live",
+        createdAt: new Date().toISOString(),
+        input: {}
+    }) + "\n", "utf8");
+    const service = await startBlackBoxService({
+        mode: "runtime",
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, SESSION_ID: "current-session" }
+    });
+    t.after(() => service.close());
+    assert.deepEqual(await service.consumeModalOpenRequests(), []);
+});
+
+test("stale modal activation requests are discarded on runtime startup", async t => {
+    const home = await workDirectory("modal-activation-stale");
+    t.after(() => cleanup(home));
+    const configPath = join(home, "config", "black-box.json");
+    await mkdir(join(home, "config"), { recursive: true });
+    await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
+    const stateDirectory = join(home, "extension-data", "black-box", "state");
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(join(stateDirectory, "modal-activation.jsonl"), JSON.stringify({
+        schemaVersion: 1,
+        requestId: "stale-request",
+        surfaceId: "afterburner-black-box-live",
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+        input: {}
+    }) + "\n", "utf8");
+    const service = await startBlackBoxService({
+        mode: "runtime",
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
+    });
+    t.after(() => service.close());
+    assert.deepEqual(await service.consumeModalOpenRequests(), []);
+});
+
 test("modal activation acknowledgement wakes without waiting for polling fallback", async t => {
     const home = await workDirectory("modal-activation-ack-watch");
     t.after(() => cleanup(home));

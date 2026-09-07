@@ -551,6 +551,73 @@ func TestModalActionAndCloseEvents(t *testing.T) {
 	}
 }
 
+func TestModalServerFocusesAndActivatesModalActionBar(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 96, Rows: 24})
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pollTimeout = 20 * time.Millisecond
+	response := callModalServer(t, server, map[string]any{
+		"type": "open", "id": "black-box", "title": "Actions", "body": "Use the action bar.",
+		"actions": []map[string]any{
+			{"name": "refresh", "label": "Refresh", "key": "r"},
+			{"name": "details", "label": "Details", "key": "d"},
+		},
+	})
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	if text := output.String(); !strings.Contains(text, "▶ [r] Refresh ◀") {
+		t.Fatalf("initial action focus not visible: %q", text)
+	}
+
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\t")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "▶ [d] Details ◀") || strings.Contains(text, "▶ [r] Refresh ◀") {
+		t.Fatalf("tab did not move visible action focus: %q", text)
+	}
+	if _, err := server.HandleInput([]byte("\r")); err != nil {
+		t.Fatal(err)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "action" || response.Event.ActionName != "details" || response.Event.Key != "enter" {
+		t.Fatalf("focused enter action response = %#v", response)
+	}
+
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b[Z")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "▶ [r] Refresh ◀") || strings.Contains(text, "▶ [d] Details ◀") {
+		t.Fatalf("CSI shift-tab did not move visible action focus: %q", text)
+	}
+	if _, err := server.HandleInput([]byte("\t")); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b[9;15;0;1;16;1_")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "▶ [r] Refresh ◀") || strings.Contains(text, "▶ [d] Details ◀") {
+		t.Fatalf("Windows VT shift-tab did not move visible action focus: %q", text)
+	}
+	if _, err := server.HandleInput([]byte("\x1b[32;57;32;1;0;1_")); err != nil {
+		t.Fatal(err)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "action" || response.Event.ActionName != "refresh" || response.Event.Key != "space" {
+		t.Fatalf("focused space action response = %#v", response)
+	}
+	if server.ActiveCount() != 1 {
+		t.Fatalf("focused action activation closed modal unexpectedly")
+	}
+}
+
 func TestModalServerRoutesBatchedActionKeysAndEscape(t *testing.T) {
 	renderer := &testModalRenderer{}
 	server, err := NewModalServer(nil, renderer)

@@ -222,6 +222,11 @@ type modalClickRenderer interface {
 	ClickModal(row, col int) (string, bool)
 }
 
+type modalActionFocusRenderer interface {
+	FocusModalAction(delta int) bool
+	ActivateFocusedModalAction(trigger string) (string, string, bool)
+}
+
 func NewModalServer(broker *Broker, renderer ModalRenderer) (*ModalServer, error) {
 	server := &ModalServer{
 		broker:               broker,
@@ -805,6 +810,24 @@ func (s *ModalServer) handleInputKey(key string) {
 		s.requestClose(identity, generation, key)
 		return
 	}
+	if key == "tab" || key == "shift+tab" {
+		if focuser, ok := s.renderer.(modalActionFocusRenderer); ok {
+			delta := 1
+			if key == "shift+tab" {
+				delta = -1
+			}
+			focuser.FocusModalAction(delta)
+		}
+		return
+	}
+	if (key == "enter" || key == "space") && len(frame.Actions) > 0 {
+		if focuser, ok := s.renderer.(modalActionFocusRenderer); ok {
+			if actionName, eventKey, ok := focuser.ActivateFocusedModalAction(key); ok {
+				s.enqueueEvent(ModalEvent{Type: "action", ID: identity.surfaceID, Generation: generation, ActionName: actionName, Key: eventKey}, identity)
+				return
+			}
+		}
+	}
 	if row, col, ok := modalMouseClick(key); ok {
 		clickKey, hit := "", false
 		if clicker, ok := s.renderer.(modalClickRenderer); ok {
@@ -857,6 +880,8 @@ func nextModalInputKeyState(data []byte) (int, string, bool) {
 		return 1, "enter", false
 	case '\t':
 		return 1, "tab", false
+	case ' ':
+		return 1, "space", false
 	default:
 		if data[0] >= 0x20 && data[0] <= 0x7e {
 			return 1, strings.ToLower(string(data[0])), false
@@ -926,6 +951,8 @@ func modalCSIInputKey(seq []byte) string {
 		return key
 	}
 	switch text {
+	case "Z":
+		return "shift+tab"
 	case "A":
 		return "up"
 	case "B":
@@ -1014,11 +1041,19 @@ func modalWindowsVTInputKey(body []byte) string {
 	}
 	switch code {
 	case 9:
+		if len(fields) >= 5 {
+			control, _ := strconv.Atoi(fields[4])
+			if control&16 != 0 {
+				return "shift+tab"
+			}
+		}
 		return "tab"
 	case 13:
 		return "enter"
 	case 27:
 		return "escape"
+	case 32:
+		return "space"
 	case 33:
 		return "pageup"
 	case 34:
@@ -1132,11 +1167,12 @@ type TerminalModalRenderer struct {
 	screen        *vtScreen
 	queryRequests terminalSequenceSplitter
 
-	mu           sync.Mutex
-	active       bool
-	hostAlt      bool
-	activeFrame  ModalFrame
-	scrollOffset int
+	mu                 sync.Mutex
+	active             bool
+	hostAlt            bool
+	activeFrame        ModalFrame
+	scrollOffset       int
+	focusedActionIndex int
 }
 
 func NewTerminalModalRenderer(writer io.Writer) *TerminalModalRenderer {
@@ -1172,7 +1208,7 @@ func (r *TerminalModalRenderer) Resize(size Size) {
 	defer r.mu.Unlock()
 	r.screen.Resize(size)
 	if r.active && r.writer != nil {
-		body, scrollOffset := renderModalFrame(r.screen.Snapshot(), r.activeFrame, r.scrollOffset)
+		body, scrollOffset := renderModalFrameFocused(r.screen.Snapshot(), r.activeFrame, r.scrollOffset, r.focusedActionIndex)
 		r.scrollOffset = scrollOffset
 		_, _ = io.WriteString(r.writer, body)
 	}
@@ -1208,13 +1244,15 @@ func (r *TerminalModalRenderer) ShowModal(frame ModalFrame) {
 	r.hostAlt = r.screen.useAlt
 	if !r.active || r.activeFrame.ID != frame.ID {
 		r.scrollOffset = 0
+		r.focusedActionIndex = -1
 	}
+	r.focusedActionIndex = normalizeModalFocusedActionIndex(frame, r.focusedActionIndex)
 	r.active = true
 	r.activeFrame = frame
 	if r.writer == nil {
 		return
 	}
-	body, scrollOffset := renderModalFrame(r.screen.Snapshot(), frame, r.scrollOffset)
+	body, scrollOffset := renderModalFrameFocused(r.screen.Snapshot(), frame, r.scrollOffset, r.focusedActionIndex)
 	r.scrollOffset = scrollOffset
 	_, _ = io.WriteString(r.writer, body)
 }
@@ -1225,7 +1263,44 @@ func (r *TerminalModalRenderer) ClickModal(row, col int) (string, bool) {
 	if !r.active || r.writer == nil {
 		return "", false
 	}
-	return modalActionKeyAt(r.activeFrame, newModalLayout(r.screen.Snapshot()), row, col)
+	return modalActionKeyAt(r.activeFrame, newModalLayout(r.screen.Snapshot()), r.focusedActionIndex, row, col)
+}
+
+func (r *TerminalModalRenderer) FocusModalAction(delta int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active || r.writer == nil || len(r.activeFrame.Actions) == 0 {
+		return false
+	}
+	count := len(r.activeFrame.Actions)
+	if r.focusedActionIndex < 0 || r.focusedActionIndex >= count {
+		r.focusedActionIndex = 0
+	} else {
+		r.focusedActionIndex = (r.focusedActionIndex + delta + count) % count
+	}
+	snapshot := r.screen.Snapshot()
+	layout := newModalLayout(snapshot)
+	bodyLines := modalFrameBodyLines(r.activeFrame, layout.innerWidth)
+	maxScroll := maxInt(0, len(bodyLines)-layout.bodyRows)
+	_, _ = io.WriteString(r.writer, renderModalFooterFrame(layout, r.activeFrame, maxScroll, r.focusedActionIndex))
+	return true
+}
+
+func (r *TerminalModalRenderer) ActivateFocusedModalAction(trigger string) (string, string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active || len(r.activeFrame.Actions) == 0 {
+		return "", "", false
+	}
+	r.focusedActionIndex = normalizeModalFocusedActionIndex(r.activeFrame, r.focusedActionIndex)
+	if r.focusedActionIndex < 0 || r.focusedActionIndex >= len(r.activeFrame.Actions) {
+		return "", "", false
+	}
+	action := r.activeFrame.Actions[r.focusedActionIndex]
+	if action.Name == "" {
+		return "", "", false
+	}
+	return action.Name, trigger, true
 }
 
 func (r *TerminalModalRenderer) ScrollModal(key string) bool {
@@ -1263,13 +1338,18 @@ func (r *TerminalModalRenderer) ScrollModal(key string) bool {
 	if r.scrollOffset == oldOffset {
 		return false
 	}
-	body, scrollOffset := renderModalScrollFrame(snapshot, layout, r.activeFrame, bodyLines, r.scrollOffset, maxScroll)
+	body, scrollOffset := renderModalScrollFrame(snapshot, layout, r.activeFrame, bodyLines, r.scrollOffset, maxScroll, r.focusedActionIndex)
 	r.scrollOffset = scrollOffset
 	_, _ = io.WriteString(r.writer, body)
 	return true
 }
 
 func renderModalFrame(snapshot TerminalSnapshot, frame ModalFrame, scrollOffset int) (string, int) {
+	return renderModalFrameFocused(snapshot, frame, scrollOffset, -1)
+}
+
+func renderModalFrameFocused(snapshot TerminalSnapshot, frame ModalFrame, scrollOffset int, focusedActionIndex int) (string, int) {
+	focusedActionIndex = normalizeModalFocusedActionIndex(frame, focusedActionIndex)
 	layout := newModalLayout(snapshot)
 	bodyLines := modalFrameBodyLines(frame, layout.innerWidth)
 	maxScroll := maxInt(0, len(bodyLines)-layout.bodyRows)
@@ -1284,16 +1364,17 @@ func renderModalFrame(snapshot TerminalSnapshot, frame ModalFrame, scrollOffset 
 	if layout.compact {
 		writeCompactModalPanel(&out, layout, frame, styles)
 	} else {
-		writeEnterpriseModalPanel(&out, layout, frame, bodyLines, scrollOffset, maxScroll, styles)
+		writeEnterpriseModalPanel(&out, layout, frame, bodyLines, scrollOffset, maxScroll, focusedActionIndex, styles)
 	}
 	out.WriteString("\x1b[0m\x1b[?25h")
 	return out.String(), scrollOffset
 }
 
-func renderModalScrollFrame(snapshot TerminalSnapshot, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int) (string, int) {
+func renderModalScrollFrame(snapshot TerminalSnapshot, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int, focusedActionIndex int) (string, int) {
+	focusedActionIndex = normalizeModalFocusedActionIndex(frame, focusedActionIndex)
 	scrollOffset = clampInt(scrollOffset, 0, maxScroll)
 	if layout.compact {
-		return renderModalFrame(snapshot, frame, scrollOffset)
+		return renderModalFrameFocused(snapshot, frame, scrollOffset, focusedActionIndex)
 	}
 	styles := newModalStyles()
 	var out strings.Builder
@@ -1305,7 +1386,7 @@ func renderModalScrollFrame(snapshot TerminalSnapshot, layout modalLayout, frame
 		writeModalText(&out, separatorRow, layout.innerLeft, layout.innerWidth, styles.muted, strings.Repeat("─", layout.innerWidth))
 	}
 	writeModalBody(&out, layout, bodyLines, scrollOffset, styles)
-	writeModalFooter(&out, layout, frame, maxScroll, styles)
+	writeModalFooter(&out, layout, frame, maxScroll, focusedActionIndex, styles)
 	out.WriteString("\x1b[0m\x1b[?25h")
 	return out.String(), scrollOffset
 }
@@ -1350,7 +1431,7 @@ func newModalLayout(snapshot TerminalSnapshot) modalLayout {
 	}
 	panelHeight := rows - 6
 	if rows >= 18 {
-		panelHeight = rows * 72 / 100
+		panelHeight = rows * 75 / 100
 	}
 	panelHeight = clampInt(panelHeight, minInt(rows, 8), minInt(rows, 30))
 	if rows <= 8 {
@@ -1385,7 +1466,7 @@ func newModalLayout(snapshot TerminalSnapshot) modalLayout {
 	layout.contentRows = maxInt(0, panelHeight-2)
 	layout.headerRows = 2
 	layout.separatorRows = 1
-	layout.footerRows = 3
+	layout.footerRows = 4
 	layout.bodyRows = layout.contentRows - layout.headerRows - layout.separatorRows - layout.footerRows
 	if layout.bodyRows < 2 {
 		layout.footerRows = minInt(1, layout.footerRows)
@@ -1517,7 +1598,7 @@ func writeCompactModalPanel(out *strings.Builder, layout modalLayout, frame Moda
 	writeModalLine(out, layout.top+layout.panelHeight-1, layout.left, width, styles.border, "╰"+strings.Repeat("─", width-2)+"╯")
 }
 
-func writeEnterpriseModalPanel(out *strings.Builder, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int, styles modalStyles) {
+func writeEnterpriseModalPanel(out *strings.Builder, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int, focusedActionIndex int, styles modalStyles) {
 	writeModalLine(out, layout.top, layout.left, layout.panelWidth, styles.border, "╭"+strings.Repeat("─", layout.panelWidth-2)+"╮")
 	for row := 1; row < layout.panelHeight-1; row++ {
 		writeModalLine(out, layout.top+row, layout.left, layout.panelWidth, styles.panel, "│"+strings.Repeat(" ", layout.panelWidth-2)+"│")
@@ -1530,7 +1611,17 @@ func writeEnterpriseModalPanel(out *strings.Builder, layout modalLayout, frame M
 		writeModalText(out, separatorRow, layout.innerLeft, layout.innerWidth, styles.muted, strings.Repeat("─", layout.innerWidth))
 	}
 	writeModalBody(out, layout, bodyLines, scrollOffset, styles)
-	writeModalFooter(out, layout, frame, maxScroll, styles)
+	writeModalFooter(out, layout, frame, maxScroll, focusedActionIndex, styles)
+}
+
+func renderModalFooterFrame(layout modalLayout, frame ModalFrame, maxScroll int, focusedActionIndex int) string {
+	styles := newModalStyles()
+	var out strings.Builder
+	out.Grow(maxInt(1, layout.panelWidth*layout.footerRows*2))
+	out.WriteString("\x1b[?25l\x1b[0m")
+	writeModalFooter(&out, layout, frame, maxScroll, focusedActionIndex, styles)
+	out.WriteString("\x1b[0m\x1b[?25h")
+	return out.String()
 }
 
 func writeModalHeader(out *strings.Builder, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int, styles modalStyles) {
@@ -1586,7 +1677,7 @@ func writeModalBody(out *strings.Builder, layout modalLayout, bodyLines []string
 	}
 }
 
-func writeModalFooter(out *strings.Builder, layout modalLayout, frame ModalFrame, maxScroll int, styles modalStyles) {
+func writeModalFooter(out *strings.Builder, layout modalLayout, frame ModalFrame, maxScroll int, focusedActionIndex int, styles modalStyles) {
 	if layout.footerRows <= 0 {
 		return
 	}
@@ -1600,14 +1691,15 @@ func writeModalFooter(out *strings.Builder, layout modalLayout, frame ModalFrame
 		row++
 	}
 	if row < layout.top+layout.panelHeight-1 {
-		actions := modalActionsText(frame)
+		actions := modalActionsText(frame, focusedActionIndex)
 		if actions == "" {
 			actions = "[Esc] Close"
 		}
-		if maxScroll > 0 {
-			actions += "  [↑/↓ PgUp/PgDn Home/End] Scroll"
-		}
 		writeModalText(out, row, layout.innerLeft, layout.innerWidth, styles.actions, actions)
+		row++
+	}
+	if row < layout.top+layout.panelHeight-1 {
+		writeModalText(out, row, layout.innerLeft, layout.innerWidth, styles.footer, modalControlHints(frame, maxScroll))
 	}
 }
 
@@ -1625,15 +1717,30 @@ func moveModalCursor(out *strings.Builder, row, col int) {
 	fmt.Fprintf(out, "\x1b[%d;%dH", row, col)
 }
 
-func modalActionsText(frame ModalFrame) string {
-	parts := make([]string, 0, len(frame.Actions)+1)
-	for _, action := range frame.Actions {
-		parts = append(parts, modalActionLabel(action))
+func modalControlHints(frame ModalFrame, maxScroll int) string {
+	parts := []string{"[Esc] Close"}
+	if maxScroll > 0 {
+		parts = append(parts, "[↑/↓ PgUp/PgDn Home/End] Scroll")
+	}
+	if len(frame.Actions) > 1 {
+		parts = append(parts, "[Tab/Shift+Tab] Focus")
+	}
+	if len(frame.Actions) > 0 {
+		parts = append(parts, "[Enter/Space] Activate")
 	}
 	return strings.Join(parts, "  ")
 }
 
-func modalActionLabel(action ModalAction) string {
+func modalActionsText(frame ModalFrame, focusedActionIndex int) string {
+	focusedActionIndex = normalizeModalFocusedActionIndex(frame, focusedActionIndex)
+	parts := make([]string, 0, len(frame.Actions)+1)
+	for index, action := range frame.Actions {
+		parts = append(parts, modalActionLabel(action, index == focusedActionIndex))
+	}
+	return strings.Join(parts, "  ")
+}
+
+func modalActionLabel(action ModalAction, focused bool) string {
 	label := printableModalText(action.Label, false)
 	if label == "" {
 		label = printableModalText(action.Name, false)
@@ -1644,17 +1751,34 @@ func modalActionLabel(action ModalAction) string {
 	if action.Description != "" {
 		label += " — " + printableModalText(action.Description, false)
 	}
+	if focused {
+		label = "▶ " + label + " ◀"
+	}
 	return label
 }
 
-func modalActionKeyAt(frame ModalFrame, layout modalLayout, row, col int) (string, bool) {
+func normalizeModalFocusedActionIndex(frame ModalFrame, focusedActionIndex int) int {
+	if len(frame.Actions) == 0 {
+		return -1
+	}
+	if focusedActionIndex < 0 {
+		return 0
+	}
+	if focusedActionIndex >= len(frame.Actions) {
+		return len(frame.Actions) - 1
+	}
+	return focusedActionIndex
+}
+
+func modalActionKeyAt(frame ModalFrame, layout modalLayout, focusedActionIndex int, row, col int) (string, bool) {
 	actionRow, ok := modalActionRow(frame, layout)
 	if !ok || row != actionRow || col < layout.innerLeft || col >= layout.innerLeft+layout.innerWidth {
 		return "", false
 	}
 	cursor := layout.innerLeft
-	for _, action := range frame.Actions {
-		label := modalActionLabel(action)
+	focusedActionIndex = normalizeModalFocusedActionIndex(frame, focusedActionIndex)
+	for index, action := range frame.Actions {
+		label := modalActionLabel(action, index == focusedActionIndex)
 		width := lipgloss.Width(label)
 		if col >= cursor && col < cursor+width {
 			return firstNonEmpty(action.Key, action.Name), true

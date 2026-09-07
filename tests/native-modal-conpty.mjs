@@ -100,7 +100,7 @@ const baseEnvironment = (root, capturePath, packageRoot, extra = {}) => {
   return environment;
 };
 
-const assertCapture = (capture, { expectQuery = false, expectReopenIsolation = false, expectResize = false, expectNoChildInterrupt = false, expectRuntimeClient = false, expectActions = false } = {}) => {
+const assertCapture = (capture, { expectQuery = false, expectReopenIsolation = false, expectResize = false, expectNoChildInterrupt = false, expectRuntimeClient = false, expectActions = false, expectFocusedActions = false } = {}) => {
   if (!capture.env?.AFTERBURNER_MODAL_BOOTSTRAP) {
     throw new Error(`modal broker bootstrap env was not forwarded\n${JSON.stringify(capture)}`);
   }
@@ -127,10 +127,12 @@ const assertCapture = (capture, { expectQuery = false, expectReopenIsolation = f
       throw new Error(`modal query did not receive generation-1 close reply\n${JSON.stringify(capture.modal)}`);
     }
   }
-  if (expectActions) {
+  if (expectActions || expectFocusedActions) {
     const actions = capture.modal?.actionEvents ?? [];
     const observed = actions.map(event => `${event.type}:${event.actionName}:${event.key}`);
-    const want = ["action:refresh:r", "action:doctor:d", "action:close:q"];
+    const want = expectFocusedActions
+      ? ["action:doctor:enter", "action:refresh:space", "action:close:enter"]
+      : ["action:refresh:r", "action:doctor:d", "action:close:q"];
     if (JSON.stringify(observed) !== JSON.stringify(want)) {
       throw new Error(`modal action keys were not routed\n${JSON.stringify(capture.modal)}`);
     }
@@ -175,6 +177,8 @@ const assertRepaintUsedResizedDimensions = raw => {
   }
 };
 
+const lastIndexAfter = (text, needle, marker) => text.lastIndexOf(needle) > text.lastIndexOf(marker);
+
 const assertModalCleanupRestoredTerminal = raw => {
   const semantic = semanticModalState(raw);
   if (semantic.sawAltEnter && !semantic.sawAltExit) {
@@ -195,6 +199,7 @@ const runScenario = ({
   expectNoChildInterrupt = false,
   expectRuntimeClient = false,
   expectActions = false,
+  expectFocusedActions = false,
   expectRepaint = false,
   expectCleanup = false,
   sendCtrlC = false
@@ -274,6 +279,27 @@ const runScenario = ({
         child.write("\x1b");
       }
     }
+    if (expectFocusedActions) {
+      if (actionStep === 0 && text.includes("▶ [r] Refresh ◀")) {
+        actionStep = 1;
+        child.write("\t");
+      } else if (actionStep === 1 && text.includes("▶ [d] Doctor ◀")) {
+        actionStep = 2;
+        child.write("\r");
+      } else if (actionStep === 2 && text.includes("doctor action observed")) {
+        actionStep = 3;
+        child.write("\x1b[9;15;0;1;16;1_");
+      } else if (actionStep === 3 && lastIndexAfter(text, "▶ [r] Refresh ◀", "doctor action observed")) {
+        actionStep = 4;
+        child.write("\x1b[32;57;32;1;0;1_");
+      } else if (actionStep === 4 && lastIndexAfter(text, "▶ [r] Refresh ◀", "refresh action updated frame")) {
+        actionStep = 5;
+        child.write("\t\t\r");
+      } else if (actionStep === 5 && lastIndexAfter(text, "Afterburner Black Box Escape", "refresh action updated frame")) {
+        actionStep = 6;
+        child.write("\x1b[27;1;0;1;0;1_");
+      }
+    }
   });
 
   child.onExit(({ exitCode }) => {
@@ -283,7 +309,7 @@ const runScenario = ({
         throw new Error(`afterburn exited ${exitCode}, want ${expectedExit}`);
       }
       const capture = JSON.parse(readFileSync(capturePath, "utf8"));
-      assertCapture(capture, { expectQuery, expectReopenIsolation, expectResize, expectNoChildInterrupt, expectRuntimeClient, expectActions });
+      assertCapture(capture, { expectQuery, expectReopenIsolation, expectResize, expectNoChildInterrupt, expectRuntimeClient, expectActions, expectFocusedActions });
       const semantic = semanticModalState(raw);
       const text = stripAnsi(raw);
       if (!text.includes("Afterburner Black Box Live") ||
@@ -310,6 +336,12 @@ const runScenario = ({
       }
       if (expectActions && actionStep !== 4) {
         throw new Error(`modal action test did not send every key, stopped at step ${actionStep}`);
+      }
+      if (expectFocusedActions && actionStep !== 6) {
+        throw new Error(`focused modal action test did not send every key, stopped at step ${actionStep}`);
+      }
+      if (expectFocusedActions && (!text.includes("[Tab/Shift+Tab] Focus") || !text.includes("[Enter/Space] Activate"))) {
+        throw new Error("focused modal action controls were not advertised in the terminal");
       }
       if (expectedExit === 0 && !extraEnv.AFTERBURNER_TEST_MODAL_EXIT_OPEN && !stripAnsi(raw).includes("copilot-after-modal")) {
         throw new Error("child did not complete normal modal close path");
@@ -364,6 +396,15 @@ const scenarios = [
       AFTERBURNER_TEST_MODAL_FORCE_EXIT: "1"
     },
     expectActions: true,
+    expectQuery: true
+  },
+  {
+    name: "focused-action-bar",
+    extraEnv: {
+      AFTERBURNER_TEST_MODAL_FOCUS_ACTIONS: "1",
+      AFTERBURNER_TEST_MODAL_FORCE_EXIT: "1"
+    },
+    expectFocusedActions: true,
     expectQuery: true
   },
   {

@@ -9,6 +9,8 @@ import { NativeEventsTailer } from "./native-tail.mjs";
 import { createBlackBoxRecord, createReferenceFactory, sanitizeNativeEvent } from "./sanitize.mjs";
 import { SegmentedJsonlStore } from "./storage.mjs";
 
+const MODAL_ACTIVATION_MAX_AGE_MS = 15_000;
+
 async function loadOrCreateSalt(root) {
     const stateDirectory = join(root, "state");
     const path = join(stateDirectory, "identity-salt");
@@ -99,6 +101,7 @@ export async function startBlackBoxService(options = {}) {
     const processId = options.processId ?? process.pid;
     const runId = options.runId ?? randomBytes(6).toString("hex");
     const configuredSessionId = env.SESSION_ID ?? env.COPILOT_AGENT_SESSION_ID;
+    const activationSessionId = configuredSessionId ?? `process:${processId}`;
     const runtimeSessionScope = new Set([configuredSessionId, opaqueSessionId(configuredSessionId)].filter(Boolean));
     const salt = options.salt ?? await loadOrCreateSalt(root);
     const reference = createReferenceFactory(salt);
@@ -290,6 +293,7 @@ export async function startBlackBoxService(options = {}) {
             const request = {
                 schemaVersion: 1,
                 requestId: randomBytes(12).toString("hex"),
+                sessionId: activationSessionId,
                 surfaceId: String(input.surfaceId ?? "afterburner-black-box-live"),
                 createdAt: new Date().toISOString(),
                 input: input.input && typeof input.input === "object" ? input.input : {}
@@ -318,10 +322,16 @@ export async function startBlackBoxService(options = {}) {
                 throw error;
             }
             try { await unlink(activationPath); } catch {}
+            const now = Date.now();
             return body.split(/\r?\n/).filter(Boolean).map(line => {
                 try { return JSON.parse(line); }
                 catch { return null; }
-            }).filter(request => request?.schemaVersion === 1 && typeof request.surfaceId === "string" && typeof request.requestId === "string");
+            }).filter(request => {
+                if (request?.schemaVersion !== 1 || typeof request.surfaceId !== "string" || typeof request.requestId !== "string") return false;
+                if (typeof request.sessionId === "string" && request.sessionId !== activationSessionId) return false;
+                const createdAt = Date.parse(request.createdAt ?? "");
+                return Number.isFinite(createdAt) && now - createdAt <= MODAL_ACTIVATION_MAX_AGE_MS;
+            });
         },
         async completeModalOpenRequest(request, result = {}) {
             if (!request?.requestId) return false;
