@@ -204,7 +204,6 @@ export async function startSessionExtension(options = {}) {
     try {
         const registration = await buildSessionRegistration({
             service,
-            createCanvas: options.createCanvas,
             joinSession: options.joinSession,
         });
         return {
