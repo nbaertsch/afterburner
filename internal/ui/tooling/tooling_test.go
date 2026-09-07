@@ -95,6 +95,16 @@ func TestValidateManifestRejectsUnknownUICapability(t *testing.T) {
 	}
 }
 
+func TestGrantRejectsUnknownCapability(t *testing.T) {
+	home := t.TempDir()
+	if _, err := Grant(home, "sample-ui", "ui.action.invkoe", "surface/*", "test"); err == nil || !strings.Contains(err.Error(), "unknown ui capability \"ui.action.invkoe\"") {
+		t.Fatalf("expected unknown capability error, got %v", err)
+	}
+	if _, err := os.Stat(GrantPath(home)); !os.IsNotExist(err) {
+		t.Fatalf("grant file should not be written for invalid capability, stat err=%v", err)
+	}
+}
+
 func TestGrantServicePersistsDeterministically(t *testing.T) {
 	home := t.TempDir()
 	record, err := Grant(home, "sample-ui", "ui.action.invoke", "surface/*", "test")

@@ -72,6 +72,9 @@ func Grant(homeRoot, extensionID, capabilityID, resource, reason string) (policy
 	if extensionID == "" || capabilityID == "" {
 		return policy.GrantRecord{}, fmt.Errorf("extension id and capability are required")
 	}
+	if !validUICapability(capabilityID) {
+		return policy.GrantRecord{}, fmt.Errorf("unknown ui capability %q", capabilityID)
+	}
 	if resource == "" {
 		resource = "*"
 	}

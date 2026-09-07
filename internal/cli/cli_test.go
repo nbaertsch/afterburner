@@ -93,6 +93,15 @@ func TestUIValidateManifestCommand(t *testing.T) {
 	}
 }
 
+func TestUIGrantRejectsUnknownCapability(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code, err := Run(context.Background(), []string{"ui", "grant", "sample-ui", "ui.action.invkoe"}, Options{Stdout: &stdout, Stderr: &stderr})
+	if err == nil || code != 1 || !strings.Contains(err.Error(), "unknown ui capability \"ui.action.invkoe\"") {
+		t.Fatalf("expected unknown capability failure, code=%d err=%v stdout=%q stderr=%q", code, err, stdout.String(), stderr.String())
+	}
+}
+
 func TestUIRenderFixtureCommand(t *testing.T) {
 	var stdout bytes.Buffer
 	code, err := Run(context.Background(), []string{"ui", "render-fixture", "black-box-certification"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
