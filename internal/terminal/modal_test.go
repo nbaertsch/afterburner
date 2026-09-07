@@ -381,6 +381,22 @@ func TestTerminalModalRendererProjectsDocumentMediaAndStatus(t *testing.T) {
 	}
 }
 
+func TestTerminalModalRendererProjectsDocumentContainerPrimitives(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 120, Rows: 34})
+	renderer.ShowModal(ModalFrame{
+		Title:    "Container Modal",
+		Status:   "Layout",
+		Document: json.RawMessage(`{"root":{"kind":"dialog","children":[{"kind":"surface","props":{"title":"Ops surface"},"children":[{"kind":"viewport","props":{"label":"Primary viewport"},"children":[{"kind":"split","props":{"label":"Two pane"},"children":[{"kind":"scroll","props":{"label":"Scrollable region"},"children":[{"kind":"text","props":{"value":"Inside scroll"}}]}]}]}]},{"kind":"breadcrumb","props":{"items":[{"label":"Home"},{"label":"Deployments"},{"label":"API"}]}},{"kind":"contextMenu","props":{"label":"Row menu","items":[{"label":"Retry","key":"r"},{"label":"Cancel","key":"c"}]}}]}}`),
+	})
+	text := output.String()
+	for _, want := range []string{"▌ Ops surface", "▌ Primary viewport", "▌ Two pane", "▌ Scrollable region", "Inside scroll", "Breadcrumb: Home › Deployments › API", "▌ Row menu", "[r] Retry", "[c] Cancel"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("projected container primitive missing %q: %q", want, text)
+		}
+	}
+}
+
 func TestTerminalModalRendererProjectsDocumentChromePrimitives(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 120, Rows: 34})

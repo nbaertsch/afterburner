@@ -1878,6 +1878,12 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 	switch kind {
 	case "dialog", "application", "row", "column", "stack", "group", "toolbar", "actionBar":
 		appendModalDocumentChildren(lines, node.Children, context, width)
+	case "surface", "window", "viewport", "split", "scroll":
+		appendModalContainer(lines, node, context, width)
+	case "breadcrumb":
+		appendModalLine(lines, modalBreadcrumbLine(node))
+	case "contextMenu":
+		appendModalContextMenuLines(lines, node, width)
 	case "section", "box", "disclosure":
 		appendModalSection(lines, firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), strings.Title(kind)))
 		appendModalDocumentChildren(lines, node.Children, context, width)
@@ -1986,6 +1992,41 @@ func appendModalDocumentChildren(lines *[]string, children []modalDocumentNode, 
 	for _, child := range children {
 		appendModalDocumentNodeLines(lines, child, context, width)
 	}
+}
+
+func appendModalContainer(lines *[]string, node modalDocumentNode, context string, width int) {
+	if title := firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label")); title != "" {
+		appendModalSection(lines, title)
+	}
+	appendModalDocumentChildren(lines, node.Children, context, width)
+}
+
+func modalBreadcrumbLine(node modalDocumentNode) string {
+	items, _ := node.Props["items"].([]any)
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		if label := modalValueSummary(item); label != "" {
+			parts = append(parts, label)
+		}
+	}
+	if len(parts) == 0 {
+		return "Breadcrumb: " + firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "value"), "root")
+	}
+	return "Breadcrumb: " + strings.Join(parts, " › ")
+}
+
+func appendModalContextMenuLines(lines *[]string, node modalDocumentNode, width int) {
+	appendModalSection(lines, firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), "Context menu"))
+	items, _ := node.Props["items"].([]any)
+	for _, item := range items {
+		entry, _ := item.(map[string]any)
+		if entry == nil {
+			appendModalLine(lines, "  • "+modalValueSummary(item))
+			continue
+		}
+		appendModalLine(lines, "  • "+modalActionControlLine(modalDocumentNode{Kind: "button", Props: entry}, "Menu item"))
+	}
+	appendModalDocumentChildren(lines, node.Children, "Context menu", width)
 }
 
 func appendModalSeparator(lines *[]string, node modalDocumentNode) {
