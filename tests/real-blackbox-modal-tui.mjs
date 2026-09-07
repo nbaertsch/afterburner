@@ -59,7 +59,8 @@ if (installResult.status !== 0) {
   throw new Error(`failed to install local built-ins for visual UAT: status=${installResult.status} stdout=${installResult.stdout} stderr=${installResult.stderr}`);
 }
 const registry = JSON.parse(readFileSync(join(isolatedAfterburnerHome, "registry.json"), "utf8"));
-const blackBoxActivePath = registry.extensions?.["black-box"]?.activePath;
+const blackBoxEntry = registry.extensions?.["black-box"];
+const blackBoxActivePath = blackBoxEntry?.activePath;
 if (!blackBoxActivePath) throw new Error("visual UAT did not install an active Black Box package");
 const forbiddenCanvasFiles = [
   join(blackBoxActivePath, "lib", "session-extension.mjs"),
@@ -75,6 +76,16 @@ const forbiddenCanvasMatches = forbiddenCanvasFiles.flatMap(file => {
 const packagePreflight = {
   afterburnerHome: isolatedAfterburnerHome,
   blackBoxActivePath,
+  source: blackBoxEntry?.source ?? null,
+  identity: blackBoxEntry?.identity ? {
+    extensionId: blackBoxEntry.identity.extensionId,
+    sourceType: blackBoxEntry.identity.sourceType,
+    sourceVersion: blackBoxEntry.identity.sourceVersion,
+    builtinSigned: blackBoxEntry.identity.builtinSigned === true,
+    treeHash: blackBoxEntry.identity.treeHash,
+    manifestHash: blackBoxEntry.identity.manifestHash
+  } : null,
+  manifestCapabilities: blackBoxEntry?.manifest?.capabilities ?? [],
   checkedFiles: forbiddenCanvasFiles,
   forbiddenPatterns: ["createCanvas", "openModalCanvas", "canvasRpc.open", "canvases: canvas", "\\\"canvas\\\""],
   noGenericCanvasFallback: forbiddenCanvasMatches.length === 0,
@@ -82,6 +93,14 @@ const packagePreflight = {
 };
 if (forbiddenCanvasMatches.length > 0) {
   throw new Error(`installed Black Box still exposes generic canvas fallback: ${JSON.stringify(forbiddenCanvasMatches)}`);
+}
+if (packagePreflight.manifestCapabilities.includes("canvas")) {
+  throw new Error("installed Black Box manifest still advertises generic canvas capability");
+}
+for (const capability of ["modal-canvas", "enterprise-surface"]) {
+  if (!packagePreflight.manifestCapabilities.includes(capability)) {
+    throw new Error(`installed Black Box manifest is missing ${capability}`);
+  }
 }
 
 const env = { ...process.env, COPILOT_RUNTIME_EXTENSION_DEBUG: "1", AFTERBURNER_HOME: isolatedAfterburnerHome, AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH: "1" };
