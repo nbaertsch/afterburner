@@ -129,10 +129,10 @@ export function blackBoxSurfaceDescriptor() {
         title: "Afterburner Black Box",
         ownerExtensionId: BLACK_BOX_EXTENSION_ID,
         supportedComponents: [
-            "application", "surface", "viewport", "stack", "row", "grid", "statusGrid", "panel", "card",
-            "empty", "text", "markdown", "code", "icon", "badge", "keyValue", "detail", "alert",
-            "button", "progress", "sparkline", "table", "toolbar", "actionBar", "tabs",
-            "commandPalette", "keybindingHint"
+            "application", "surface", "window", "viewport", "stack", "row", "split", "scroll", "grid", "statusGrid", "panel", "card",
+            "empty", "text", "markdown", "code", "icon", "badge", "keyValue", "detail", "alert", "toast", "loading", "errorBoundary",
+            "button", "progress", "meter", "bar", "slider", "sparkline", "table", "toolbar", "actionBar", "tabs",
+            "breadcrumb", "contextMenu", "commandPalette", "keybindingHint"
         ],
         actions: enterpriseActions().map(action => ({
             id: action.id,
@@ -747,49 +747,80 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
     if (!c?.dialog || !c?.toolbar || !c?.grid || !c?.panel || !c?.table) return null;
     const actionBar = typeof c.actionBar === "function" ? c.actionBar : c.toolbar;
     const statusGrid = typeof c.statusGrid === "function" ? c.statusGrid : c.grid;
+    const surface = typeof c.surface === "function" ? c.surface : c.application;
+    const viewport = typeof c.viewport === "function" ? c.viewport : c.stack;
+    const split = typeof c.split === "function" ? c.split : c.row;
+    const scroll = typeof c.scroll === "function" ? c.scroll : c.panel;
     try {
         const root = c.dialog({ title, status: frame.status, modal: true }, [
-            actionBar({ label: "Black Box action bar" }, frame.actions.map(action =>
-                c.button({ label: action.label, actionId: action.name, keybinding: action.key, description: action.description }, [], {
-                    id: `bb-modal-action-${action.name}`,
-                    actionBindings: { activate: action.name }
-                })
-            ), { id: "bb-modal-action-bar", accessibility: { role: "toolbar", name: "Black Box action bar" } }),
-            statusGrid({ label: "Black Box modal status cards", columns: ["recorder", "storage", "signals", "queue"] }, [
-                metricCard(c, "bb-modal-card-recorder", "Recorder", status.enabled ? "Enabled" : "Disabled", `${status.mode ?? "unknown"} · ${status.analytics?.totalRecords ?? records.length} records`, status.enabled ? "success" : "warning"),
-                metricCard(c, "bb-modal-card-storage", "Storage", `${status.storage?.segmentCount ?? 0} segment(s)`, `${formatBytes(status.storage?.segmentBytes)} used`, healthTone),
-                metricCard(c, "bb-modal-card-signals", "Signals", `${status.analytics?.anomalyCount ?? 0} anomalies`, `${status.analytics?.milestoneCount ?? 0} milestones`, status.analytics?.anomalyCount ? "warning" : "success"),
-                metricCard(c, "bb-modal-card-queue", "Queue", `${status.queue?.records ?? 0} queued`, `${status.queue?.droppedRecords ?? 0} dropped`, status.queue?.droppedRecords ? "warning" : "info")
-            ], { id: "bb-modal-status-cards" }),
-            c.progress({ label: "Storage usage", value: progressValue, max: 100, status: `${formatPercent(progressValue)} used`, tone: healthTone }, [], {
-                id: "bb-modal-storage-progress",
-                accessibility: { role: "progressbar", name: "Black Box modal storage usage", valueText: `${formatPercent(progressValue)} used` }
-            }),
-            ...modalSignalTrendNodes(c, records),
-            ...modalHealthAlertNodes(c, status, state.lifecycle),
-            ...modalActiveResultPanels(c, state),
-            c.row({ label: "Timeline and detail split", responsive: { collapseBelowColumns: 100, orientation: "vertical" } }, [
-                c.panel({ title: "Metadata timeline", width: "58%" }, [
-                    c.table({
-                        label: "Timeline table",
-                        columns: timelineColumns(),
-                        rows: records.map(record => timelineRow(record, selected?.recordId)),
-                        selection: { selectedRowId: selected?.recordId ?? null, persistKey: "black-box.modal.timeline.selection" },
-                        virtualization: { enabled: records.length > 8, rowHeight: 1, overscan: 4, totalRows: records.length, offset: 0, limit: records.length }
-                    }, [], {
-                        id: "bb-modal-timeline-table",
-                        actionBindings: { select: "select" },
-                        accessibility: { role: "table", name: "Sanitized Black Box modal timeline" },
-                        localization: { key: "timeline" }
+            surface({ title: "Black Box command center", mode: "metadata-only", density: "comfortable" }, [
+                c.breadcrumb?.({ items: [
+                    { id: "afterburner", label: "Afterburner" },
+                    { id: "black-box", label: "Black Box" },
+                    { id: state.activeTab ?? "timeline", label: modalActiveTabTitle(state) }
+                ] }, [], { id: "bb-modal-breadcrumb", accessibility: { role: "navigation", name: "Black Box modal location" } }),
+                c.commandPalette?.({
+                    label: "Black Box command palette",
+                    placeholder: "Run Black Box action…",
+                    commands: frame.actions.map(action => ({ id: action.name, title: action.label, keybinding: action.key }))
+                }, [], { id: "bb-modal-command-palette", actionBindings: { run: "refresh" }, accessibility: { role: "searchbox", name: "Black Box command palette" } }),
+                actionBar({ label: "Black Box action bar" }, frame.actions.map(action =>
+                    c.button({ label: action.label, actionId: action.name, keybinding: action.key, description: action.description }, [], {
+                        id: `bb-modal-action-${action.name}`,
+                        actionBindings: { activate: action.name }
                     })
-                ], { id: "bb-modal-timeline-panel" }),
-                c.panel({ title: "Details", width: "42%" }, [
-                    c.markdown({ markdown: selected ? detailMarkdown(selected) : "No metadata record selected." }, [], { id: "bb-modal-detail-summary" }),
-                    c.code({ language: "json", code: selected ? JSON.stringify(redactForDisplay(selected), null, 2) : "{}" }, [], { id: "bb-modal-detail-json" })
-                ], { id: "bb-modal-detail-panel", accessibility: { role: "region", name: "Selected metadata details" }, localization: { key: "details" } })
-            ], { id: "bb-modal-main-split" }),
-            c.text({ value: fallbackFooter(state), tone: "muted" }, [], { id: "bb-modal-footer", accessibility: { role: "status", name: "Black Box modal status" } })
-        ], { id: "bb-modal-root", accessibility: { role: "dialog", name: title }, metadata: surfaceMetadata() });
+                ), { id: "bb-modal-action-bar", accessibility: { role: "toolbar", name: "Black Box action bar" } }),
+                viewport({ label: "Black Box live observability viewport" }, [
+                    statusGrid({ label: "Black Box modal status cards", columns: ["recorder", "storage", "signals", "queue"] }, [
+                        metricCard(c, "bb-modal-card-recorder", "Recorder", status.enabled ? "Enabled" : "Disabled", `${status.mode ?? "unknown"} · ${status.analytics?.totalRecords ?? records.length} records`, status.enabled ? "success" : "warning"),
+                        metricCard(c, "bb-modal-card-storage", "Storage", `${status.storage?.segmentCount ?? 0} segment(s)`, `${formatBytes(status.storage?.segmentBytes)} used`, healthTone),
+                        metricCard(c, "bb-modal-card-signals", "Signals", `${status.analytics?.anomalyCount ?? 0} anomalies`, `${status.analytics?.milestoneCount ?? 0} milestones`, status.analytics?.anomalyCount ? "warning" : "success"),
+                        metricCard(c, "bb-modal-card-queue", "Queue", `${status.queue?.records ?? 0} queued`, `${status.queue?.droppedRecords ?? 0} dropped`, status.queue?.droppedRecords ? "warning" : "info")
+                    ], { id: "bb-modal-status-cards" }),
+                    c.progress({ label: "Storage usage", value: progressValue, max: 100, status: `${formatPercent(progressValue)} used`, tone: healthTone }, [], {
+                        id: "bb-modal-storage-progress",
+                        accessibility: { role: "progressbar", name: "Black Box modal storage usage", valueText: `${formatPercent(progressValue)} used` }
+                    }),
+                    ...modalSignalTrendNodes(c, records),
+                    ...modalHealthAlertNodes(c, status, state.lifecycle),
+                    ...modalActiveResultPanels(c, state),
+                    c.tabs?.({
+                        label: "Black Box modal sections",
+                        active: state.activeTab ?? "timeline",
+                        items: [
+                            { id: "timeline", label: "Timeline" },
+                            { id: "doctor", label: "Doctor" },
+                            { id: "export", label: "Export" }
+                        ]
+                    }, [], { id: "bb-modal-tabs", accessibility: { role: "tablist", name: "Black Box modal sections" } }),
+                    split({ label: "Timeline and detail split", responsive: { collapseBelowColumns: 100, orientation: "vertical" } }, [
+                        scroll({ label: "Scrollable metadata timeline" }, [
+                            c.panel({ title: "Metadata timeline", width: "58%" }, [
+                                c.text({ value: `${records.length} filtered record(s); showing ${records.length}. Sort ${state.sort?.field ?? "timestamp"} ${state.sort?.direction ?? "desc"}.`, tone: "muted" }, [], { id: "bb-modal-timeline-status", accessibility: { role: "status", name: "Timeline status" } }),
+                                c.table({
+                                    label: "Timeline table",
+                                    columns: timelineColumns(),
+                                    rows: records.map(record => timelineRow(record, selected?.recordId)),
+                                    selection: { selectedRowId: selected?.recordId ?? null, persistKey: "black-box.modal.timeline.selection" },
+                                    virtualization: { enabled: records.length > 8, rowHeight: 1, overscan: 4, totalRows: records.length, offset: 0, limit: records.length }
+                                }, [], {
+                                    id: "bb-modal-timeline-table",
+                                    actionBindings: { select: "select" },
+                                    accessibility: { role: "table", name: "Sanitized Black Box modal timeline" },
+                                    localization: { key: "timeline" }
+                                })
+                            ], { id: "bb-modal-timeline-panel" })
+                        ], { id: "bb-modal-timeline-scroll" }),
+                        c.panel({ title: "Details", width: "42%" }, [
+                            c.markdown({ markdown: selected ? detailMarkdown(selected) : "No metadata record selected." }, [], { id: "bb-modal-detail-summary" }),
+                            c.code({ language: "json", code: selected ? JSON.stringify(redactForDisplay(selected), null, 2) : "{}" }, [], { id: "bb-modal-detail-json" })
+                        ], { id: "bb-modal-detail-panel", accessibility: { role: "region", name: "Selected metadata details" }, localization: { key: "details" } })
+                    ], { id: "bb-modal-main-split" }),
+                    c.keybindingHint?.({ key: "Tab", label: "move action focus" }, [], { id: "bb-modal-focus-hint" }),
+                    c.text({ value: fallbackFooter(state), tone: "muted" }, [], { id: "bb-modal-footer", accessibility: { role: "status", name: "Black Box modal status" } })
+                ], { id: "bb-modal-viewport", accessibility: { role: "region", name: "Black Box live metadata" } })
+            ], { id: "bb-modal-surface", accessibility: { role: "application", name: "Black Box command center" } })
+        ].filter(Boolean), { id: "bb-modal-root", accessibility: { role: "dialog", name: title }, metadata: surfaceMetadata() });
         return ui.createUIDocument(root, {
             surfaceId: ENTERPRISE_SURFACE_ID,
             revision: nextRevision(state),
@@ -798,6 +829,14 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
         });
     } catch {
         return null;
+    }
+}
+
+function modalActiveTabTitle(state = {}) {
+    switch (state.activeTab) {
+        case "doctor": return "Doctor";
+        case "export": return "Export";
+        default: return "Timeline";
     }
 }
 

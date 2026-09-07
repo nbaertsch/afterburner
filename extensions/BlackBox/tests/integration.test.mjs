@@ -343,7 +343,7 @@ test("black-box-modal queues a runtime-owned native modal activation", async () 
     assert.deepEqual(logs, []);
 });
 
-test("black-box-modal command opens the registered runtime modal when queue is unavailable", async () => {
+test("black-box-modal never falls back to the generic Copilot canvas", async () => {
     const opens = [];
     const { registration, logs } = await captureSessionRegistration({
         service: { ...fakePanelService(), requestModalOpen: async () => { throw new Error("queue unavailable"); } },
@@ -353,51 +353,9 @@ test("black-box-modal command opens the registered runtime modal when queue is u
         }
     });
     await command(registration, "black-box-modal").handler();
-    assert.deepEqual(opens, [{ id: "afterburner-black-box", input: {} }]);
-    assert.deepEqual(logs, []);
-});
-
-test("black-box-modal treats Copilot canvas open snapshots as success", async () => {
-    const { registration, logs } = await captureSessionRegistration({
-        service: { ...fakePanelService(), requestModalOpen: async () => { throw new Error("queue unavailable"); } },
-        openModalCanvas: async () => ({
-            instanceId: "afterburner-black-box-session",
-            canvasId: "afterburner-black-box"
-        })
-    });
-    await command(registration, "black-box-modal").handler();
-    assert.deepEqual(logs, []);
-});
-
-test("black-box-modal command displays returned brokerless fallback frame", async () => {
-    const { registration, logs } = await captureSessionRegistration({
-        service: { ...fakePanelService(), requestModalOpen: async () => { throw new Error("queue unavailable"); } },
-        openModalCanvas: async () => ({
-            ok: true,
-            fallback: true,
-            frame: {
-                title: "Returned fallback title",
-                status: "Returned fallback status",
-                body: "Returned fallback body",
-                footer: "Returned fallback footer"
-            }
-        })
-    });
-    await command(registration, "black-box-modal").handler();
-    assert.deepEqual(logs, [[
-        "Returned fallback title",
-        "Returned fallback status",
-        "Returned fallback body",
-        "Returned fallback footer"
-    ].join("\n")]);
-    assert.doesNotMatch(logs[0], /opened using the host text fallback|live modal opened/i);
-
-    const textFallback = await captureSessionRegistration({
-        service: { ...fakePanelService(), requestModalOpen: async () => { throw new Error("queue unavailable"); } },
-        openModalCanvas: async () => "Returned brokerless fallback text"
-    });
-    await command(textFallback.registration, "black-box-modal").handler();
-    assert.deepEqual(textFallback.logs, ["Returned brokerless fallback text"]);
+    assert.deepEqual(opens, []);
+    assert.match(logs[0], /runtime modal activation queue is unavailable/);
+    assert.match(logs[0], /Showing text fallback/);
 });
 
 test("black-box-modal command provides explicit text fallback without overclaiming", async () => {
@@ -406,7 +364,7 @@ test("black-box-modal command provides explicit text fallback without overclaimi
         service: { ...fakePanelService(), requestModalOpen: async () => { throw new Error("queue unavailable"); } }
     });
     await command(unavailable.registration, "black-box-modal").handler();
-    assert.match(unavailable.logs[0], /modal activation queue and canvas API are unavailable/);
+    assert.match(unavailable.logs[0], /runtime modal activation queue is unavailable/);
     assert.match(unavailable.logs[0], /Showing text fallback/);
     assert.match(unavailable.logs[0], /Afterburner Black Box/);
     assert.doesNotMatch(unavailable.logs[0], /registered by the runtime extension/);
@@ -417,7 +375,7 @@ test("black-box-modal command provides explicit text fallback without overclaimi
         openModalCanvas: async () => { throw new Error("Unknown modal canvas"); }
     });
     await command(failing.registration, "black-box-modal").handler();
-    assert.match(failing.logs[0], /registered runtime modal is unavailable/);
+    assert.match(failing.logs[0], /runtime modal activation queue is unavailable/);
     assert.match(failing.logs[0], /Showing text fallback/);
 });
 
@@ -876,6 +834,11 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
     assert.match(openFrame.body, /No metadata events recorded yet/);
     assert.equal(openFrame.document.surfaceId, "afterburner-black-box-live");
     assert.equal(openFrame.document.root.kind, "dialog");
+    assert.match(JSON.stringify(openFrame.document), /bb-modal-breadcrumb/);
+    assert.match(JSON.stringify(openFrame.document), /bb-modal-surface/);
+    assert.match(JSON.stringify(openFrame.document), /bb-modal-viewport/);
+    assert.match(JSON.stringify(openFrame.document), /"kind":"split"/);
+    assert.match(JSON.stringify(openFrame.document), /"kind":"scroll"/);
     assert.match(JSON.stringify(openFrame.document), /bb-modal-status-cards/);
     assert.match(JSON.stringify(openFrame.document), /"kind":"statusGrid"/);
     assert.match(JSON.stringify(openFrame.document), /bb-modal-action-bar/);

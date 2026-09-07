@@ -91,10 +91,12 @@ const recordOperatorStep = ({ name, key, startedAt, completedAt, screenTitle, sc
 };
 let trusted = false;
 let restored = false;
+let lastRestoreDismissAt = 0;
 let approved = false;
 let terminalSetupDeclined = false;
 let commandInputStartedAt = 0;
 let commandSentAt = 0;
+let commandSubmitRetryAt = 0;
 let modalSeenAt = 0;
 let modalCaptureScheduled = false;
 const scrollSteps = [
@@ -745,14 +747,17 @@ const finish = (code, message) => {
 
 const scheduleWrite = (data, delayMs = 150, label = "input") => setTimeout(() => writeInput(data, label), delayMs).unref?.();
 const scheduleCommand = (command, delayMs = 150, onSubmit = () => {}, label = `submit ${command}`) => {
-  setTimeout(() => {
-    writeInput("\x15", `${label}: clear prompt`);
-    writeInput(`\x1b[200~${command}\x1b[201~`, `${label}: paste command`);
-  }, delayMs).unref?.();
+  const submit = suffix => {
+    writeInput("\x15", `${label}${suffix}: clear prompt`);
+    writeInput(`${command}\r`, `${label}${suffix}: type and submit command`);
+  };
   setTimeout(() => {
     onSubmit();
-    writeInput("\r", label);
-  }, delayMs + 900).unref?.();
+    submit("");
+  }, delayMs).unref?.();
+  setTimeout(() => {
+    if (!modalSeenAt && commandSentAt) submit(": retry");
+  }, delayMs + 3500).unref?.();
 };
 
 child.onData(data => {
@@ -766,8 +771,9 @@ child.onData(data => {
     scheduleWrite("\r", 250, "trust current folder");
     return;
   }
-  if (!restored && /Restore interrupted sessions/i.test(recent)) {
+  if (!commandInputStartedAt && /Restore interrupted sessions/i.test(recent) && Date.now() - lastRestoreDismissAt > 1000) {
     restored = true;
+    lastRestoreDismissAt = Date.now();
     scheduleWrite("\x1b", 250, "dismiss restore sessions");
     return;
   }
@@ -793,8 +799,12 @@ child.onData(data => {
   const promptReady = /\/ commands|tab next tab|\? help/i.test(recent);
   if (!commandInputStartedAt && runtimeReady && promptReady) {
     commandInputStartedAt = Date.now();
-    scheduleCommand("/black-box-modal", 2500, () => { commandSentAt = Date.now(); }, "submit /black-box-modal");
+    scheduleCommand("/black-box-modal", 5000, () => { commandSentAt = Date.now(); }, "submit /black-box-modal");
     return;
+  }
+  if (commandSentAt && !modalSeenAt && /\/black-box-modal/i.test(recent) && Date.now() - commandSubmitRetryAt > 5000) {
+    commandSubmitRetryAt = Date.now();
+    writeInput("\r\n", "retry /black-box-modal submit");
   }
   if (commandSentAt && !modalSeenAt && /Unknown command:\s*\/black-box-modal/i.test(recent)) {
     finish(1, "Copilot rejected /black-box-modal as an unknown command");

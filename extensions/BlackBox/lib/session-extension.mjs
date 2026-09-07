@@ -73,27 +73,6 @@ function formatTimeline(records) {
     ].join("\n");
 }
 
-function modalOpenSucceeded(result) {
-    return result === undefined || typeof result === "string" || result?.ok === true || result?.opened === true ||
-        result?.frame || (typeof result?.canvasId === "string" && typeof result?.instanceId === "string");
-}
-
-function renderReturnedFrame(frame) {
-    if (typeof frame === "string") return frame.trim();
-    if (!frame || typeof frame !== "object") return "";
-    return [frame.title, frame.status, frame.body, frame.footer]
-        .filter(value => typeof value === "string" && value.trim().length > 0)
-        .join("\n");
-}
-
-function returnedFallbackText(result) {
-    if (typeof result === "string") return result.trim();
-    if (!result || typeof result !== "object") return "";
-    return renderReturnedFrame(result.frame ?? result.fallbackFrame) ||
-        [result.fallbackText, result.text, result.message, result.content, result.body]
-            .find(value => typeof value === "string" && value.trim().length > 0)?.trim() || "";
-}
-
 function modalFallbackText(reason, status) {
     return [
         `Black Box modal unavailable: ${reason}. Showing text fallback.`,
@@ -107,7 +86,7 @@ async function safeAction(action) {
     catch { return { ok: false, error: "black-box-unavailable" }; }
 }
 
-export async function buildSessionRegistration({ service, createCanvas, joinSession, openModalCanvas }) {
+export async function buildSessionRegistration({ service, createCanvas, joinSession }) {
     let session;
     let liveTailTimer = null;
     const liveTailSeen = new Set();
@@ -189,23 +168,10 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
         try {
             const queued = await service.requestModalOpen({ surfaceId: "afterburner-black-box-live", input: {} });
             if (queued?.ok === true) return { opened: true, queued: true };
-        } catch {}
-        if (typeof openModalCanvas !== "function") {
-            return { opened: false, reason: "modal activation queue and canvas API are unavailable in this session" };
-        }
-        try {
-            const result = await openModalCanvas("afterburner-black-box", {});
-            if (modalOpenSucceeded(result)) {
-                return {
-                    opened: true,
-                    fallback: typeof result === "string" || result?.fallback === true,
-                    fallbackText: returnedFallbackText(result)
-                };
-            }
-            return { opened: false, reason: "the registered runtime modal did not open" };
+            return { opened: false, reason: queued?.error ?? "the runtime modal activation request was not acknowledged" };
         } catch (error) {
             const detail = String(error?.message ?? error ?? "unknown error").replace(/[\r\n\t]+/g, " ").slice(0, 500);
-            return { opened: false, reason: `the registered runtime modal is unavailable (${detail})` };
+            return { opened: false, reason: `the runtime modal activation queue is unavailable (${detail})` };
         }
     };
 
@@ -290,7 +256,6 @@ export async function startSessionExtension(options = {}) {
             service,
             createCanvas: options.createCanvas,
             joinSession: options.joinSession,
-            openModalCanvas: options.openModalCanvas
         });
         return {
             service,
