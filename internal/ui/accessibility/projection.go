@@ -558,6 +558,19 @@ func addAriaAliases(states map[string]string, relations map[string][]string, pro
 	if focusOrder := stringPropAny(props, "focusOrder", "tabIndex"); focusOrder != "" {
 		states["focusOrder"] = focusOrder
 	}
+	for state, keys := range map[string][]string{
+		"sort":        {"ariaSort", "aria-sort", "sort"},
+		"rowIndex":    {"ariaRowIndex", "aria-rowindex", "rowIndex"},
+		"columnIndex": {"ariaColIndex", "aria-colindex", "columnIndex", "colIndex"},
+		"rowSpan":     {"ariaRowSpan", "aria-rowspan", "rowSpan"},
+		"columnSpan":  {"ariaColSpan", "aria-colspan", "columnSpan", "colSpan"},
+		"rowCount":    {"ariaRowCount", "aria-rowcount", "rowCount"},
+		"columnCount": {"ariaColCount", "aria-colcount", "columnCount", "colCount"},
+	} {
+		if value := stringPropAny(props, keys...); value != "" {
+			states[state] = value
+		}
+	}
 	if atomic := stringPropAny(props, "ariaAtomic", "aria-atomic", "atomic"); atomic != "" {
 		states["atomic"] = atomic
 	}
