@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -120,6 +121,37 @@ func TestUIRenderFixtureCommand(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("gallery output missing %q: %q", want, stdout.String())
 		}
+	}
+}
+
+func TestUIRenderFixtureCommandAcceptsViewportAndThemeOptions(t *testing.T) {
+	var stdout bytes.Buffer
+	args := []string{"ui", "render-fixture", "--json", "--width", "120", "--height", "12", "--theme", "afterburner.highContrast", "--color", "high-contrast", "--unicode", "component-gallery"}
+	code, err := Run(context.Background(), args, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("Run returned code=%d err=%v output=%s", code, err, stdout.String())
+	}
+	var payload struct {
+		Frame struct {
+			Width     int    `json:"width"`
+			Height    int    `json:"height"`
+			ThemeID   string `json:"themeId"`
+			ColorMode string `json:"colorMode"`
+		} `json:"frame"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("catalog JSON invalid: %v\n%s", err, stdout.String())
+	}
+	if payload.Frame.Width != 120 || payload.Frame.Height != 12 || payload.Frame.ThemeID != "afterburner.highContrast" || payload.Frame.ColorMode != "high-contrast" {
+		t.Fatalf("render options were not applied: %#v", payload.Frame)
+	}
+}
+
+func TestUIRenderFixtureCommandRejectsBadViewportOptions(t *testing.T) {
+	var stdout bytes.Buffer
+	code, err := Run(context.Background(), []string{"ui", "render-fixture", "--width", "0", "component-gallery"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err == nil || code != 2 || !strings.Contains(err.Error(), "--width must be a positive integer") {
+		t.Fatalf("expected invalid width failure, code=%d err=%v stdout=%q", code, err, stdout.String())
 	}
 }
 
