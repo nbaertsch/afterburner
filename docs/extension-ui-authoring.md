@@ -43,8 +43,11 @@ The catalog output is generated from the same component, surface, and capability
 
 Use the SDK component builders from `sdk\ui` to emit versioned `afterburner.ui` component snapshots and patches. Every public component kind has both `ui.components.<kind>(...)` and a named `ui.<kind>(...)` builder. Extensions can inspect `ui.componentCatalog` for `{ kind, stability, description }` metadata and `ui.componentKinds` for the ordered kind list. Surface authors can likewise inspect `ui.surfaceCatalog`/`ui.surfaceKinds`, and enterprise policy tooling can inspect `ui.capabilityCatalog`/`ui.capabilityKinds` before declaring grants. Every node should have a stable `id`, a `kind`, JSON props, and accessibility metadata when the visible label is not obvious. Surfaces move through declared, mounted, rendering, interactive, suspended, disposing, disposed, and failed states.
 
-Public composable design primitives include:
+## Accessibility props
 
+The accessibility projection honors structured `accessibility` metadata plus author-friendly prop aliases for labels (`ariaLabel`, `aria-label`), descriptions (`ariaDescription`, `aria-description`), visibility (`ariaHidden`, `aria-hidden`), modal state (`ariaModal`, `aria-modal`), boolean states (`ariaDisabled`, `ariaExpanded`, `ariaSelected`, `ariaPressed`, `ariaHasPopup`), live regions (`ariaLive`, `ariaAtomic`, `ariaRelevant`), ranges (`ariaValueNow`, `ariaValueMin`, `ariaValueMax`, `ariaValueText`), hierarchy (`ariaLevel`, `ariaPosInSet`, `ariaSetSize`), table/grid coordinates (`ariaSort`, `ariaRowIndex`, `ariaColIndex`, `ariaRowSpan`, `ariaColSpan`, `ariaRowCount`, `ariaColCount`), keyboard hints (`ariaKeyShortcuts`), and relationships (`ariaLabelledBy`, `ariaDescribedBy`, `ariaControls`, `ariaActiveDescendant`, `ariaErrorMessage`, `ariaDetails`, `ariaOwns`, `ariaFlowTo`). Use these aliases when porting web accessibility guidance into terminal-first Afterburner component trees.
+
+Public composable design primitives include:
 - Layout: `application`, `window`, `surface`, `viewport`, `stack`, `column`, `row`, `grid`, `box`, `section`, `split`, `scroll`, `disclosure`, `panel`, `card`, `separator`, `spacer`.
 - Content/status: `empty`, `text`, `markdown`, `code`, `icon`, `badge`, `keyValue`, `detail`, `alert`, `progress`, `meter`, `bar`, `sparkline`, `spinner`, `loading`, `toast`, `errorBoundary`.
 - Collections/data: `list`, `table`, `tree`, `timeline`, `log`, `chart`.
