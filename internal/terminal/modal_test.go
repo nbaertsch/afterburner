@@ -315,6 +315,22 @@ func TestTerminalModalRendererProjectsDocumentCollectionsAndNavigation(t *testin
 	}
 }
 
+func TestTerminalModalRendererProjectsDocumentActionControls(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 120, Rows: 34})
+	renderer.ShowModal(ModalFrame{
+		Title:    "Document Controls",
+		Status:   "Actions",
+		Document: json.RawMessage(`{"root":{"kind":"dialog","children":[{"kind":"button","props":{"label":"Approve","keybinding":"a"}},{"kind":"link","props":{"label":"Open docs","shortcut":"o"}},{"kind":"pagination","props":{"label":"Results","page":2,"totalPages":5}},{"kind":"help","props":{"description":"Use arrows to move through rows."}},{"kind":"confirmation","props":{"title":"Confirm deploy","message":"Deploy to production?"}},{"kind":"prompt","props":{"label":"Search prompt","value":"service:"}}]}}`),
+	})
+	text := output.String()
+	for _, want := range []string{"[a] Approve", "[o] Open docs", "Results: 2/5", "Help: Use arrows to move through rows.", "Confirm deploy: Deploy to production?", "Search prompt: service:"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("projected action/control missing %q: %q", want, text)
+		}
+	}
+}
+
 func TestModalServerScrollsOverflowWithoutExtensionAction(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})

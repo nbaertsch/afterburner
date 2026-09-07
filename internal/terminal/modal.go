@@ -1948,7 +1948,15 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 	case "toggle":
 		appendModalLine(lines, modalCheckboxLine(node, "○", "●"))
 	case "button":
-		// Buttons are already summarized from frame actions in the modal header/body.
+		appendModalLine(lines, modalActionControlLine(node, "Button"))
+	case "link":
+		appendModalLine(lines, modalActionControlLine(node, "Link"))
+	case "pagination":
+		appendModalLine(lines, modalPaginationLine(node))
+	case "help":
+		appendModalLine(lines, modalHelpLine(node))
+	case "confirmation", "prompt":
+		appendModalLine(lines, modalPromptLine(node))
 	default:
 		if title := firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), modalStringProp(node.Props, "message")); title != "" {
 			appendModalLine(lines, title)
@@ -1978,6 +1986,35 @@ func appendModalCardLine(lines *[]string, node modalDocumentNode) {
 		cleaned[1] = modalToneGlyph(firstNonEmpty(modalStringProp(node.Props, "tone"), cleaned[1])) + " " + cleaned[1]
 	}
 	appendModalLine(lines, "  • "+strings.Join(cleaned, "  │  "))
+}
+
+func modalActionControlLine(node modalDocumentNode, fallback string) string {
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "title"), modalStringProp(node.Props, "text"), node.ID, fallback)
+	key := firstNonEmpty(modalStringProp(node.Props, "key"), modalStringProp(node.Props, "keybinding"), modalStringProp(node.Props, "shortcut"))
+	if key != "" {
+		return "[" + printableModalText(key, false) + "] " + printableModalText(label, false)
+	}
+	return "[" + printableModalText(label, false) + "]"
+}
+
+func modalPaginationLine(node modalDocumentNode) string {
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), "Page")
+	current := firstNonEmpty(modalStringProp(node.Props, "page"), modalStringProp(node.Props, "current"), modalStringProp(node.Props, "value"), "?")
+	total := firstNonEmpty(modalStringProp(node.Props, "totalPages"), modalStringProp(node.Props, "total"), modalStringProp(node.Props, "max"), "?")
+	return fmt.Sprintf("%s: %s/%s", label, current, total)
+}
+
+func modalHelpLine(node modalDocumentNode) string {
+	return "Help: " + firstNonEmpty(modalStringProp(node.Props, "text"), modalStringProp(node.Props, "label"), modalStringProp(node.Props, "description"), "No help text provided.")
+}
+
+func modalPromptLine(node modalDocumentNode) string {
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "title"), strings.Title(node.Kind))
+	message := firstNonEmpty(modalStringProp(node.Props, "message"), modalStringProp(node.Props, "description"), modalStringProp(node.Props, "value"))
+	if message == "" {
+		return label
+	}
+	return label + ": " + message
 }
 
 func appendModalInputLine(lines *[]string, node modalDocumentNode) {
