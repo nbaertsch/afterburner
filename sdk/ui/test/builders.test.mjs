@@ -43,6 +43,16 @@ test("packaged catalogs expose components, surfaces, and capabilities", async ()
   }
 });
 
+test("TypeScript declarations cover public SDK catalogs and builders", async () => {
+  const declarations = await readFile(new URL("../index.d.ts", import.meta.url), "utf8");
+  for (const name of ["componentCatalog", "surfaceCatalog", "capabilityKinds", "capabilityCatalog"]) {
+    assert.match(declarations, new RegExp(`export const ${name}:`), `${name} declaration missing`);
+  }
+  for (const kind of componentKinds) {
+    assert.match(declarations, new RegExp(`export const ${kind}:`), `${kind} builder declaration missing`);
+  }
+});
+
 test("builders cover the full W0 component catalog and produce stable IDs", () => {
   for (const kind of componentKinds) assert.equal(typeof components[kind], "function", `${kind} builder missing`);
   const first = stack({ gap: "s" }, [text("Hello"), button({ label: "Go", actionId: "go" })], { key: "body" });
