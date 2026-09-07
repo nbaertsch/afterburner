@@ -279,6 +279,8 @@ func roleForKind(kind string) Role {
 		return RoleToolbar
 	case "tabs":
 		return RoleTabList
+	case "pagination", "breadcrumb":
+		return RoleNavigation
 	case "dialog", "confirmation", "prompt":
 		return RoleDialog
 	case "toast", "alert":

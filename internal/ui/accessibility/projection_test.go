@@ -62,6 +62,12 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 	if got := byID["sdk-code"].Name; !strings.Contains(got, "fmt.Println") {
 		t.Fatalf("code prop did not provide accessible name: %q", got)
 	}
+	if byID["sdk-pagination"].Role != RoleNavigation || !hasShortcut(byID["sdk-pagination"].KeyboardActions, "Arrow keys", "navigate") {
+		t.Fatalf("pagination should project as keyboard navigation: %#v", byID["sdk-pagination"])
+	}
+	if byID["sdk-breadcrumb"].Role != RoleNavigation {
+		t.Fatalf("breadcrumb should project as a navigation landmark: %#v", byID["sdk-breadcrumb"])
+	}
 	modal := byID["sdk-dialog-modal"]
 	if modal.States["modal"] != "true" || !hasShortcut(modal.KeyboardActions, "Tab", "cycle focus") {
 		t.Fatalf("modal dialog semantics mismatch: %#v", modal)
