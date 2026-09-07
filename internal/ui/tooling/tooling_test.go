@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nbaertsch/afterburner/internal/ui/component"
 	"github.com/nbaertsch/afterburner/internal/ui/protocol"
 )
 
@@ -144,6 +145,24 @@ func TestTraceRedactsAndSorts(t *testing.T) {
 	}
 	if strings.Contains(string(data), "hide") || !strings.Contains(string(data), "redacted") {
 		t.Fatalf("trace not redacted: %s", data)
+	}
+}
+
+func TestAllComponentsFixtureCoversPublicCatalog(t *testing.T) {
+	fixture := AllComponentsFixture()
+	covered := map[string]bool{}
+	var walk func(component.Node)
+	walk = func(node component.Node) {
+		covered[string(node.Kind)] = true
+		for _, child := range node.Children {
+			walk(child)
+		}
+	}
+	walk(fixture.Tree.Root)
+	for _, entry := range component.PublicCatalog() {
+		if !covered[string(entry.Kind)] {
+			t.Fatalf("all-components fixture missing public kind %q", entry.Kind)
+		}
 	}
 }
 
