@@ -677,7 +677,7 @@ func stringListProp(props map[string]any, keys ...string) []string {
 	for _, key := range keys {
 		switch v := props[key].(type) {
 		case string:
-			fields := strings.Fields(v)
+			fields := splitTokenList(v)
 			if len(fields) > 0 {
 				return fields
 			}
@@ -698,6 +698,12 @@ func stringListProp(props map[string]any, keys ...string) []string {
 		}
 	}
 	return nil
+}
+
+func splitTokenList(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
 }
 
 func valueString(value any) string {
