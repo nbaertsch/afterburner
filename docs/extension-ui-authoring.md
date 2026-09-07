@@ -28,6 +28,15 @@ Validate locally:
 afterburn ui validate-manifest .\afterburner.json
 ```
 
+Discover the host-supported UI contract before authoring or reviewing an extension:
+
+```powershell
+afterburn ui catalog
+afterburn ui catalog --json
+```
+
+The catalog output is generated from the same component, surface, and capability registries enforced by validation, so it is the source of truth for manifest `ui.components`, `ui.surfaces[].kind`, and `ui.capabilities` values.
+
 ## Components and lifecycle
 
 Use the SDK component builders from `sdk\ui` to emit versioned `afterburner.ui` component snapshots and patches. Every public component kind has both `ui.components.<kind>(...)` and a named `ui.<kind>(...)` builder. Extensions can inspect `ui.componentCatalog` for `{ kind, stability, description }` metadata and `ui.componentKinds` for the ordered kind list. Surface authors can likewise inspect `ui.surfaceCatalog`/`ui.surfaceKinds`, and enterprise policy tooling can inspect `ui.capabilityCatalog`/`ui.capabilityKinds` before declaring grants. Every node should have a stable `id`, a `kind`, JSON props, and accessibility metadata when the visible label is not obvious. Surfaces move through declared, mounted, rendering, interactive, suspended, disposing, disposed, and failed states.

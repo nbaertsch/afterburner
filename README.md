@@ -143,9 +143,10 @@ reconcilers, policy/audit, SDK bridges, schema registries, and event sinks. Blac
 `afterburner.ui` observability event sink extension; hosts and renderers must function when it is
 not installed or enabled.
 
-Enterprise UI tooling is available under `afterburn ui ...` for manifest validation, fixture
-rendering, surface simulation, metadata-only trace inspection, runtime grants, policy installation,
-and certification reports. See [`docs\extension-ui-authoring.md`](docs/extension-ui-authoring.md)
+Enterprise UI tooling is available under `afterburn ui ...` for public catalog discovery,
+manifest validation, fixture rendering, surface simulation, metadata-only trace inspection, runtime
+grants, policy installation, and certification reports. See
+[`docs\extension-ui-authoring.md`](docs/extension-ui-authoring.md)
 and [`docs\enterprise-ui-admin.md`](docs/enterprise-ui-admin.md).
 
 ## Compatibility and recovery
