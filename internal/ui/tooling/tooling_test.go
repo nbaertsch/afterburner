@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/nbaertsch/afterburner/internal/registry"
 	"github.com/nbaertsch/afterburner/internal/ui/component"
 	"github.com/nbaertsch/afterburner/internal/ui/protocol"
 )
@@ -159,6 +161,23 @@ func TestGrantServicePersistsDeterministically(t *testing.T) {
 	}
 	if revoked.RevokedAt == nil || !revoked.RevokedAt.Equal(DeterministicTime) {
 		t.Fatalf("revocation was not deterministic: %#v", revoked)
+	}
+}
+
+func TestManifestBriefIncludesUICapabilities(t *testing.T) {
+	entry := registry.Entry{
+		Manifest: registry.Manifest{
+			ID:           "sample-ui",
+			DisplayName:  "Sample UI",
+			Capabilities: []string{"modal-canvas"},
+			UI:           json.RawMessage(`{"protocol":"afterburner.ui","revision":1,"surfaces":[{"id":"sample-panel","kind":"panel"}],"components":["panel","text"],"capabilities":["ui.action.invoke","ui.render.components"]}`),
+		},
+		Enabled:    true,
+		ActivePath: "C:\\extensions\\sample-ui",
+	}
+	brief := manifestBrief(entry)
+	if got, want := brief.UICapabilities, []string{"ui.action.invoke", "ui.render.components"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ui capabilities = %#v, want %#v", got, want)
 	}
 }
 

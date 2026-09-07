@@ -26,13 +26,14 @@ type SimulationResult struct {
 }
 
 type ManifestBrief struct {
-	ID           string   `json:"id"`
-	DisplayName  string   `json:"displayName"`
-	Enabled      bool     `json:"enabled"`
-	ActivePath   string   `json:"activePath,omitempty"`
-	Capabilities []string `json:"capabilities,omitempty"`
-	UIComponents []string `json:"uiComponents,omitempty"`
-	UISurfaces   []string `json:"uiSurfaces,omitempty"`
+	ID             string   `json:"id"`
+	DisplayName    string   `json:"displayName"`
+	Enabled        bool     `json:"enabled"`
+	ActivePath     string   `json:"activePath,omitempty"`
+	Capabilities   []string `json:"capabilities,omitempty"`
+	UIComponents   []string `json:"uiComponents,omitempty"`
+	UISurfaces     []string `json:"uiSurfaces,omitempty"`
+	UICapabilities []string `json:"uiCapabilities,omitempty"`
 }
 
 type RenderProbe struct {
@@ -183,6 +184,7 @@ func manifestBrief(entry registry.Entry) ManifestBrief {
 	if len(entry.Manifest.UI) > 0 {
 		if ui, errs, _ := validateUIDeclaration(entry.Manifest.UI); len(errs) == 0 && ui != nil {
 			brief.UIComponents = append([]string(nil), ui.Components...)
+			brief.UICapabilities = append([]string(nil), ui.Capabilities...)
 			for _, s := range ui.Surfaces {
 				brief.UISurfaces = append(brief.UISurfaces, s.ID+":"+s.Kind)
 			}
@@ -191,6 +193,7 @@ func manifestBrief(entry registry.Entry) ManifestBrief {
 	sort.Strings(brief.Capabilities)
 	sort.Strings(brief.UIComponents)
 	sort.Strings(brief.UISurfaces)
+	sort.Strings(brief.UICapabilities)
 	return brief
 }
 
