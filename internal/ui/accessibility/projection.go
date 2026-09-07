@@ -345,9 +345,9 @@ func roleProp(props map[string]any) Role {
 }
 
 func accessibleName(source SourceNode) string {
-	keys := []string{"ariaLabel", "aria-label", "label", "title", "name", "text", "value", "markdown", "code", "message", "content", "placeholder", "alt"}
+	keys := []string{"ariaLabel", "aria-label", "label", "title", "name", "text", "value", "markdown", "code", "message", "content", "ariaPlaceholder", "aria-placeholder", "placeholder", "alt"}
 	if isSecretInput(source) {
-		keys = []string{"ariaLabel", "aria-label", "label", "title", "name", "placeholder"}
+		keys = []string{"ariaLabel", "aria-label", "label", "title", "name", "ariaPlaceholder", "aria-placeholder", "placeholder"}
 	}
 	for _, key := range keys {
 		if value := stringProp(source.Props, key); value != "" {

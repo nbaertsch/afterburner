@@ -137,7 +137,7 @@ func TestHiddenNodesAreRemovedFromAccessibilityProjection(t *testing.T) {
 
 func TestSecretInputsDoNotExposeValueAsAccessibleName(t *testing.T) {
 	tree := SourceTree{SurfaceID: "s", Root: SourceNode{ID: "root", Kind: "application", Children: []SourceNode{
-		{ID: "password", Kind: "passwordInput", Props: map[string]any{"value": "super-secret", "placeholder": "Password"}},
+		{ID: "password", Kind: "passwordInput", Props: map[string]any{"value": "super-secret", "ariaPlaceholder": "Password"}},
 		{ID: "typed", Kind: "textInput", Props: map[string]any{"type": "password", "value": "hidden-token"}},
 		{ID: "notes", Kind: "textArea", Props: map[string]any{"label": "Notes", "placeholder": "Add context", "ariaAutocomplete": "list"}},
 	}}}
