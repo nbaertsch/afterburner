@@ -126,6 +126,9 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 		node.KeyboardActions = mergeShortcuts(node.KeyboardActions, keyboardForKind(source.Kind, source.Props)...)
 	}
 	if node.Live == "" {
+		node.Live = liveProp(source.Props)
+	}
+	if node.Live == "" {
 		node.Live = liveForKind(source.Kind)
 	}
 	if node.Description == "" {
@@ -380,6 +383,21 @@ func keyboardForKind(kind string, props map[string]any) []Shortcut {
 	default:
 		return nil
 	}
+}
+
+func liveProp(props map[string]any) LivePoliteness {
+	for _, key := range []string{"ariaLive", "live"} {
+		value := strings.ToLower(strings.TrimSpace(stringProp(props, key)))
+		switch value {
+		case string(LiveOff):
+			return LiveOff
+		case string(LivePolite):
+			return LivePolite
+		case string(LiveAssertive):
+			return LiveAssertive
+		}
+	}
+	return ""
 }
 
 func liveForKind(kind string) LivePoliteness {

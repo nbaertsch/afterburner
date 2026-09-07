@@ -127,6 +127,29 @@ func TestSecretInputsDoNotExposeValueAsAccessibleName(t *testing.T) {
 	}
 }
 
+func TestLivePropsControlAccessibilityAnnouncements(t *testing.T) {
+	tree := SourceTree{SurfaceID: "s", Root: SourceNode{ID: "root", Kind: "application", Children: []SourceNode{
+		{ID: "assertive", Kind: "statusGrid", Props: map[string]any{"label": "Build failed", "ariaLive": "assertive"}},
+		{ID: "quiet", Kind: "alert", Props: map[string]any{"message": "Saved", "live": "off"}},
+	}}}
+	projected := Project(tree, ProjectionOptions{KeyboardOnly: true, Now: func() time.Time { return time.Unix(6, 0).UTC() }})
+	byID := map[string]SemanticNode{}
+	var index func(SemanticNode)
+	index = func(node SemanticNode) {
+		byID[node.ID] = node
+		for _, child := range node.Children {
+			index(child)
+		}
+	}
+	index(projected.Root)
+	if byID["assertive"].Live != LiveAssertive || byID["quiet"].Live != LiveOff {
+		t.Fatalf("live props should control announcement politeness: assertive=%#v quiet=%#v", byID["assertive"], byID["quiet"])
+	}
+	if projected.LiveSummary != "Build failed" {
+		t.Fatalf("live summary should include only active live regions: %q", projected.LiveSummary)
+	}
+}
+
 func TestLiveRegionThrottlerSummarizes(t *testing.T) {
 	throttler := LiveRegionThrottler{MinInterval: time.Second, MaxItems: 2}
 	now := time.Unix(1, 0)
