@@ -72,6 +72,14 @@ const forbiddenCanvasMatches = forbiddenCanvasFiles.flatMap(file => {
   const matches = [...source.matchAll(/createCanvas|openModalCanvas|canvasRpc\.open|canvases:\s*canvas|"canvas"/g)].map(match => match[0]);
   return matches.map(match => ({ file, match }));
 });
+const packagePreflight = {
+  afterburnerHome: isolatedAfterburnerHome,
+  blackBoxActivePath,
+  checkedFiles: forbiddenCanvasFiles,
+  forbiddenPatterns: ["createCanvas", "openModalCanvas", "canvasRpc.open", "canvases: canvas", "\\\"canvas\\\""],
+  noGenericCanvasFallback: forbiddenCanvasMatches.length === 0,
+  forbiddenCanvasMatches
+};
 if (forbiddenCanvasMatches.length > 0) {
   throw new Error(`installed Black Box still exposes generic canvas fallback: ${JSON.stringify(forbiddenCanvasMatches)}`);
 }
@@ -224,6 +232,7 @@ const result = (status, extra = {}) => {
     visualEvidence: visualEvidenceManifest(),
     visualEvidenceValidation: validateVisualEvidenceManifest(),
     replayValidation: validateReplayArtifacts(),
+    packagePreflight,
     visualArtifacts: {
       raw: artifactPath("blackbox-modal-tui.raw"),
       text: artifactPath("blackbox-modal-tui.txt"),
@@ -752,6 +761,7 @@ const writeCaptures = (status = "running", extra = {}) => {
     schemaVersion: 1,
     generatedAt: capture.completedAt,
     captureDirectory,
+    packagePreflight: capture.packagePreflight,
     visualInspection: capture.visualInspection,
     latencyBudget: capture.latencyBudget,
     evidence: capture.visualEvidence,
