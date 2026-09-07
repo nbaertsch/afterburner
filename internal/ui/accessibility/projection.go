@@ -540,10 +540,11 @@ func addAriaAliases(states map[string]string, relations map[string][]string, pro
 	if invalid := stringPropAny(props, "ariaInvalid", "aria-invalid"); invalid != "" {
 		states["invalid"] = invalid
 	}
-	if current := stringProp(props, "ariaCurrent"); current != "" {
+	if current := stringPropAny(props, "ariaCurrent", "aria-current", "current"); current != "" {
 		states["current"] = current
-	} else if current := stringProp(props, "current"); current != "" {
-		states["current"] = current
+	}
+	if orientation := stringPropAny(props, "ariaOrientation", "aria-orientation", "orientation"); orientation != "" {
+		states["orientation"] = orientation
 	}
 	if position := stringPropAny(props, "ariaPosInSet", "aria-posinset", "positionInSet"); position != "" {
 		states["positionInSet"] = position
