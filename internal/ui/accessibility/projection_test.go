@@ -99,6 +99,20 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 	}
 }
 
+func TestRolePropsOverrideDefaultLandmarkSemantics(t *testing.T) {
+	tree := SourceTree{SurfaceID: "s", Root: SourceNode{ID: "root", Kind: "application", Children: []SourceNode{
+		{ID: "main", Kind: "section", Props: map[string]any{"title": "Workspace", "role": "main"}},
+		{ID: "bad", Kind: "section", Props: map[string]any{"title": "Bad role", "role": "definitely-not-a-role"}},
+	}}}
+	projected := Project(tree, ProjectionOptions{Now: func() time.Time { return time.Unix(7, 0).UTC() }})
+	if projected.Root.Children[0].Role != RoleMain {
+		t.Fatalf("role prop should project known landmarks: %#v", projected.Root.Children[0])
+	}
+	if projected.Root.Children[1].Role != RoleRegion {
+		t.Fatalf("unknown role prop should preserve safe default role: %#v", projected.Root.Children[1])
+	}
+}
+
 func TestHiddenNodesAreRemovedFromAccessibilityProjection(t *testing.T) {
 	tree := SourceTree{SurfaceID: "s", Root: SourceNode{ID: "root", Kind: "application", Children: []SourceNode{
 		{ID: "visible", Kind: "text", Props: map[string]any{"text": "Visible"}},

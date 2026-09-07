@@ -75,6 +75,9 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 	}
 	a11y := source.Accessibility
 	node := SemanticNode{ID: source.ID, Role: roleForKind(source.Kind), Name: accessibleName(source), Description: accessibleDescription(source.Props), States: map[string]string{}, Relations: map[string][]string{}}
+	if role := roleProp(source.Props); role != "" {
+		node.Role = role
+	}
 	if a11y != nil {
 		if a11y.Role != "" {
 			node.Role = a11y.Role
@@ -323,6 +326,16 @@ func roleForKind(kind string) Role {
 		return RoleRegion
 	default:
 		return RoleGroup
+	}
+}
+
+func roleProp(props map[string]any) Role {
+	value := strings.ToLower(strings.TrimSpace(stringPropAny(props, "ariaRole", "role", "landmark")))
+	switch value {
+	case string(RoleApplication), string(RoleArticle), string(RoleBanner), string(RoleButton), string(RoleCheckbox), string(RoleCode), string(RoleColumnHeader), string(RoleCombobox), string(RoleComplementary), string(RoleContentInfo), string(RoleDialog), string(RoleDocument), string(RoleGrid), string(RoleGridCell), string(RoleGroup), string(RoleHeading), string(RoleImage), string(RoleLink), string(RoleList), string(RoleListItem), string(RoleLog), string(RoleMain), string(RoleMenu), string(RoleMenuItem), string(RoleNavigation), string(RoleOption), string(RoleProgressBar), string(RoleRadio), string(RoleRadioGroup), string(RoleRegion), string(RoleRow), string(RoleRowHeader), string(RoleSearch), string(RoleSeparator), string(RoleStatus), string(RoleSwitch), string(RoleTab), string(RoleTabList), string(RoleTabPanel), string(RoleTable), string(RoleTextbox), string(RoleTimer), string(RoleToolbar), string(RoleTooltip), string(RoleTree), string(RoleTreeItem):
+		return Role(value)
+	default:
+		return ""
 	}
 }
 
