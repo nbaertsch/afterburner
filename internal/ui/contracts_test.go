@@ -104,6 +104,38 @@ func TestExtensionUISchemaRejectsUnknownComponentKind(t *testing.T) {
 	}
 }
 
+func TestExtensionUISchemaRejectsUnknownCapability(t *testing.T) {
+	schema := readJSON(t, filepath.Join("..", "..", "schemas", "extension-ui-v1.schema.json"))
+	document := map[string]any{
+		"protocol":     "afterburner.ui",
+		"revision":     float64(1),
+		"capabilities": []any{"ui.render.componnets"},
+		"surfaces": []any{map[string]any{
+			"id":                   "main",
+			"kind":                 "panel",
+			"requiredCapabilities": []any{"ui.surface.pnael"},
+		}},
+	}
+	if err := (schemaValidator{root: schema, allowExternalRefs: true}).validate(schema, document, "fixture"); err == nil {
+		t.Fatal("extension UI schema accepted an unknown capability")
+	}
+}
+
+func TestExtensionUICapabilitySchemaMatchesCoreDescriptors(t *testing.T) {
+	schema := readJSON(t, filepath.Join("..", "..", "schemas", "extension-ui-v1.schema.json"))
+	grantSchema := readJSON(t, filepath.Join("..", "..", "schemas", "ui-grant-policy-v1.schema.json"))
+	capabilityEnum := toStringSlice(schema["properties"].(map[string]any)["capabilities"].(map[string]any)["items"].(map[string]any)["enum"].([]any))
+	surfaceCapabilityEnum := toStringSlice(schema["properties"].(map[string]any)["surfaces"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["requiredCapabilities"].(map[string]any)["items"].(map[string]any)["enum"].([]any))
+	grantCapabilityEnum := toStringSlice(grantSchema["$defs"].(map[string]any)["capability"].(map[string]any)["enum"].([]any))
+	coreCapabilities := make([]string, 0, len(capability.CoreDescriptors()))
+	for _, descriptor := range capability.CoreDescriptors() {
+		coreCapabilities = append(coreCapabilities, string(descriptor.ID))
+	}
+	if !reflect.DeepEqual(capabilityEnum, coreCapabilities) || !reflect.DeepEqual(surfaceCapabilityEnum, coreCapabilities) || !reflect.DeepEqual(grantCapabilityEnum, coreCapabilities) {
+		t.Fatalf("UI capability schemas differ from core descriptors\n--- ui\n%v\n--- surface\n%v\n--- grant\n%v\n--- core\n%v", capabilityEnum, surfaceCapabilityEnum, grantCapabilityEnum, coreCapabilities)
+	}
+}
+
 func TestSurfaceKindsHaveCapabilityDescriptors(t *testing.T) {
 	capabilities := map[capability.ID]bool{}
 	for _, descriptor := range capability.CoreDescriptors() {
@@ -471,6 +503,14 @@ func toStringSet(values []any) map[string]bool {
 		set[value.(string)] = true
 	}
 	return set
+}
+
+func toStringSlice(values []any) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, value.(string))
+	}
+	return out
 }
 
 func TestSemanticCatalogsDoNotContainDuplicates(t *testing.T) {

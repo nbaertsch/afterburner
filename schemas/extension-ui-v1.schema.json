@@ -45,7 +45,30 @@
           "requiredCapabilities": {
             "type": "array",
             "items": {
-              "type": "string"
+              "enum": [
+                "ui.render.components",
+                "ui.render.terminal",
+                "ui.surface.terminal",
+                "ui.surface.modal",
+                "ui.surface.panel",
+                "ui.surface.inline",
+                "ui.surface.statusLine",
+                "ui.surface.commandPalette",
+                "ui.surface.overlay",
+                "ui.action.invoke",
+                "ui.data.read",
+                "ui.data.write",
+                "ui.stream.read",
+                "ui.stream.write",
+                "ui.theme.read",
+                "ui.theme.write",
+                "ui.localization.read",
+                "ui.accessibility.inspect",
+                "ui.policy.evaluate",
+                "ui.audit.write",
+                "ui.observability.sink",
+                "ui.observability.black-box.sink"
+              ]
             },
             "uniqueItems": true
           }
@@ -137,8 +160,30 @@
     "capabilities": {
       "type": "array",
       "items": {
-        "type": "string",
-        "pattern": "^ui\\.[a-z0-9.-]+$"
+        "enum": [
+          "ui.render.components",
+          "ui.render.terminal",
+          "ui.surface.terminal",
+          "ui.surface.modal",
+          "ui.surface.panel",
+          "ui.surface.inline",
+          "ui.surface.statusLine",
+          "ui.surface.commandPalette",
+          "ui.surface.overlay",
+          "ui.action.invoke",
+          "ui.data.read",
+          "ui.data.write",
+          "ui.stream.read",
+          "ui.stream.write",
+          "ui.theme.read",
+          "ui.theme.write",
+          "ui.localization.read",
+          "ui.accessibility.inspect",
+          "ui.policy.evaluate",
+          "ui.audit.write",
+          "ui.observability.sink",
+          "ui.observability.black-box.sink"
+        ]
       },
       "uniqueItems": true
     },

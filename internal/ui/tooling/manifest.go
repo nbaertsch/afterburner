@@ -201,7 +201,12 @@ func validSurfaceKind(kind string) bool {
 }
 
 func validUICapability(value string) bool {
-	return regexp.MustCompile(`^ui\.[a-z0-9.-]+$`).MatchString(value)
+	for _, descriptor := range capability.CoreDescriptors() {
+		if string(descriptor.ID) == value {
+			return true
+		}
+	}
+	return false
 }
 
 func supportedKindSet() map[string]bool {

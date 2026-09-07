@@ -78,6 +78,23 @@ func TestValidateManifestRejectsUnsupportedUIComponent(t *testing.T) {
 	}
 }
 
+func TestValidateManifestRejectsUnknownUICapability(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "extension.mjs"), []byte("export {};"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "afterburner.json")
+	manifest := `{"schemaVersion":1,"id":"bad-ui-cap","displayName":"Bad UI Cap","visibility":"private","requires":{"afterburner":"1"},"runtime":{"execution":"in-process","entrypoint":"extension.mjs"},"ui":{"protocol":"afterburner.ui","revision":1,"surfaces":[{"id":"main","kind":"panel","requiredCapabilities":["ui.surface.pnael"]}],"capabilities":["ui.render.componnets"]}}`
+	if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := ValidateManifest(path)
+	errors := strings.Join(result.Errors, "\n")
+	if result.Valid || !strings.Contains(errors, "invalid surface capability \"ui.surface.pnael\"") || !strings.Contains(errors, "invalid ui capability \"ui.render.componnets\"") {
+		t.Fatalf("expected unknown UI capability errors, got %#v", result)
+	}
+}
+
 func TestGrantServicePersistsDeterministically(t *testing.T) {
 	home := t.TempDir()
 	record, err := Grant(home, "sample-ui", "ui.action.invoke", "surface/*", "test")

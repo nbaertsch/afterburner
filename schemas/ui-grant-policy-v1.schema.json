@@ -3,61 +3,195 @@
   "$id": "https://github.com/nbaertsch/afterburner/schemas/ui-grant-policy-v1.schema.json",
   "title": "Afterburner UI grant policy",
   "type": "object",
-  "required": ["schemaVersion", "protocol", "revision", "extensionId", "denyByDefault", "grants"],
+  "required": [
+    "schemaVersion",
+    "protocol",
+    "revision",
+    "extensionId",
+    "denyByDefault",
+    "grants"
+  ],
   "properties": {
-    "schemaVersion": { "const": 1 },
-    "protocol": { "const": "afterburner.ui" },
-    "revision": { "const": 1 },
-    "extensionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
-    "denyByDefault": { "type": "boolean" },
-    "grants": { "type": "array", "items": { "$ref": "#/$defs/grant" } },
-    "audit": { "type": "array", "items": { "$ref": "#/$defs/audit" } },
-    "quotas": { "type": "array", "items": { "$ref": "#/$defs/quota" } },
-    "keyEpoch": { "type": "integer", "minimum": 0 },
-    "acceptedKeyEpochs": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "uniqueItems": true },
-    "rotationOverlapMillis": { "type": "integer", "minimum": 0 }
+    "schemaVersion": {
+      "const": 1
+    },
+    "protocol": {
+      "const": "afterburner.ui"
+    },
+    "revision": {
+      "const": 1
+    },
+    "extensionId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "denyByDefault": {
+      "type": "boolean"
+    },
+    "grants": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/grant"
+      }
+    },
+    "audit": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/audit"
+      }
+    },
+    "quotas": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/quota"
+      }
+    },
+    "keyEpoch": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "acceptedKeyEpochs": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "uniqueItems": true
+    },
+    "rotationOverlapMillis": {
+      "type": "integer",
+      "minimum": 0
+    }
   },
   "additionalProperties": false,
   "$defs": {
     "grant": {
       "type": "object",
-      "required": ["id", "effect", "capabilities"],
+      "required": [
+        "id",
+        "effect",
+        "capabilities"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "effect": { "enum": ["allow", "deny", "audit"] },
-        "capabilities": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/capability" }, "uniqueItems": true },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "effect": {
+          "enum": [
+            "allow",
+            "deny",
+            "audit"
+          ]
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/capability"
+          },
+          "uniqueItems": true
+        },
         "resources": {
           "type": "array",
           "description": "Resource identifiers covered by the grant. For ui.action.invoke, a surface ID grants every action on that surface; use surfaceId/actionId for action-specific scope.",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "uniqueItems": true
         },
-        "conditions": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
       },
       "additionalProperties": false
     },
     "audit": {
       "type": "object",
-      "required": ["id", "events"],
+      "required": [
+        "id",
+        "events"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "events": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
-        "sinkIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "redaction": { "type": "string" }
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "sinkIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "redaction": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     },
     "quota": {
       "type": "object",
-      "required": ["id", "quotaId", "hardFail"],
+      "required": [
+        "id",
+        "quotaId",
+        "hardFail"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "quotaId": { "type": "string", "minLength": 1 },
-        "hardFail": { "type": "boolean" },
-        "auditEvent": { "type": "string" }
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quotaId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hardFail": {
+          "type": "boolean"
+        },
+        "auditEvent": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     },
-    "capability": { "type": "string", "pattern": "^ui\\.[a-z0-9.-]+$" }
+    "capability": {
+      "enum": [
+        "ui.render.components",
+        "ui.render.terminal",
+        "ui.surface.terminal",
+        "ui.surface.modal",
+        "ui.surface.panel",
+        "ui.surface.inline",
+        "ui.surface.statusLine",
+        "ui.surface.commandPalette",
+        "ui.surface.overlay",
+        "ui.action.invoke",
+        "ui.data.read",
+        "ui.data.write",
+        "ui.stream.read",
+        "ui.stream.write",
+        "ui.theme.read",
+        "ui.theme.write",
+        "ui.localization.read",
+        "ui.accessibility.inspect",
+        "ui.policy.evaluate",
+        "ui.audit.write",
+        "ui.observability.sink",
+        "ui.observability.black-box.sink"
+      ]
+    }
   }
 }
