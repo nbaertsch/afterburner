@@ -1208,6 +1208,7 @@ func renderModalFrame(snapshot TerminalSnapshot, frame ModalFrame, scrollOffset 
 
 	styles := newModalStyles()
 	var out strings.Builder
+	out.Grow(modalFrameRenderCapacity(layout))
 	out.WriteString("\x1b[?25l\x1b[0m\x1b[H")
 	writeBackdrop(&out, snapshot, layout.cols, layout.rows, styles)
 	writeModalShadow(&out, layout, styles)
@@ -1338,6 +1339,12 @@ func newModalStyles() modalStyles {
 		footer:   lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Background(lipgloss.Color("235")),
 		actions:  lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("238")).Bold(true),
 	}
+}
+
+func modalFrameRenderCapacity(layout modalLayout) int {
+	cells := maxInt(1, layout.cols*layout.rows)
+	overlay := maxInt(1, layout.panelWidth*layout.panelHeight)
+	return cells*2 + overlay*2
 }
 
 func writeBackdrop(out *strings.Builder, snapshot TerminalSnapshot, cols, rows int, styles modalStyles) {
