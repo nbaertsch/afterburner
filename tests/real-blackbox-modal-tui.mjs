@@ -114,6 +114,14 @@ let commandSentAt = 0;
 let commandSubmitRetryAt = 0;
 let modalSeenAt = 0;
 let modalCaptureScheduled = false;
+const focusSteps = [
+  { name: "focusDoctor", title: "Focus Doctor action screen", key: "\t", want: /▶\s*\[d\] Doctor\s*◀/i, assertions: ["Tab moved focus to Doctor action"] },
+  { name: "focusRefresh", title: "Focus Refresh action screen", key: "\x1b[9;15;0;1;16;1_", want: /▶\s*\[r\] Refresh\s*◀/i, assertions: ["Shift+Tab moved focus back to Refresh action"] },
+  { name: "spaceRefresh", title: "Space activates focused Refresh screen", key: "\x1b[32;57;32;1;0;1_", want: /Afterburner Black Box Live[\s\S]*Storage usage/i, assertions: ["Space activated the focused Refresh action"] },
+  { name: "focusDoctorAgain", title: "Focus Doctor before Enter screen", key: "\t", want: /▶\s*\[d\] Doctor\s*◀/i, assertions: ["Tab moved focus to Doctor before Enter activation"] },
+  { name: "enterDoctor", title: "Enter activates focused Doctor screen", key: "\r", want: /Afterburner Black Box Doctor/i, assertions: ["Enter activated the focused Doctor action"] },
+  { name: "returnToTimeline", title: "Return to timeline after focus activation screen", key: "r", want: /Afterburner Black Box Live/i, assertions: ["Refresh shortcut returned from Doctor to the live timeline"] }
+];
 const scrollSteps = [
   { name: "arrowDown", title: "Arrow down scroll screen", key: "\x1b[40;0;0;1;0;1_", want: /lines 2-\d+ of/i },
   { name: "arrowUp", title: "Arrow up scroll screen", key: "\x1b[38;0;0;1;0;1_", want: /lines 1-\d+ of/i },
@@ -122,6 +130,11 @@ const scrollSteps = [
   { name: "end", title: "End scroll screen", key: "\x1b[35;0;0;1;0;1_", want: /lines (?:[2-9]|[1-9]\d+)-\d+ of/i },
   { name: "home", title: "Home scroll screen", key: "\x1b[36;0;0;1;0;1_", want: /lines 1-\d+ of/i }
 ];
+let focusIndex = 0;
+let activeFocusRawLength = 0;
+const focusSentAt = {};
+const focusSeenAt = {};
+const focusRaw = {};
 let scrollIndex = 0;
 let activeScrollRawLength = 0;
 const scrollSentAt = {};
@@ -164,6 +177,12 @@ const result = (status, extra = {}) => {
     commandInputStarted: Boolean(commandInputStartedAt),
     commandSubmitted: Boolean(commandSentAt),
     modalSeen: Boolean(modalSeenAt),
+    focusControls: Object.fromEntries(focusSteps.map(step => [step.name, {
+      screen: `${slugTitle(step.title)}.png`,
+      key: step.key,
+      proves: step.assertions,
+      latencyMs: focusSentAt[step.name] && focusSeenAt[step.name] ? focusSeenAt[step.name] - focusSentAt[step.name] : null
+    }])),
     scroll: Object.fromEntries(scrollSteps.map(step => [step.name, {
       passed: Boolean(scrollSeenAt[step.name]),
       latencyMs: scrollSentAt[step.name] && scrollSeenAt[step.name] ? scrollSeenAt[step.name] - scrollSentAt[step.name] : null
@@ -306,6 +325,7 @@ const visualScreen = (value, titlePattern = null) => {
 const capturedScreens = () => [
   ["Modal overlay full screen", extractOverlayEvidence(modalOpenRaw, /Afterburner Black Box Live/gi)],
   ["Modal open screen", visualScreen(modalOpenRaw, /Afterburner Black Box Live/gi)],
+  ...focusSteps.map(step => [step.title, visualScreen(focusRaw[step.name], /Afterburner Black Box (?:Live|Doctor)/gi)]),
   ...scrollSteps.map(step => [step.title, visualScreen(scrollRaw[step.name], /Afterburner Black Box Live/gi)]),
   ["Refresh action screen", visualScreen(refreshRaw, /Afterburner Black Box Live/gi)],
   ["Doctor overlay full screen", extractOverlayEvidence(doctorRaw, /Afterburner Black Box Doctor/gi)],
@@ -399,6 +419,12 @@ const visualEvidenceManifest = () => ({
     screen: "modal-open-screen.png",
     proves: ["title", "native overlay subtitle", "shortcut summary", "action bar", "all keyboard hints", "storage progress", "status cards", "actionable health callout", "selected event summary", "timeline table", "scroll position"]
   },
+  focusControls: Object.fromEntries(focusSteps.map(step => [step.name, {
+    screen: `${slugTitle(step.title)}.png`,
+    key: step.key,
+    proves: step.assertions,
+    latencyMs: focusSentAt[step.name] && focusSeenAt[step.name] ? focusSeenAt[step.name] - focusSentAt[step.name] : null
+  }])),
   scrollControls: Object.fromEntries(scrollSteps.map(step => [step.name, {
     screen: `${slugTitle(step.title)}.png`,
     key: step.key,
@@ -675,9 +701,9 @@ const writeReplayArtifacts = capture => {
 
 const validateReplayArtifacts = () => {
   const inputLabels = ioEvents.filter(event => event.type === "input").map(event => event.label);
-  const requiredLabels = ["submit /black-box-modal", "arrowDown", "arrowUp", "pageDown", "pageUp", "end", "home", "refresh", "doctor", "export", "q close", "submit /black-box-modal for Escape", "escape close"];
+  const requiredLabels = ["submit /black-box-modal", ...focusSteps.map(step => step.name), "arrowDown", "arrowUp", "pageDown", "pageUp", "end", "home", "refresh", "doctor", "export", "q close", "submit /black-box-modal for Escape", "escape close"];
   const missingInputs = requiredLabels.filter(label => !inputLabels.some(input => input === label || input.startsWith(`${label}:`)));
-  const requiredSteps = ["open modal", ...scrollSteps.map(step => step.name), "refresh", "doctor", "export", "q close", "reopen modal", "escape close"];
+  const requiredSteps = ["open modal", ...focusSteps.map(step => step.name), ...scrollSteps.map(step => step.name), "refresh", "doctor", "export", "q close", "reopen modal", "escape close"];
   const stepNames = operatorSteps.map(step => step.name);
   const missingSteps = requiredSteps.filter(name => !stepNames.includes(name));
   const emptyViewports = operatorSteps.filter(step => !String(step.viewportText ?? "").trim()).map(step => step.name);
@@ -851,11 +877,32 @@ child.onData(data => {
     modalCaptureScheduled = true;
     setTimeout(() => {
       modalOpenRaw = raw;
-      const step = scrollSteps[scrollIndex];
-      scrollSentAt[step.name] = Date.now();
-      activeScrollRawLength = raw.length;
+      const step = focusSteps[focusIndex];
+      focusSentAt[step.name] = Date.now();
+      activeFocusRawLength = raw.length;
       writeInput(step.key, step.name);
     }, 500).unref?.();
+    return;
+  }
+  const activeFocusStep = focusSteps[focusIndex];
+  if (activeFocusStep && focusSentAt[activeFocusStep.name] && !focusSeenAt[activeFocusStep.name] && activeFocusStep.want.test(stripAnsi(raw.slice(activeFocusRawLength)))) {
+    focusSeenAt[activeFocusStep.name] = Date.now();
+    focusRaw[activeFocusStep.name] = raw;
+    recordOperatorStep({ name: activeFocusStep.name, key: activeFocusStep.key, startedAt: focusSentAt[activeFocusStep.name], completedAt: focusSeenAt[activeFocusStep.name], screenTitle: activeFocusStep.title, screenRaw: raw, assertions: activeFocusStep.assertions });
+    focusIndex++;
+    const nextFocusStep = focusSteps[focusIndex];
+    setTimeout(() => {
+      if (nextFocusStep) {
+        focusSentAt[nextFocusStep.name] = Date.now();
+        activeFocusRawLength = raw.length;
+        writeInput(nextFocusStep.key, nextFocusStep.name);
+      } else {
+        const step = scrollSteps[scrollIndex];
+        scrollSentAt[step.name] = Date.now();
+        activeScrollRawLength = raw.length;
+        writeInput(step.key, step.name);
+      }
+    }, 250).unref?.();
     return;
   }
   const activeStep = scrollSteps[scrollIndex];
@@ -885,7 +932,7 @@ child.onData(data => {
     setTimeout(() => writeInput("d", "doctor"), 250).unref?.();
     return;
   }
-  if (modalSeenAt && !doctorSeen && /Afterburner Black Box Doctor/i.test(text)) {
+  if (modalSeenAt && focusIndex >= focusSteps.length && refreshSeenAt && !doctorSeen && /Afterburner Black Box Doctor/i.test(stripAnsi(raw.slice(refreshRawLength)))) {
     const missing = scrollSteps.filter(step => !scrollSeenAt[step.name]).map(step => step.name);
     if (missing.length > 0) {
       finish(1, `Doctor action rendered before scroll validation completed: ${missing.join(", ")}`);
