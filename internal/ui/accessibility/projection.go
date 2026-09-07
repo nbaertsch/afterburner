@@ -366,8 +366,10 @@ func isSecretInput(source SourceNode) bool {
 }
 
 func isHiddenNode(source SourceNode) bool {
-	if boolProp(source.Props, "hidden", false) {
-		return true
+	for _, key := range []string{"hidden", "ariaHidden", "aria-hidden"} {
+		if boolProp(source.Props, key, false) {
+			return true
+		}
 	}
 	return source.Accessibility != nil && source.Accessibility.Hidden
 }
