@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "afterburner-copilot-openai",
+  "description": "Session commands and localhost OpenAI-compatible API bridge for the active Copilot session.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Afterburner"
+  },
+  "extensions": {
+    "com.github.copilot": {}
+  }
+}
