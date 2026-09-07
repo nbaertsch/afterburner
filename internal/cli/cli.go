@@ -637,7 +637,7 @@ func runUICommand(ctx context.Context, args []string, opts Options) (int, error)
 			}{report, brief})
 		}
 		if brief != nil {
-			fmt.Fprintf(opts.Stdout, "%s (%s) enabled=%t\n", brief.DisplayName, brief.ID, brief.Enabled)
+			fmt.Fprint(opts.Stdout, tooling.FormatManifestBrief(*brief))
 		}
 		io.WriteString(opts.Stdout, tooling.HumanReport(report))
 		return statusExit(report), nil

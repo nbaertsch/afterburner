@@ -2,8 +2,10 @@ package tooling
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nbaertsch/afterburner/internal/registry"
@@ -179,6 +181,24 @@ func loadRegistryEntry(homeRoot, extensionID string) (registry.Entry, bool, erro
 	}
 	entry, ok := reg.Extensions[extensionID]
 	return entry, ok, nil
+}
+
+func FormatManifestBrief(brief ManifestBrief) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "%s (%s) enabled=%t\n", brief.DisplayName, brief.ID, brief.Enabled)
+	if len(brief.Capabilities) > 0 {
+		fmt.Fprintf(&builder, "Extension capabilities: %s\n", strings.Join(brief.Capabilities, ", "))
+	}
+	if len(brief.UISurfaces) > 0 {
+		fmt.Fprintf(&builder, "UI surfaces: %s\n", strings.Join(brief.UISurfaces, ", "))
+	}
+	if len(brief.UIComponents) > 0 {
+		fmt.Fprintf(&builder, "UI components: %s\n", strings.Join(brief.UIComponents, ", "))
+	}
+	if len(brief.UICapabilities) > 0 {
+		fmt.Fprintf(&builder, "UI capabilities: %s\n", strings.Join(brief.UICapabilities, ", "))
+	}
+	return builder.String()
 }
 
 func manifestBrief(entry registry.Entry) ManifestBrief {

@@ -178,6 +178,24 @@ func TestDoctorReportsSurfaceCatalog(t *testing.T) {
 	}
 }
 
+func TestFormatManifestBriefShowsUIContract(t *testing.T) {
+	brief := ManifestBrief{
+		ID:             "sample-ui",
+		DisplayName:    "Sample UI",
+		Enabled:        true,
+		Capabilities:   []string{"modal-canvas"},
+		UISurfaces:     []string{"sample-panel:panel"},
+		UIComponents:   []string{"panel", "text"},
+		UICapabilities: []string{"ui.action.invoke"},
+	}
+	output := FormatManifestBrief(brief)
+	for _, want := range []string{"Sample UI (sample-ui) enabled=true", "Extension capabilities: modal-canvas", "UI surfaces: sample-panel:panel", "UI components: panel, text", "UI capabilities: ui.action.invoke"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("manifest brief output missing %q: %q", want, output)
+		}
+	}
+}
+
 func TestManifestBriefIncludesUICapabilities(t *testing.T) {
 	entry := registry.Entry{
 		Manifest: registry.Manifest{
