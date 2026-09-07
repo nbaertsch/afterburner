@@ -92,6 +92,19 @@ func TestComponentSchemaKindsMatchPublicCatalog(t *testing.T) {
 	}
 }
 
+func TestSurfaceKindsHaveCapabilityDescriptors(t *testing.T) {
+	capabilities := map[capability.ID]bool{}
+	for _, descriptor := range capability.CoreDescriptors() {
+		capabilities[descriptor.ID] = true
+	}
+	for _, kind := range []surface.Kind{surface.KindTerminal, surface.KindModal, surface.KindPanel, surface.KindInline, surface.KindStatusLine, surface.KindCommandPalette, surface.KindOverlay} {
+		id := capability.ID("ui.surface." + string(kind))
+		if !capabilities[id] {
+			t.Fatalf("surface kind %q is missing capability descriptor %q", kind, id)
+		}
+	}
+}
+
 func TestSchemaFixturesValidateAndUnmarshal(t *testing.T) {
 	cases := []struct {
 		schema  string

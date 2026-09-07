@@ -5,24 +5,28 @@ import "time"
 type ID string
 
 const (
-	RenderComponents     ID = "ui.render.components"
-	RenderTerminal       ID = "ui.render.terminal"
-	SurfaceTerminal      ID = "ui.surface.terminal"
-	SurfaceModal         ID = "ui.surface.modal"
-	SurfacePanel         ID = "ui.surface.panel"
-	ActionInvoke         ID = "ui.action.invoke"
-	DataRead             ID = "ui.data.read"
-	DataWrite            ID = "ui.data.write"
-	StreamRead           ID = "ui.stream.read"
-	StreamWrite          ID = "ui.stream.write"
-	ThemeRead            ID = "ui.theme.read"
-	ThemeWrite           ID = "ui.theme.write"
-	LocalizationRead     ID = "ui.localization.read"
-	AccessibilityInspect ID = "ui.accessibility.inspect"
-	PolicyEvaluate       ID = "ui.policy.evaluate"
-	AuditWrite           ID = "ui.audit.write"
-	ObservabilitySink    ID = "ui.observability.sink"
-	BlackBoxEventSink    ID = "ui.observability.black-box.sink"
+	RenderComponents      ID = "ui.render.components"
+	RenderTerminal        ID = "ui.render.terminal"
+	SurfaceTerminal       ID = "ui.surface.terminal"
+	SurfaceModal          ID = "ui.surface.modal"
+	SurfacePanel          ID = "ui.surface.panel"
+	SurfaceInline         ID = "ui.surface.inline"
+	SurfaceStatusLine     ID = "ui.surface.statusLine"
+	SurfaceCommandPalette ID = "ui.surface.commandPalette"
+	SurfaceOverlay        ID = "ui.surface.overlay"
+	ActionInvoke          ID = "ui.action.invoke"
+	DataRead              ID = "ui.data.read"
+	DataWrite             ID = "ui.data.write"
+	StreamRead            ID = "ui.stream.read"
+	StreamWrite           ID = "ui.stream.write"
+	ThemeRead             ID = "ui.theme.read"
+	ThemeWrite            ID = "ui.theme.write"
+	LocalizationRead      ID = "ui.localization.read"
+	AccessibilityInspect  ID = "ui.accessibility.inspect"
+	PolicyEvaluate        ID = "ui.policy.evaluate"
+	AuditWrite            ID = "ui.audit.write"
+	ObservabilitySink     ID = "ui.observability.sink"
+	BlackBoxEventSink     ID = "ui.observability.black-box.sink"
 )
 
 type Stability string
@@ -135,6 +139,10 @@ func CoreDescriptors() []Descriptor {
 		{ID: SurfaceTerminal, Version: "1", Stability: StabilityStable, Description: "Create and manage terminal surfaces.", Scopes: []Scope{ScopeHost, ScopeSession}},
 		{ID: SurfaceModal, Version: "1", Stability: StabilityStable, Description: "Create and manage modal surfaces.", Scopes: []Scope{ScopeHost, ScopeExtension}},
 		{ID: SurfacePanel, Version: "1", Stability: StabilityStable, Description: "Create and manage persistent panel surfaces.", Scopes: []Scope{ScopeHost, ScopeExtension}},
+		{ID: SurfaceInline, Version: "1", Stability: StabilityStable, Description: "Create and manage inline embedded surfaces.", Scopes: []Scope{ScopeHost, ScopeExtension}},
+		{ID: SurfaceStatusLine, Version: "1", Stability: StabilityStable, Description: "Create and manage compact status-line surfaces.", Scopes: []Scope{ScopeHost, ScopeExtension}},
+		{ID: SurfaceCommandPalette, Version: "1", Stability: StabilityStable, Description: "Create and manage command-palette surfaces.", Scopes: []Scope{ScopeHost, ScopeExtension}},
+		{ID: SurfaceOverlay, Version: "1", Stability: StabilityStable, Description: "Create and manage overlay surfaces.", Scopes: []Scope{ScopeHost, ScopeExtension}},
 		{ID: ActionInvoke, Version: "1", Stability: StabilityStable, Description: "Invoke declared UI actions.", Scopes: []Scope{ScopeExtension, ScopeSurface}},
 		{ID: DataRead, Version: "1", Stability: StabilityStable, Description: "Read UI data sources.", Scopes: []Scope{ScopeExtension, ScopeSession}},
 		{ID: DataWrite, Version: "1", Stability: StabilityStable, Description: "Mutate UI data sources.", Scopes: []Scope{ScopeExtension, ScopeSession}},
