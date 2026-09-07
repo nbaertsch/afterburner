@@ -35,10 +35,13 @@ explicitly runs `/black-box`, `/black-box-modal`, `/black-box-tail`, `/black-box
 - `/black-box-export [N]` writes a sanitized local export bundle.
 - `/black-box-doctor` checks configuration, storage, native event tailing, and recovery health.
 
-Inside the modal:
+Inside the native terminal modal:
 
+- `Tab` and `Shift+Tab` move focus across the action bar.
+- `Enter` or `Space` activates the focused action.
 - `r` refreshes the live timeline.
 - `d` opens the metadata-only doctor view.
+- `e` creates a sanitized local export bundle and shows the result.
 - `q` or `Esc` closes the overlay and restores Copilot's current screen.
 - `↑`/`↓`, `PgUp`/`PgDn`, `Home`, and `End` scroll long modal content.
 
@@ -61,19 +64,22 @@ stable `black-box` observer definition whose `onEvent` handler receives the meta
 event envelope. When `@afterburner/ui` is available, Black Box defines the
 `afterburner-black-box-live` panel surface with a virtualized/sortable/filterable timeline table,
 responsive timeline/detail split, anomaly and milestone sections, storage health, progress/status,
-command palette, and refresh/doctor/export/close/select/filter/sort actions. The surface declares
-its UI grants in `afterburner.json`, carries keyboard, mouse, accessibility, and localization
-metadata, coalesces live updates into bounded patches, and preserves selection/filter/sort across
-reconnect recovery.
+command palette, and refresh/doctor/export/close/select/filter/sort actions. The native terminal
+modal is opened only through the runtime-owned activation queue; Black Box does not register a
+generic Copilot canvas fallback. The surface declares its UI grants in `afterburner.json`, carries
+keyboard, accessibility, and localization metadata, coalesces live updates into bounded patches, and
+preserves selection/filter/sort across reconnect recovery.
 
 Black Box also registers the optional `black-box.ui.events` observability sink. It accepts only UI
 platform lifecycle, performance/quota, security/policy, patch, backpressure, and recovery metadata;
 prompt bodies, assistant/tool payloads, secrets, and raw paths are excluded before storage or display.
 When the UI bridge, observability sink, or required grants are absent or denied, the recorder remains
 operational and falls back to text status/timeline output. When `registerModalCanvas` is also
-available, the live modal uses the same metadata-only enterprise layout model: an action bar, status
-cards, timeline table, selected-record details, and doctor view. Native terminal overlays still receive
-a deterministic text projection with refresh, doctor, and close actions.
+available, the live modal uses the same metadata-only enterprise layout model: breadcrumb, command
+palette, focusable action bar, status cards, health state, responsive timeline/detail split,
+timeline table, selected-record details, doctor view, and export result panel. Native terminal
+overlays receive a deterministic document-first text projection with refresh, doctor, export, close,
+focus, activation, and scroll controls.
 
 The Copilot session component uses `@github/copilot-sdk` and resolves the native event log from, in
 order: `AFTERBURNER_BLACK_BOX_EVENTS`, `COPILOT_SESSION_STATE_DIR\events.jsonl`, or
