@@ -135,6 +135,7 @@ func TestSecretInputsDoNotExposeValueAsAccessibleName(t *testing.T) {
 	tree := SourceTree{SurfaceID: "s", Root: SourceNode{ID: "root", Kind: "application", Children: []SourceNode{
 		{ID: "password", Kind: "passwordInput", Props: map[string]any{"value": "super-secret", "placeholder": "Password"}},
 		{ID: "typed", Kind: "textInput", Props: map[string]any{"type": "password", "value": "hidden-token"}},
+		{ID: "notes", Kind: "textArea", Props: map[string]any{"label": "Notes", "placeholder": "Add context", "ariaAutocomplete": "list"}},
 	}}}
 	projected := Project(tree, ProjectionOptions{KeyboardOnly: true, Now: func() time.Time { return time.Unix(4, 0).UTC() }})
 	lines := strings.Join(Linearize(projected), "\n")
@@ -143,6 +144,18 @@ func TestSecretInputsDoNotExposeValueAsAccessibleName(t *testing.T) {
 	}
 	if !strings.Contains(lines, "Password") || !strings.Contains(lines, "typed") {
 		t.Fatalf("secret inputs should keep safe labels or IDs: %q", lines)
+	}
+	projectedByID := map[string]SemanticNode{}
+	var index func(SemanticNode)
+	index = func(node SemanticNode) {
+		projectedByID[node.ID] = node
+		for _, child := range node.Children {
+			index(child)
+		}
+	}
+	index(projected.Root)
+	if projectedByID["notes"].States["placeholder"] != "Add context" || projectedByID["notes"].States["autocomplete"] != "list" || projectedByID["notes"].States["multiline"] != "true" {
+		t.Fatalf("text input metadata should be projected for auditability: %#v", projectedByID["notes"])
 	}
 }
 

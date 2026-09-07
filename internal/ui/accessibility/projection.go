@@ -131,6 +131,7 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 		}
 	}
 	addAriaAliases(node.States, node.Relations, source.Props)
+	addInputStates(node.States, source.Kind, source.Props)
 	if isDialogKind(source.Kind) {
 		node.States["modal"] = fmt.Sprint(boolProp(source.Props, "modal", false))
 	}
@@ -493,6 +494,26 @@ func addRangeStates(states map[string]string, kind string, props map[string]any)
 		if value, ok := props[key]; ok {
 			states[key] = valueString(value)
 		}
+	}
+}
+
+func addInputStates(states map[string]string, kind string, props map[string]any) {
+	switch kind {
+	case "textInput", "passwordInput", "searchInput", "numberInput", "textArea":
+	default:
+		return
+	}
+	for state, keys := range map[string][]string{
+		"placeholder":  {"ariaPlaceholder", "aria-placeholder", "placeholder"},
+		"autocomplete": {"ariaAutoComplete", "ariaAutocomplete", "aria-autocomplete", "autocomplete"},
+		"multiline":    {"ariaMultiline", "aria-multiline", "multiline"},
+	} {
+		if value := stringPropAny(props, keys...); value != "" {
+			states[state] = value
+		}
+	}
+	if kind == "textArea" {
+		states["multiline"] = "true"
 	}
 }
 
