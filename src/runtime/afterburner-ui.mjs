@@ -96,6 +96,22 @@ export const componentCatalog = deepFreeze(componentKinds.map((kind) => ({
 })));
 
 export const surfaceKinds = Object.freeze(["terminal", "modal", "panel", "inline", "statusLine", "commandPalette", "overlay"]);
+
+const surfaceDescriptions = Object.freeze({
+  "terminal": "Terminal-backed interactive surface.",
+  "modal": "Host-managed modal surface.",
+  "panel": "Persistent side-panel surface.",
+  "inline": "Inline embedded surface.",
+  "statusLine": "Compact status-line surface.",
+  "commandPalette": "Command palette surface.",
+  "overlay": "Overlay surface."
+});
+
+export const surfaceCatalog = deepFreeze(surfaceKinds.map((kind) => ({
+  kind,
+  stability: "stable",
+  description: surfaceDescriptions[kind] ?? "Composable UI surface."
+})));
 export const envelopeKinds = Object.freeze([
   "hello", "hello.result", "component.snapshot", "component.patch", "ui.event", "grant.policy", "lifecycle",
   "audit.event", "observation", "error", "ack", "backpressure"
@@ -1782,7 +1798,7 @@ export function createTestHost(options = {}) {
 export default {
   PROTOCOL, PROTOCOL_REVISION, COMPATIBILITY_ID, SCHEMA_VERSION,
   componentKinds, componentCatalog, components, createNode, createUIDocument, validateUIDocument, validateNode,
-  defineSurface, registerSurface, open, renderSurface, close, closeSurface, update, patch, patchSurface, invoke, subscribe, fallback,
+  surfaceCatalog, defineSurface, registerSurface, open, renderSurface, close, closeSurface, update, patch, patchSurface, invoke, subscribe, fallback,
   registerObservabilitySink, subscribeObservability, diagnostics,
   createRuntime, createExtensionBridge, createProtocolClient, ProtocolClient, MemoryTransport, FrameTransport, createFrameTransport, createEnvelope, validateEnvelope,
   createHello, negotiateHello, encodeFrame, decodeFrame, validatePatch, applyPatch, fallbackProjection,
