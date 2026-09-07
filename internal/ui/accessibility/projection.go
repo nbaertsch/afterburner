@@ -117,6 +117,7 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 	if source.Kind == "loading" || source.Kind == "spinner" {
 		node.States["busy"] = "true"
 	}
+	addRangeStates(node.States, source.Kind, source.Props)
 	node.Focusable = isFocusableKind(source.Kind) && node.States["disabled"] != "true"
 	if opts.KeyboardOnly || node.Focusable {
 		node.KeyboardActions = mergeShortcuts(node.KeyboardActions, keyboardForKind(source.Kind, source.Props)...)
@@ -416,6 +417,19 @@ func addBoolState(states map[string]string, key string, value bool) {
 func addPtrState(states map[string]string, key string, value *bool) {
 	if value != nil {
 		states[key] = fmt.Sprint(*value)
+	}
+}
+
+func addRangeStates(states map[string]string, kind string, props map[string]any) {
+	switch kind {
+	case "slider", "progress", "meter", "bar":
+	default:
+		return
+	}
+	for _, key := range []string{"value", "min", "max"} {
+		if value, ok := props[key]; ok {
+			states[key] = valueString(value)
+		}
 	}
 }
 
