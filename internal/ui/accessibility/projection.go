@@ -277,6 +277,8 @@ func roleForKind(kind string) Role {
 		return RoleGroup
 	case "toolbar", "actionBar":
 		return RoleToolbar
+	case "contextMenu":
+		return RoleMenu
 	case "tabs":
 		return RoleTabList
 	case "pagination", "breadcrumb":
@@ -324,7 +326,7 @@ func isDialogKind(kind string) bool {
 
 func isFocusableKind(kind string) bool {
 	switch kind {
-	case "button", "link", "textInput", "passwordInput", "searchInput", "numberInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "dateInput", "fileInput", "table", "list", "tree", "tabs", "commandPalette", "dialog", "pagination", "log":
+	case "button", "link", "textInput", "passwordInput", "searchInput", "numberInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "dateInput", "fileInput", "table", "list", "tree", "tabs", "commandPalette", "dialog", "confirmation", "prompt", "pagination", "log", "toolbar", "actionBar", "contextMenu":
 		return true
 	default:
 		return false

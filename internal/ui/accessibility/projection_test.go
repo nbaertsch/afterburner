@@ -71,6 +71,12 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 	if !hasShortcut(byID["sdk-dateinput"].KeyboardActions, "Enter", "confirm date") || !hasShortcut(byID["sdk-fileinput"].KeyboardActions, "Enter", "browse files") {
 		t.Fatalf("date/file inputs should expose keyboard actions: date=%#v file=%#v", byID["sdk-dateinput"], byID["sdk-fileinput"])
 	}
+	if byID["sdk-contextmenu"].Role != RoleMenu || !hasShortcut(byID["sdk-contextmenu"].KeyboardActions, "Enter", "select") {
+		t.Fatalf("context menu should project as keyboard menu: %#v", byID["sdk-contextmenu"])
+	}
+	if !byID["sdk-actionbar"].Focusable || !byID["sdk-toolbar"].Focusable {
+		t.Fatalf("action bars and toolbars should be focusable: action=%#v toolbar=%#v", byID["sdk-actionbar"], byID["sdk-toolbar"])
+	}
 	modal := byID["sdk-dialog-modal"]
 	if modal.States["modal"] != "true" || !hasShortcut(modal.KeyboardActions, "Tab", "cycle focus") {
 		t.Fatalf("modal dialog semantics mismatch: %#v", modal)
