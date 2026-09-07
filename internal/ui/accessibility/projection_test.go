@@ -86,7 +86,7 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 	if byID["sdk-loading"].Live != LivePolite || byID["sdk-spinner"].Live != LivePolite || byID["sdk-loading"].States["busy"] != "true" || byID["sdk-spinner"].States["busy"] != "true" {
 		t.Fatalf("loading indicators should be polite busy live regions: loading=%#v spinner=%#v", byID["sdk-loading"], byID["sdk-spinner"])
 	}
-	if byID["sdk-slider"].States["value"] != "0.5" || byID["sdk-progress"].States["value"] != "0.5" || byID["sdk-meter"].States["value"] != "0.5" || byID["sdk-bar"].States["value"] != "0.5" {
+	if byID["sdk-slider"].States["value"] != "0.5" || byID["sdk-progress"].States["value"] != "0.5" || byID["sdk-meter"].States["value"] != "0.5" || byID["sdk-bar"].States["value"] != "0.5" || byID["sdk-slider"].States["valueText"] != "50 percent" {
 		t.Fatalf("range-like components should expose value state: slider=%#v progress=%#v meter=%#v bar=%#v", byID["sdk-slider"], byID["sdk-progress"], byID["sdk-meter"], byID["sdk-bar"])
 	}
 	modal := byID["sdk-dialog-modal"]
@@ -247,7 +247,7 @@ func sdkProps(kind string) map[string]any {
 	case "button", "textInput", "passwordInput", "searchInput", "numberInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "dateInput", "fileInput":
 		return map[string]any{"label": kind + " control", "value": "sample", "checked": true, "options": []string{"one", "two"}}
 	case "slider":
-		return map[string]any{"label": kind + " control", "value": 0.5, "min": 0, "max": 1}
+		return map[string]any{"label": kind + " control", "ariaValueNow": 0.5, "ariaValueMin": 0, "ariaValueMax": 1, "ariaValueText": "50 percent"}
 	case "list", "tree", "timeline", "log", "contextMenu", "tabs", "breadcrumb":
 		return map[string]any{"items": []string{"alpha", "beta"}, "selected": "alpha"}
 	case "table", "grid", "statusGrid":

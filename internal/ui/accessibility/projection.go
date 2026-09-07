@@ -490,9 +490,14 @@ func addRangeStates(states map[string]string, kind string, props map[string]any)
 	default:
 		return
 	}
-	for _, key := range []string{"value", "min", "max"} {
-		if value, ok := props[key]; ok {
-			states[key] = valueString(value)
+	for state, keys := range map[string][]string{
+		"value":     {"ariaValueNow", "aria-valuenow", "value"},
+		"min":       {"ariaValueMin", "aria-valuemin", "min"},
+		"max":       {"ariaValueMax", "aria-valuemax", "max"},
+		"valueText": {"ariaValueText", "aria-valuetext", "valueText"},
+	} {
+		if value := stringPropAny(props, keys...); value != "" {
+			states[state] = value
 		}
 	}
 }
