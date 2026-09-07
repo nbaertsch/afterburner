@@ -43,9 +43,14 @@ test("runtime SDK component kinds stay aligned with JSON schema", async () => {
   assert.deepEqual(schema.$defs.kind.enum, publicKinds);
 });
 
-test("runtime SDK rejects unknown supported surface components and required capabilities", () => {
+test("runtime SDK rejects unknown UI capabilities at descriptor and bridge boundaries", async () => {
   assert.throws(() => ui.validateSurfaceDescriptor({ id: "panel", kind: "panel", supportedComponents: ["text", "madeUpWidget"] }), /Unknown supported component kind 'madeUpWidget'/);
   assert.throws(() => ui.validateSurfaceDescriptor({ id: "panel", kind: "panel", requiredCapabilities: ["ui.surface.pnael"] }), /Unknown required capability 'ui.surface.pnael'/);
+  const runtime = ui.createRuntime();
+  assert.throws(() => runtime.registerObservabilitySink({ id: "sink", capability: "ui.observability.balck-box.sink" }, () => {}), /Unknown observability capability 'ui.observability.balck-box.sink'/);
+  const bridge = ui.createExtensionBridge({ ownerExtensionId: "author", denyByDefault: false });
+  await assert.rejects(() => bridge.requestCapabilities([{ capability: "ui.surface.pnael" }]), /Unknown requested capability 'ui.surface.pnael'/);
+  assert.throws(() => bridge.hasCapability("ui.surface.pnael"), /Unknown requested capability 'ui.surface.pnael'/);
 });
 
 test("runtime SDK surface catalog stays aligned with extension UI schema", async () => {

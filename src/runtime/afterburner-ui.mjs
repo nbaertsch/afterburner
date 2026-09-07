@@ -803,6 +803,15 @@ export class ProtocolClient extends EventEmitter {
 
 export function createProtocolClient(options = {}) { return new ProtocolClient(options); }
 
+function validateCapability(value, label = "UI") {
+  if (typeof value !== "string" || !capabilityKindSet.has(value)) fail("ui.invalidEnvelope", `Unknown ${label} capability '${String(value)}'.`);
+  return value;
+}
+
+function validateCapabilityList(values, label) {
+  for (const capability of values ?? []) validateCapability(capability, label);
+}
+
 export function validateSurfaceDescriptor(descriptor) {
   assertObject(descriptor, "surface descriptor");
   validateStableId(descriptor.id, "surface id");
@@ -810,9 +819,7 @@ export function validateSurfaceDescriptor(descriptor) {
   for (const kind of descriptor.supportedComponents ?? []) {
     if (!componentKindSet.has(kind)) fail("ui.unknownComponentKind", `Unknown supported component kind '${String(kind)}'.`);
   }
-  for (const capability of descriptor.requiredCapabilities ?? []) {
-    if (!capabilityKindSet.has(capability)) fail("ui.invalidEnvelope", `Unknown required capability '${String(capability)}'.`);
-  }
+  validateCapabilityList(descriptor.requiredCapabilities, "required");
   for (const action of descriptor.actions ?? []) validateActionDescriptor(action);
   for (const source of descriptor.dataSources ?? []) validateDataSourceDescriptor(source);
   for (const stream of descriptor.streams ?? []) validateStreamDescriptor(stream);
@@ -970,7 +977,7 @@ function validateObservabilitySinkDescriptor(descriptor) {
   assertObject(descriptor, "observability sink descriptor");
   observationId(descriptor.id);
   if (descriptor.extensionId !== undefined) normalizeExtensionId(descriptor.extensionId);
-  if (descriptor.capability !== undefined && typeof descriptor.capability !== "string") fail("ui.invalidEnvelope", "observability capability must be a string.");
+  if (descriptor.capability !== undefined) validateCapability(descriptor.capability, "observability");
   return descriptor;
 }
 
@@ -1382,7 +1389,7 @@ export function createExtensionBridge(options = {}) {
       const denied = [];
       const optionalDenied = [];
       for (const declaration of declarations) {
-        const capability = declaration?.capability;
+        const capability = validateCapability(declaration?.capability, "requested");
         const optional = declaration?.optional === true || declaration?.required === false || declaration?.requirement === "optional";
         const resources = Array.isArray(declaration?.resources) && declaration.resources.length ? declaration.resources : [declaration?.resource ?? "*"];
         for (const resource of resources) {
@@ -1392,7 +1399,7 @@ export function createExtensionBridge(options = {}) {
       }
       return denied.length ? { granted: false, denied, optionalDenied } : { granted: true, ...(optionalDenied.length ? { optionalDenied } : {}) };
     },
-    hasCapability: (capability, resource) => decide({ operation: "hasCapability", ownerExtensionId, capability, ...(resource === undefined ? {} : { resource }) }).allowed
+    hasCapability: (capability, resource) => decide({ operation: "hasCapability", ownerExtensionId, capability: validateCapability(capability, "requested"), ...(resource === undefined ? {} : { resource }) }).allowed
   };
   bridge.ui = Object.freeze({
     runtime,

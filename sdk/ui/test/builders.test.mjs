@@ -10,7 +10,9 @@ import {
   componentCatalog,
   componentKinds,
   components,
+  createExtensionBridge,
   createNode,
+  createRuntime,
   createUIDocument,
   markdown,
   modalFrameToUIDocument,
@@ -54,9 +56,14 @@ test("TypeScript declarations cover public SDK catalogs and builders", async () 
   }
 });
 
-test("surface descriptors reject unknown supported component kinds and required capabilities", () => {
+test("surface, observability, and bridge descriptors reject unknown capabilities", async () => {
   assert.throws(() => validateSurfaceDescriptor({ id: "panel", kind: "panel", supportedComponents: ["text", "madeUpWidget"] }), /Unknown supported component kind 'madeUpWidget'/);
   assert.throws(() => validateSurfaceDescriptor({ id: "panel", kind: "panel", requiredCapabilities: ["ui.surface.pnael"] }), /Unknown required capability 'ui.surface.pnael'/);
+  const runtime = createRuntime();
+  assert.throws(() => runtime.registerObservabilitySink({ id: "sink", capability: "ui.observability.balck-box.sink" }, () => {}), /Unknown observability capability 'ui.observability.balck-box.sink'/);
+  const bridge = createExtensionBridge({ ownerExtensionId: "author", denyByDefault: false });
+  await assert.rejects(() => bridge.requestCapabilities([{ capability: "ui.surface.pnael" }]), /Unknown requested capability 'ui.surface.pnael'/);
+  assert.throws(() => bridge.hasCapability("ui.surface.pnael"), /Unknown requested capability 'ui.surface.pnael'/);
 });
 
 test("builders cover the full W0 component catalog and produce stable IDs", () => {
