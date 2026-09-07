@@ -26,24 +26,49 @@ func Catalog() PublicCatalog {
 	}
 }
 
+func FilterCatalog(catalog PublicCatalog, section string) (PublicCatalog, error) {
+	section = strings.ToLower(strings.TrimSpace(section))
+	if section == "" || section == "all" {
+		return catalog, nil
+	}
+	filtered := PublicCatalog{Protocol: catalog.Protocol}
+	switch section {
+	case "component", "components":
+		filtered.Components = catalog.Components
+	case "surface", "surfaces":
+		filtered.Surfaces = catalog.Surfaces
+	case "capability", "capabilities":
+		filtered.Capabilities = catalog.Capabilities
+	default:
+		return PublicCatalog{}, fmt.Errorf("unknown ui catalog section %q", section)
+	}
+	return filtered, nil
+}
+
 func FormatCatalog(catalog PublicCatalog) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "Afterburner UI %s revision %d\n", catalog.Protocol.Protocol, catalog.Protocol.Revision)
-	writeCatalogSection(&builder, "Components", len(catalog.Components), func() {
-		for _, entry := range catalog.Components {
-			fmt.Fprintf(&builder, "  %-18s %-12s %s\n", entry.Kind, entry.Stability, entry.Description)
-		}
-	})
-	writeCatalogSection(&builder, "Surfaces", len(catalog.Surfaces), func() {
-		for _, entry := range catalog.Surfaces {
-			fmt.Fprintf(&builder, "  %-18s %-12s %s\n", entry.Kind, entry.Stability, entry.Description)
-		}
-	})
-	writeCatalogSection(&builder, "Capabilities", len(catalog.Capabilities), func() {
-		for _, entry := range catalog.Capabilities {
-			fmt.Fprintf(&builder, "  %-36s %-12s %s\n", entry.ID, entry.Stability, entry.Description)
-		}
-	})
+	if len(catalog.Components) > 0 {
+		writeCatalogSection(&builder, "Components", len(catalog.Components), func() {
+			for _, entry := range catalog.Components {
+				fmt.Fprintf(&builder, "  %-18s %-12s %s\n", entry.Kind, entry.Stability, entry.Description)
+			}
+		})
+	}
+	if len(catalog.Surfaces) > 0 {
+		writeCatalogSection(&builder, "Surfaces", len(catalog.Surfaces), func() {
+			for _, entry := range catalog.Surfaces {
+				fmt.Fprintf(&builder, "  %-18s %-12s %s\n", entry.Kind, entry.Stability, entry.Description)
+			}
+		})
+	}
+	if len(catalog.Capabilities) > 0 {
+		writeCatalogSection(&builder, "Capabilities", len(catalog.Capabilities), func() {
+			for _, entry := range catalog.Capabilities {
+				fmt.Fprintf(&builder, "  %-36s %-12s %s\n", entry.ID, entry.Stability, entry.Description)
+			}
+		})
+	}
 	return builder.String()
 }
 

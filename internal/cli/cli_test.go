@@ -74,6 +74,22 @@ func TestUICatalogCommand(t *testing.T) {
 	}
 }
 
+func TestUICatalogCommandCanFilterSections(t *testing.T) {
+	var stdout bytes.Buffer
+	code, err := Run(context.Background(), []string{"ui", "catalog", "capabilities"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("Run returned code=%d err=%v output=%s", code, err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Capabilities") || strings.Contains(stdout.String(), "Components") || strings.Contains(stdout.String(), "Surfaces") {
+		t.Fatalf("filtered catalog output is wrong: %q", stdout.String())
+	}
+	stdout.Reset()
+	code, err = Run(context.Background(), []string{"ui", "catalog", "widgets"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err == nil || code != 2 || !strings.Contains(err.Error(), "unknown ui catalog section \"widgets\"") {
+		t.Fatalf("expected unknown section failure, code=%d err=%v stdout=%q", code, err, stdout.String())
+	}
+}
+
 func TestUIValidateManifestCommand(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "extension.mjs"), []byte("export {};"), 0o600); err != nil {

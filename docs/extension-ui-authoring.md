@@ -32,10 +32,11 @@ Discover the host-supported UI contract before authoring or reviewing an extensi
 
 ```powershell
 afterburn ui catalog
-afterburn ui catalog --json
+afterburn ui catalog components
+afterburn ui catalog capabilities --json
 ```
 
-The catalog output is generated from the same component, surface, and capability registries enforced by validation, so it is the source of truth for manifest `ui.components`, `ui.surfaces[].kind`, and `ui.capabilities` values.
+The catalog output is generated from the same component, surface, and capability registries enforced by validation, so it is the source of truth for manifest `ui.components`, `ui.surfaces[].kind`, and `ui.capabilities` values. Filter by `components`, `surfaces`, or `capabilities` when reviewing one part of the contract.
 
 ## Components and lifecycle
 

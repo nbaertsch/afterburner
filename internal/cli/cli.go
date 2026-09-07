@@ -603,11 +603,15 @@ func runUICommand(ctx context.Context, args []string, opts Options) (int, error)
 		io.WriteString(opts.Stdout, tooling.HumanReport(report))
 		return statusExit(report), nil
 	case "catalog":
-		if len(args) != 0 && !(len(args) == 1 && args[0] == "--json") {
-			return 2, fmt.Errorf("usage: afterburn ui catalog [--json]")
+		section, asJSON, err := parseCatalogArgs(args)
+		if err != nil {
+			return 2, err
 		}
-		catalog := tooling.Catalog()
-		if len(args) == 1 {
+		catalog, err := tooling.FilterCatalog(tooling.Catalog(), section)
+		if err != nil {
+			return 2, err
+		}
+		if asJSON {
 			return writeToolingJSON(opts.Stdout, catalog)
 		}
 		fmt.Fprint(opts.Stdout, tooling.FormatCatalog(catalog))
@@ -790,6 +794,25 @@ func runUICommand(ctx context.Context, args []string, opts Options) (int, error)
 	default:
 		return 2, fmt.Errorf("native ui subcommand %q is not implemented yet", subcommand)
 	}
+}
+
+func parseCatalogArgs(args []string) (string, bool, error) {
+	asJSON := false
+	section := "all"
+	usage := "usage: afterburn ui catalog [--json] [components|surfaces|capabilities]"
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			asJSON = true
+		default:
+			if section == "all" {
+				section = arg
+			} else {
+				return "", false, errors.New(usage)
+			}
+		}
+	}
+	return section, asJSON, nil
 }
 
 func parseTraceArgs(args []string) (string, bool, bool, error) {
@@ -987,7 +1010,7 @@ Usage:
   afterburn extension <command>
   afterburn core install
   afterburn ui doctor [--json]
-  afterburn ui catalog [--json]
+  afterburn ui catalog [--json] [components|surfaces|capabilities]
   afterburn ui inspect [--json] <extension>
   afterburn ui trace --extension <id> --redacted [--json]
   afterburn ui validate-manifest [--json] <path>
