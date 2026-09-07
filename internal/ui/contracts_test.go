@@ -92,6 +92,18 @@ func TestComponentSchemaKindsMatchPublicCatalog(t *testing.T) {
 	}
 }
 
+func TestExtensionUISchemaRejectsUnknownComponentKind(t *testing.T) {
+	schema := readJSON(t, filepath.Join("..", "..", "schemas", "extension-ui-v1.schema.json"))
+	document := map[string]any{
+		"protocol":   "afterburner.ui",
+		"revision":   float64(1),
+		"components": []any{"panel", "madeUpWidget"},
+	}
+	if err := (schemaValidator{root: schema, allowExternalRefs: true}).validate(schema, document, "fixture"); err == nil {
+		t.Fatal("extension UI schema accepted an unknown component kind")
+	}
+}
+
 func TestSurfaceKindsHaveCapabilityDescriptors(t *testing.T) {
 	capabilities := map[capability.ID]bool{}
 	for _, descriptor := range capability.CoreDescriptors() {

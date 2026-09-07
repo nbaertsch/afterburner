@@ -3,35 +3,148 @@
   "$id": "https://github.com/nbaertsch/afterburner/schemas/extension-ui-v1.schema.json",
   "title": "Afterburner extension UI contract declaration",
   "type": "object",
-  "required": ["protocol", "revision"],
+  "required": [
+    "protocol",
+    "revision"
+  ],
   "properties": {
-    "protocol": { "const": "afterburner.ui" },
-    "revision": { "const": 1 },
+    "protocol": {
+      "const": "afterburner.ui"
+    },
+    "revision": {
+      "const": 1
+    },
     "surfaces": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "kind"],
+        "required": [
+          "id",
+          "kind"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "kind": { "enum": ["terminal", "modal", "panel", "inline", "statusLine", "commandPalette", "overlay"] },
-          "title": { "type": "string" },
-          "requiredCapabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "enum": [
+              "terminal",
+              "modal",
+              "panel",
+              "inline",
+              "statusLine",
+              "commandPalette",
+              "overlay"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "requiredCapabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
         },
         "additionalProperties": false
       }
     },
     "components": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "enum": [
+          "application",
+          "window",
+          "surface",
+          "viewport",
+          "stack",
+          "column",
+          "row",
+          "grid",
+          "box",
+          "section",
+          "split",
+          "scroll",
+          "disclosure",
+          "statusGrid",
+          "panel",
+          "card",
+          "separator",
+          "spacer",
+          "empty",
+          "text",
+          "markdown",
+          "code",
+          "icon",
+          "badge",
+          "keyValue",
+          "detail",
+          "alert",
+          "button",
+          "link",
+          "textInput",
+          "passwordInput",
+          "searchInput",
+          "numberInput",
+          "textArea",
+          "select",
+          "checkbox",
+          "radioGroup",
+          "toggle",
+          "slider",
+          "dateInput",
+          "fileInput",
+          "progress",
+          "meter",
+          "bar",
+          "sparkline",
+          "spinner",
+          "loading",
+          "list",
+          "table",
+          "tree",
+          "timeline",
+          "log",
+          "form",
+          "toolbar",
+          "actionBar",
+          "contextMenu",
+          "tabs",
+          "breadcrumb",
+          "pagination",
+          "help",
+          "dialog",
+          "toast",
+          "errorBoundary",
+          "confirmation",
+          "prompt",
+          "terminal",
+          "canvas",
+          "image",
+          "video",
+          "chart",
+          "commandPalette",
+          "keybindingHint",
+          "extensionOutlet"
+        ]
+      },
       "uniqueItems": true
     },
     "capabilities": {
       "type": "array",
-      "items": { "type": "string", "pattern": "^ui\\.[a-z0-9.-]+$" },
+      "items": {
+        "type": "string",
+        "pattern": "^ui\\.[a-z0-9.-]+$"
+      },
       "uniqueItems": true
     },
-    "grantPolicy": { "$ref": "ui-grant-policy-v1.schema.json" },
+    "grantPolicy": {
+      "$ref": "ui-grant-policy-v1.schema.json"
+    },
     "observability": {
       "type": "object",
       "properties": {
@@ -39,13 +152,32 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "extensionId", "requirement", "capability"],
+            "required": [
+              "id",
+              "extensionId",
+              "requirement",
+              "capability"
+            ],
             "properties": {
-              "id": { "type": "string", "minLength": 1 },
-              "extensionId": { "type": "string" },
-              "requirement": { "enum": ["optional", "required"] },
-              "capability": { "type": "string" },
-              "failureBehavior": { "type": "string" }
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "extensionId": {
+                "type": "string"
+              },
+              "requirement": {
+                "enum": [
+                  "optional",
+                  "required"
+                ]
+              },
+              "capability": {
+                "type": "string"
+              },
+              "failureBehavior": {
+                "type": "string"
+              }
             },
             "additionalProperties": true
           }

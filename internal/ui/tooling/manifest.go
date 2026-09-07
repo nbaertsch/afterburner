@@ -161,7 +161,7 @@ func validateUIDeclaration(raw json.RawMessage) (*UIDeclaration, []string, []str
 		}
 		seenComponents[kind] = true
 		if !supported[kind] {
-			warnings = append(warnings, fmt.Sprintf("component %q is not rendered by the current host", kind))
+			errs = append(errs, fmt.Sprintf("unsupported component kind %q", kind))
 		}
 	}
 	for _, capID := range ui.Capabilities {

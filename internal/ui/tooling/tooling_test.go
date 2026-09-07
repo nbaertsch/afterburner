@@ -62,6 +62,22 @@ func TestValidateManifestRejectsBadUIRevision(t *testing.T) {
 	}
 }
 
+func TestValidateManifestRejectsUnsupportedUIComponent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "extension.mjs"), []byte("export {};"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "afterburner.json")
+	manifest := `{"schemaVersion":1,"id":"bad-component","displayName":"Bad Component","visibility":"private","requires":{"afterburner":"1"},"runtime":{"execution":"in-process","entrypoint":"extension.mjs"},"ui":{"protocol":"afterburner.ui","revision":1,"components":["panel","madeUpWidget"]}}`
+	if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := ValidateManifest(path)
+	if result.Valid || !strings.Contains(strings.Join(result.Errors, "\n"), "unsupported component kind \"madeUpWidget\"") {
+		t.Fatalf("expected unsupported component error, got %#v", result)
+	}
+}
+
 func TestGrantServicePersistsDeterministically(t *testing.T) {
 	home := t.TempDir()
 	record, err := Grant(home, "sample-ui", "ui.action.invoke", "surface/*", "test")
