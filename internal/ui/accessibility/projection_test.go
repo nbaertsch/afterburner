@@ -102,15 +102,15 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 func TestRolePropsOverrideDefaultLandmarkSemantics(t *testing.T) {
 	tree := SourceTree{SurfaceID: "s", Root: SourceNode{ID: "root", Kind: "application", Children: []SourceNode{
 		{ID: "main", Kind: "section", Props: map[string]any{"title": "Workspace", "role": "main"}},
-		{ID: "heading", Kind: "text", Props: map[string]any{"text": "Details", "role": "heading", "ariaLevel": 2, "tabIndex": 1}},
+		{ID: "heading", Kind: "text", Props: map[string]any{"text": "Details", "role": "heading", "ariaLevel": 2, "tabIndex": 1, "ariaKeyShortcuts": "Alt+D Control+F"}},
 		{ID: "bad", Kind: "section", Props: map[string]any{"title": "Bad role", "role": "definitely-not-a-role"}},
 	}}}
 	projected := Project(tree, ProjectionOptions{Now: func() time.Time { return time.Unix(7, 0).UTC() }})
 	if projected.Root.Children[0].Role != RoleMain {
 		t.Fatalf("role prop should project known landmarks: %#v", projected.Root.Children[0])
 	}
-	if projected.Root.Children[1].Role != RoleHeading || projected.Root.Children[1].States["level"] != "2" || projected.Root.Children[1].States["focusOrder"] != "1" {
-		t.Fatalf("role, level, and focus order props should project heading semantics: %#v", projected.Root.Children[1])
+	if projected.Root.Children[1].Role != RoleHeading || projected.Root.Children[1].States["level"] != "2" || projected.Root.Children[1].States["focusOrder"] != "1" || !hasShortcut(projected.Root.Children[1].KeyboardActions, "Alt+D", "author shortcut") || !hasShortcut(projected.Root.Children[1].KeyboardActions, "Control+F", "author shortcut") {
+		t.Fatalf("role, level, focus order, and shortcut props should project heading semantics: %#v", projected.Root.Children[1])
 	}
 	if projected.Root.Children[2].Role != RoleRegion {
 		t.Fatalf("unknown role prop should preserve safe default role: %#v", projected.Root.Children[2])

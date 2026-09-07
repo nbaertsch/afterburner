@@ -139,6 +139,7 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 		node.States["busy"] = "true"
 	}
 	addRangeStates(node.States, source.Kind, source.Props)
+	node.KeyboardActions = mergeShortcuts(node.KeyboardActions, shortcutProps(source.Props)...)
 	node.Focusable = isFocusableKind(source.Kind) && node.States["disabled"] != "true"
 	if opts.KeyboardOnly || node.Focusable {
 		node.KeyboardActions = mergeShortcuts(node.KeyboardActions, keyboardForKind(source.Kind, source.Props)...)
@@ -628,6 +629,17 @@ func stringPropAny(props map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func shortcutProps(props map[string]any) []Shortcut {
+	values := stringListProp(props, "ariaKeyShortcuts", "aria-keyshortcuts", "keyboardShortcuts", "keyShortcuts")
+	shortcuts := make([]Shortcut, 0, len(values))
+	for _, value := range values {
+		if value != "" {
+			shortcuts = append(shortcuts, Shortcut{Key: value, Description: "author shortcut"})
+		}
+	}
+	return shortcuts
 }
 
 func stringListProp(props map[string]any, keys ...string) []string {
