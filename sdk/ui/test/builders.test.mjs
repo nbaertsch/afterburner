@@ -57,13 +57,14 @@ test("TypeScript declarations cover public SDK catalogs and builders", async () 
 });
 
 test("surface, observability, and bridge descriptors reject unknown capabilities", async () => {
-  assert.throws(() => validateSurfaceDescriptor({ id: "panel", kind: "panel", supportedComponents: ["text", "madeUpWidget"] }), /Unknown supported component kind 'madeUpWidget'/);
-  assert.throws(() => validateSurfaceDescriptor({ id: "panel", kind: "panel", requiredCapabilities: ["ui.surface.pnael"] }), /Unknown required capability 'ui.surface.pnael'/);
+  assert.throws(() => validateSurfaceDescriptor({ id: "panel", kind: "pnael" }), /Unknown surface kind 'pnael'\. Did you mean 'panel'\?/);
+  assert.throws(() => validateSurfaceDescriptor({ id: "panel", kind: "panel", supportedComponents: ["text", "markdwon"] }), /Unknown supported component kind 'markdwon'\. Did you mean 'markdown'\?/);
+  assert.throws(() => validateSurfaceDescriptor({ id: "panel", kind: "panel", requiredCapabilities: ["ui.surface.pnael"] }), /Unknown required capability 'ui.surface.pnael'\. Did you mean 'ui.surface.panel'\?/);
   const runtime = createRuntime();
-  assert.throws(() => runtime.registerObservabilitySink({ id: "sink", capability: "ui.observability.balck-box.sink" }, () => {}), /Unknown observability capability 'ui.observability.balck-box.sink'/);
+  assert.throws(() => runtime.registerObservabilitySink({ id: "sink", capability: "ui.observability.balck-box.sink" }, () => {}), /Unknown observability capability 'ui.observability.balck-box.sink'\. Did you mean 'ui.observability.black-box.sink'\?/);
   const bridge = createExtensionBridge({ ownerExtensionId: "author", denyByDefault: false });
-  await assert.rejects(() => bridge.requestCapabilities([{ capability: "ui.surface.pnael" }]), /Unknown requested capability 'ui.surface.pnael'/);
-  assert.throws(() => bridge.hasCapability("ui.surface.pnael"), /Unknown requested capability 'ui.surface.pnael'/);
+  await assert.rejects(() => bridge.requestCapabilities([{ capability: "ui.surface.pnael" }]), /Unknown requested capability 'ui.surface.pnael'\. Did you mean 'ui.surface.panel'\?/);
+  assert.throws(() => bridge.hasCapability("ui.surface.pnael"), /Unknown requested capability 'ui.surface.pnael'\. Did you mean 'ui.surface.panel'\?/);
 });
 
 test("builders cover the full W0 component catalog and produce stable IDs", () => {

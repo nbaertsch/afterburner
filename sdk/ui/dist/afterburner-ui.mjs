@@ -803,8 +803,42 @@ export class ProtocolClient extends EventEmitter {
 
 export function createProtocolClient(options = {}) { return new ProtocolClient(options); }
 
+function suggestionSuffix(value, candidates) {
+  const candidate = closestCatalogValue(String(value), candidates);
+  return candidate ? ` Did you mean '${candidate}'?` : "";
+}
+
+function closestCatalogValue(value, candidates) {
+  if (!value || candidates.length === 0) return "";
+  let best = "";
+  let bestDistance = value.length + 1;
+  for (const candidate of candidates) {
+    const distance = levenshteinDistance(value, candidate);
+    if (distance < bestDistance || (distance === bestDistance && candidate < best)) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  const limit = Math.max(2, Math.floor(value.length / 3));
+  return bestDistance <= limit ? best : "";
+}
+
+function levenshteinDistance(a, b) {
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  let current = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    current[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost);
+    }
+    [current, previous] = [previous, current];
+  }
+  return previous[b.length];
+}
+
 function validateCapability(value, label = "UI") {
-  if (typeof value !== "string" || !capabilityKindSet.has(value)) fail("ui.invalidEnvelope", `Unknown ${label} capability '${String(value)}'.`);
+  if (typeof value !== "string" || !capabilityKindSet.has(value)) fail("ui.invalidEnvelope", `Unknown ${label} capability '${String(value)}'.${suggestionSuffix(value, capabilityKinds)}`);
   return value;
 }
 
@@ -815,9 +849,9 @@ function validateCapabilityList(values, label) {
 export function validateSurfaceDescriptor(descriptor) {
   assertObject(descriptor, "surface descriptor");
   validateStableId(descriptor.id, "surface id");
-  if (!surfaceKindSet.has(descriptor.kind)) fail("ui.invalidEnvelope", `Unknown surface kind '${String(descriptor.kind)}'.`);
+  if (!surfaceKindSet.has(descriptor.kind)) fail("ui.invalidEnvelope", `Unknown surface kind '${String(descriptor.kind)}'.${suggestionSuffix(descriptor.kind, surfaceKinds)}`);
   for (const kind of descriptor.supportedComponents ?? []) {
-    if (!componentKindSet.has(kind)) fail("ui.unknownComponentKind", `Unknown supported component kind '${String(kind)}'.`);
+    if (!componentKindSet.has(kind)) fail("ui.unknownComponentKind", `Unknown supported component kind '${String(kind)}'.${suggestionSuffix(kind, componentKinds)}`);
   }
   validateCapabilityList(descriptor.requiredCapabilities, "required");
   for (const action of descriptor.actions ?? []) validateActionDescriptor(action);
