@@ -148,28 +148,30 @@ func validateUIDeclaration(raw json.RawMessage) (*UIDeclaration, []string, []str
 		}
 		seenSurfaces[s.ID] = true
 		if !validSurfaceKind(s.Kind) {
-			errs = append(errs, fmt.Sprintf("unsupported ui surface kind %q", s.Kind))
+			errs = append(errs, fmt.Sprintf("unsupported ui surface kind %q%s", s.Kind, suggestionSuffix(s.Kind, surfaceKindCandidates())))
 		}
 		for _, capID := range s.RequiredCapabilities {
 			if !validUICapability(capID) {
-				errs = append(errs, fmt.Sprintf("invalid surface capability %q", capID))
+				errs = append(errs, fmt.Sprintf("invalid surface capability %q%s", capID, suggestionSuffix(capID, uiCapabilityCandidates())))
 			}
 		}
 	}
 	supported := supportedKindSet()
 	seenComponents := map[string]bool{}
+	componentCandidates := SortedSupportedComponentKinds()
 	for _, kind := range ui.Components {
 		if seenComponents[kind] {
 			errs = append(errs, fmt.Sprintf("duplicate component kind %q", kind))
 		}
 		seenComponents[kind] = true
 		if !supported[kind] {
-			errs = append(errs, fmt.Sprintf("unsupported component kind %q", kind))
+			errs = append(errs, fmt.Sprintf("unsupported component kind %q%s", kind, suggestionSuffix(kind, componentCandidates)))
 		}
 	}
+	capabilityCandidates := uiCapabilityCandidates()
 	for _, capID := range ui.Capabilities {
 		if !validUICapability(capID) {
-			errs = append(errs, fmt.Sprintf("invalid ui capability %q", capID))
+			errs = append(errs, fmt.Sprintf("invalid ui capability %q%s", capID, suggestionSuffix(capID, capabilityCandidates)))
 		}
 	}
 	if len(ui.GrantPolicy) > 0 {
@@ -179,10 +181,11 @@ func validateUIDeclaration(raw json.RawMessage) (*UIDeclaration, []string, []str
 		} else if policy.SchemaVersion != protocol.SchemaVersion || policy.Protocol != protocol.Protocol || policy.Revision != protocol.ProtocolRevision {
 			errs = append(errs, "ui.grantPolicy must use current afterburner.ui protocol")
 		} else {
+			capabilityCandidates := uiCapabilityCandidates()
 			for _, grant := range policy.Grants {
 				for _, capID := range grant.Capabilities {
 					if !validUICapability(string(capID)) {
-						errs = append(errs, fmt.Sprintf("invalid ui grant capability %q", capID))
+						errs = append(errs, fmt.Sprintf("invalid ui grant capability %q%s", capID, suggestionSuffix(string(capID), capabilityCandidates)))
 					}
 				}
 			}
@@ -211,6 +214,15 @@ func validSurfaceKind(kind string) bool {
 	return false
 }
 
+func surfaceKindCandidates() []string {
+	entries := surface.PublicCatalog()
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, string(entry.Kind))
+	}
+	return out
+}
+
 func validUICapability(value string) bool {
 	for _, descriptor := range capability.CoreDescriptors() {
 		if string(descriptor.ID) == value {
@@ -218,6 +230,66 @@ func validUICapability(value string) bool {
 		}
 	}
 	return false
+}
+
+func uiCapabilityCandidates() []string {
+	descriptors := capability.CoreDescriptors()
+	out := make([]string, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		out = append(out, string(descriptor.ID))
+	}
+	return out
+}
+
+func suggestionSuffix(value string, candidates []string) string {
+	candidate, ok := closestCatalogValue(value, candidates)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("; did you mean %q?", candidate)
+}
+
+func closestCatalogValue(value string, candidates []string) (string, bool) {
+	if value == "" || len(candidates) == 0 {
+		return "", false
+	}
+	best := ""
+	bestDistance := len(value) + 1
+	for _, candidate := range candidates {
+		distance := levenshteinDistance(value, candidate)
+		if distance < bestDistance || (distance == bestDistance && candidate < best) {
+			best = candidate
+			bestDistance = distance
+		}
+	}
+	limit := len(value) / 3
+	if limit < 2 {
+		limit = 2
+	}
+	if bestDistance > limit {
+		return "", false
+	}
+	return best, true
+}
+
+func levenshteinDistance(a, b string) int {
+	previous := make([]int, len(b)+1)
+	current := make([]int, len(b)+1)
+	for j := range previous {
+		previous[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		current[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 0
+			if a[i-1] != b[j-1] {
+				cost = 1
+			}
+			current[j] = min(previous[j]+1, current[j-1]+1, previous[j-1]+cost)
+		}
+		previous, current = current, previous
+	}
+	return previous[len(b)]
 }
 
 func supportedKindSet() map[string]bool {

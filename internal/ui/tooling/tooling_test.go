@@ -86,13 +86,13 @@ func TestValidateManifestRejectsUnsupportedUISurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "afterburner.json")
-	manifest := `{"schemaVersion":1,"id":"bad-surface","displayName":"Bad Surface","visibility":"private","requires":{"afterburner":"1"},"runtime":{"execution":"in-process","entrypoint":"extension.mjs"},"ui":{"protocol":"afterburner.ui","revision":1,"surfaces":[{"id":"main","kind":"sideQuest"}]}}`
+	manifest := `{"schemaVersion":1,"id":"bad-surface","displayName":"Bad Surface","visibility":"private","requires":{"afterburner":"1"},"runtime":{"execution":"in-process","entrypoint":"extension.mjs"},"ui":{"protocol":"afterburner.ui","revision":1,"surfaces":[{"id":"main","kind":"pnael"}]}}`
 	if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	result := ValidateManifest(path)
-	if result.Valid || !strings.Contains(strings.Join(result.Errors, "\n"), "unsupported ui surface kind \"sideQuest\"") {
-		t.Fatalf("expected unsupported surface error, got %#v", result)
+	if result.Valid || !strings.Contains(strings.Join(result.Errors, "\n"), "unsupported ui surface kind \"pnael\"; did you mean \"panel\"?") {
+		t.Fatalf("expected unsupported surface suggestion, got %#v", result)
 	}
 }
 
@@ -102,13 +102,13 @@ func TestValidateManifestRejectsUnsupportedUIComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "afterburner.json")
-	manifest := `{"schemaVersion":1,"id":"bad-component","displayName":"Bad Component","visibility":"private","requires":{"afterburner":"1"},"runtime":{"execution":"in-process","entrypoint":"extension.mjs"},"ui":{"protocol":"afterburner.ui","revision":1,"components":["panel","madeUpWidget"]}}`
+	manifest := `{"schemaVersion":1,"id":"bad-component","displayName":"Bad Component","visibility":"private","requires":{"afterburner":"1"},"runtime":{"execution":"in-process","entrypoint":"extension.mjs"},"ui":{"protocol":"afterburner.ui","revision":1,"components":["panel","markdwon"]}}`
 	if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	result := ValidateManifest(path)
-	if result.Valid || !strings.Contains(strings.Join(result.Errors, "\n"), "unsupported component kind \"madeUpWidget\"") {
-		t.Fatalf("expected unsupported component error, got %#v", result)
+	if result.Valid || !strings.Contains(strings.Join(result.Errors, "\n"), "unsupported component kind \"markdwon\"; did you mean \"markdown\"?") {
+		t.Fatalf("expected unsupported component suggestion, got %#v", result)
 	}
 }
 
@@ -124,15 +124,21 @@ func TestValidateManifestRejectsUnknownUICapability(t *testing.T) {
 	}
 	result := ValidateManifest(path)
 	errors := strings.Join(result.Errors, "\n")
-	if result.Valid || !strings.Contains(errors, "invalid surface capability \"ui.surface.pnael\"") || !strings.Contains(errors, "invalid ui capability \"ui.render.componnets\"") || !strings.Contains(errors, "invalid ui grant capability \"ui.action.invkoe\"") {
-		t.Fatalf("expected unknown UI capability errors, got %#v", result)
+	for _, want := range []string{
+		"invalid surface capability \"ui.surface.pnael\"; did you mean \"ui.surface.panel\"?",
+		"invalid ui capability \"ui.render.componnets\"; did you mean \"ui.render.components\"?",
+		"invalid ui grant capability \"ui.action.invkoe\"; did you mean \"ui.action.invoke\"?",
+	} {
+		if result.Valid || !strings.Contains(errors, want) {
+			t.Fatalf("expected unknown UI capability suggestion %q, got %#v", want, result)
+		}
 	}
 }
 
 func TestGrantRejectsUnknownCapability(t *testing.T) {
 	home := t.TempDir()
-	if _, err := Grant(home, "sample-ui", "ui.action.invkoe", "surface/*", "test"); err == nil || !strings.Contains(err.Error(), "unknown ui capability \"ui.action.invkoe\"") {
-		t.Fatalf("expected unknown capability error, got %v", err)
+	if _, err := Grant(home, "sample-ui", "ui.action.invkoe", "surface/*", "test"); err == nil || !strings.Contains(err.Error(), "unknown ui capability \"ui.action.invkoe\"; did you mean \"ui.action.invoke\"?") {
+		t.Fatalf("expected unknown capability suggestion, got %v", err)
 	}
 	if _, err := os.Stat(GrantPath(home)); !os.IsNotExist(err) {
 		t.Fatalf("grant file should not be written for invalid capability, stat err=%v", err)
