@@ -40,7 +40,7 @@ type RenderResult struct {
 }
 
 func FixtureNames() []string {
-	return []string{"all-components", "malformed-envelope", "abuse", "black-box-certification"}
+	return []string{"all-components", "component-gallery", "malformed-envelope", "abuse", "black-box-certification"}
 }
 
 func LoadFixture(nameOrPath string) (Fixture, error) {
@@ -60,6 +60,8 @@ func LoadFixture(nameOrPath string) (Fixture, error) {
 	switch strings.ToLower(nameOrPath) {
 	case "all-components", "all", "component-catalog":
 		return AllComponentsFixture(), nil
+	case "component-gallery", "gallery", "design-gallery":
+		return ComponentGalleryFixture(), nil
 	case "malformed-envelope", "malformed":
 		return MalformedEnvelopeFixture(), nil
 	case "abuse", "abuse-components":
@@ -107,6 +109,42 @@ func AllComponentsFixture() Fixture {
 		children = append(children, sampleNode(component.Kind(kind)))
 	}
 	return Fixture{Name: "all-components", Description: "Every public and host-rendered component kind in a deterministic surface.", Tree: component.Tree{Root: component.Node{ID: "all-components-root", Kind: component.KindApplication, Props: rawProps(map[string]any{"title": "Afterburner UI Fixture"}), Children: children}, Revision: 1, SurfaceID: "fixture-all-components", ThemeID: "afterburner.dark", Locale: "en-US", Capabilities: []string{"ui.render.components", "ui.accessibility.inspect"}}}
+}
+
+func ComponentGalleryFixture() Fixture {
+	section := func(id, title string, children ...component.Node) component.Node {
+		return component.Node{ID: id, Kind: component.KindSection, Props: rawProps(map[string]any{"title": title}), Children: children, Accessibility: &accessibility.Node{Name: title}}
+	}
+	text := func(id, value string) component.Node {
+		return component.Node{ID: id, Kind: component.KindText, Props: rawProps(map[string]any{"value": value})}
+	}
+	return Fixture{Name: "component-gallery", Description: "Curated extension author gallery showing composable public UI primitives in grouped layouts.", Tree: component.Tree{Root: component.Node{ID: "component-gallery-root", Kind: component.KindApplication, Props: rawProps(map[string]any{"title": "Afterburner UI Component Gallery"}), Children: []component.Node{
+		section("gallery-layout", "Layout and structure",
+			component.Node{ID: "gallery-layout-split", Kind: component.KindSplit, Children: []component.Node{
+				{ID: "gallery-layout-card", Kind: component.KindCard, Props: rawProps(map[string]any{"title": "Composable card"}), Children: []component.Node{text("gallery-layout-card-text", "Cards, panels, sections, rows, columns, grids, and split panes can be nested.")}},
+				{ID: "gallery-layout-disclosure", Kind: component.KindDisclosure, Props: rawProps(map[string]any{"title": "Expandable details", "expanded": true}), Children: []component.Node{text("gallery-layout-disclosure-text", "Disclosure content remains keyboard and screen-reader reachable.")}},
+			}},
+		),
+		section("gallery-status", "Status and feedback",
+			component.Node{ID: "gallery-status-grid", Kind: component.KindStatusGrid, Props: rawProps(map[string]any{"columns": []string{"name", "status"}, "rows": [][]string{{"Recorder", "healthy"}, {"Storage", "warning"}}})},
+			component.Node{ID: "gallery-alert", Kind: component.KindAlert, Props: rawProps(map[string]any{"severity": "warning", "message": "Warnings, toasts, loading, and error boundaries preserve nested context."}), Children: []component.Node{text("gallery-alert-child", "Nested remediation text is visible in plain and terminal renderers.")}},
+			component.Node{ID: "gallery-progress", Kind: component.KindProgress, Props: rawProps(map[string]any{"label": "Storage", "value": 65, "min": 0, "max": 100})},
+			component.Node{ID: "gallery-sparkline", Kind: component.KindSparkline, Props: rawProps(map[string]any{"label": "Trend", "values": []float64{1, 3, 2, 5, 4, 8}})},
+		),
+		section("gallery-data", "Collections and data",
+			component.Node{ID: "gallery-table", Kind: component.KindTable, Props: rawProps(map[string]any{"columns": []string{"Component", "State"}, "rows": [][]string{{"table", "ready"}, {"timeline", "ready"}}})},
+			component.Node{ID: "gallery-timeline", Kind: component.KindTimeline, Props: rawProps(map[string]any{"items": []string{"session.start", "model.changed", "task.complete"}})},
+			component.Node{ID: "gallery-log", Kind: component.KindLog, Props: rawProps(map[string]any{"items": []string{"metadata only", "redacted payload", "export ready"}})},
+		),
+		section("gallery-actions", "Inputs and actions",
+			component.Node{ID: "gallery-action-bar", Kind: component.KindActionBar, Children: []component.Node{
+				{ID: "gallery-refresh", Kind: component.KindButton, Props: rawProps(map[string]any{"label": "Refresh"})},
+				{ID: "gallery-search", Kind: component.KindSearchInput, Props: rawProps(map[string]any{"label": "Search", "placeholder": "Filter records"})},
+				{ID: "gallery-toggle", Kind: component.KindToggle, Props: rawProps(map[string]any{"label": "Live", "checked": true})},
+			}},
+			component.Node{ID: "gallery-prompt", Kind: component.KindPrompt, Props: rawProps(map[string]any{"title": "Confirm export", "message": "Export sanitized metadata?"}), Children: []component.Node{text("gallery-prompt-child", "Prompts can embed explanatory child content.")}},
+		),
+	}}, Revision: 1, SurfaceID: "fixture-component-gallery", ThemeID: "afterburner.dark", Locale: "en-US", Capabilities: []string{"ui.render.components", "ui.accessibility.inspect"}}}
 }
 
 func MalformedEnvelopeFixture() Fixture {

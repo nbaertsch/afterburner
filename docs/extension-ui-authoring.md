@@ -53,6 +53,7 @@ afterburn ui certify --extension sample-ui --surface sample-panel
 Authors should test narrow, monochrome, no-Unicode, and high-contrast modes. The built-in fixtures cover all components plus malformed and abuse inputs:
 
 ```powershell
+afterburn ui render-fixture component-gallery
 afterburn ui render-fixture all-components
 afterburn ui simulate --extension sample-ui --surface sample-panel --json
 ```

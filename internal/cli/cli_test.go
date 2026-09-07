@@ -78,6 +78,16 @@ func TestUIRenderFixtureCommand(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Metadata-only Observability") {
 		t.Fatalf("unexpected fixture output: %q", stdout.String())
 	}
+	stdout.Reset()
+	code, err = Run(context.Background(), []string{"ui", "render-fixture", "component-gallery"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("gallery returned code=%d err=%v output=%s", code, err, stdout.String())
+	}
+	for _, want := range []string{"Layout and structure", "Status and feedback", "Collections and data", "Inputs and actions"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("gallery output missing %q: %q", want, stdout.String())
+		}
+	}
 }
 
 func TestExtractLaunchOptions(t *testing.T) {
