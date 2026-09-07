@@ -11,9 +11,12 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nbaertsch/afterburner/internal/ui/component"
 )
 
 func TestFrameHandlesFragmentationLimitsDepthAndCancellation(t *testing.T) {
@@ -183,6 +186,36 @@ func TestDispatcherValidatesSDKShapedPayloadFixtures(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDispatcherAcceptsPublicComponentCatalogKinds(t *testing.T) {
+	children := make([]map[string]any, 0, len(component.PublicCatalog()))
+	for _, entry := range component.PublicCatalog() {
+		if entry.Kind == component.KindApplication {
+			continue
+		}
+		children = append(children, map[string]any{"id": "kind-" + strings.ToLower(strings.ReplaceAll(string(entry.Kind), ":", "-")), "kind": string(entry.Kind)})
+	}
+	payload := map[string]any{
+		"surfaceId": "catalog-surface",
+		"revision":  1,
+		"root": map[string]any{
+			"id":       "root",
+			"kind":     "application",
+			"children": children,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := validEnvelope()
+	envelope.Kind = EnvelopeComponentSnapshot
+	envelope.Payload = data
+	dispatcher := fixtureDispatcher(func(context.Context, Envelope) error { return nil })
+	if err := dispatcher.Dispatch(context.Background(), envelope); err != nil {
+		t.Fatalf("public component catalog rejected by protocol validation: %v", err)
 	}
 }
 

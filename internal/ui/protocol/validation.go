@@ -8,6 +8,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/nbaertsch/afterburner/internal/ui/component"
 )
 
 type PayloadValidator interface {
@@ -529,12 +531,15 @@ func targetField(target, field string) string {
 
 func isEOF(err error) bool { return err == io.EOF }
 
-var componentKinds = fields(
-	"application", "window", "surface", "viewport", "stack", "row", "grid", "panel", "card", "separator", "spacer",
-	"text", "markdown", "code", "icon", "badge", "button", "link", "textInput", "textArea", "select", "checkbox",
-	"radioGroup", "toggle", "slider", "progress", "spinner", "list", "table", "tree", "form", "toolbar", "tabs",
-	"breadcrumb", "dialog", "toast", "terminal", "canvas", "image", "video", "chart", "commandPalette", "keybindingHint", "extensionOutlet",
-)
+var componentKinds = publicComponentKindFields()
+
+func publicComponentKindFields() map[string]bool {
+	result := make(map[string]bool, len(component.PublicCatalog()))
+	for _, entry := range component.PublicCatalog() {
+		result[string(entry.Kind)] = true
+	}
+	return result
+}
 
 var patchOperations = fields("add", "remove", "replace", "move", "copy", "test", "setProps", "bindData", "bindAction")
 var eventPhases = fields("capture", "target", "bubble")
