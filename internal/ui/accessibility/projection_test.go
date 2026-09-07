@@ -129,7 +129,7 @@ func TestSecretInputsDoNotExposeValueAsAccessibleName(t *testing.T) {
 
 func TestAriaPropsPopulateAccessibilityProjection(t *testing.T) {
 	tree := SourceTree{SurfaceID: "s", Root: SourceNode{ID: "root", Kind: "application", Children: []SourceNode{
-		{ID: "assertive", Kind: "statusGrid", Props: map[string]any{"label": "Build failed", "ariaLive": "assertive", "ariaDescription": "See failed job details", "ariaInvalid": "spelling", "ariaCurrent": "page", "ariaLabelledBy": "heading summary", "ariaDescribedBy": []any{"details", "hint"}}},
+		{ID: "assertive", Kind: "statusGrid", Props: map[string]any{"label": "Build failed", "ariaLive": "assertive", "ariaDescription": "See failed job details", "ariaInvalid": "spelling", "ariaCurrent": "page", "ariaPosInSet": 2, "ariaSetSize": 5, "ariaLabelledBy": "heading summary", "ariaDescribedBy": []any{"details", "hint"}}},
 		{ID: "quiet", Kind: "alert", Props: map[string]any{"message": "Saved", "live": "off"}},
 	}}}
 	projected := Project(tree, ProjectionOptions{KeyboardOnly: true, Now: func() time.Time { return time.Unix(6, 0).UTC() }})
@@ -146,7 +146,7 @@ func TestAriaPropsPopulateAccessibilityProjection(t *testing.T) {
 		t.Fatalf("live props should control announcement politeness: assertive=%#v quiet=%#v", byID["assertive"], byID["quiet"])
 	}
 	assertive := byID["assertive"]
-	if assertive.Description != "See failed job details" || assertive.States["invalid"] != "spelling" || assertive.States["current"] != "page" {
+	if assertive.Description != "See failed job details" || assertive.States["invalid"] != "spelling" || assertive.States["current"] != "page" || assertive.States["positionInSet"] != "2" || assertive.States["setSize"] != "5" {
 		t.Fatalf("ARIA state aliases should populate accessible description and states: %#v", assertive)
 	}
 	if strings.Join(assertive.Relations["labelledBy"], ",") != "heading,summary" || strings.Join(assertive.Relations["describedBy"], ",") != "details,hint" {

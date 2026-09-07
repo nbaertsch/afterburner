@@ -107,6 +107,12 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 		if a11y.Level > 0 {
 			node.States["level"] = fmt.Sprint(a11y.Level)
 		}
+		if a11y.PositionInSet > 0 {
+			node.States["positionInSet"] = fmt.Sprint(a11y.PositionInSet)
+		}
+		if a11y.SetSize > 0 {
+			node.States["setSize"] = fmt.Sprint(a11y.SetSize)
+		}
 		node.KeyboardActions = append(node.KeyboardActions, a11y.KeyboardShortcut...)
 	}
 	for _, key := range []string{"disabled", "required", "readonly", "selected", "checked", "expanded", "invalid"} {
@@ -477,6 +483,12 @@ func addAriaAliases(states map[string]string, relations map[string][]string, pro
 	} else if current := stringProp(props, "current"); current != "" {
 		states["current"] = current
 	}
+	if position := stringPropAny(props, "ariaPosInSet", "aria-posinset", "positionInSet"); position != "" {
+		states["positionInSet"] = position
+	}
+	if size := stringPropAny(props, "ariaSetSize", "aria-setsize", "setSize"); size != "" {
+		states["setSize"] = size
+	}
 	if labelledBy := stringListProp(props, "ariaLabelledBy", "aria-labelledby", "labelledBy"); len(labelledBy) > 0 {
 		relations["labelledBy"] = labelledBy
 	}
@@ -513,6 +525,15 @@ func stringProp(props map[string]any, key string) string {
 	default:
 		return ""
 	}
+}
+
+func stringPropAny(props map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := stringProp(props, key); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func stringListProp(props map[string]any, keys ...string) []string {
