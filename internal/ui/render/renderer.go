@@ -267,21 +267,21 @@ func (rc *renderContext) renderNode(node component.Node, width int) (string, err
 	switch kind {
 	case component.KindApplication, component.KindWindow, component.KindSurface, component.KindViewport, kindRoot, component.KindCanvas, component.KindExtensionOutlet:
 		out, err = rc.renderContainer(node, available)
-	case component.KindStack, kindColumn, component.KindForm:
+	case component.KindStack, component.KindColumn, component.KindForm:
 		out, err = rc.renderStack(node, available)
 	case component.KindRow, component.KindToolbar, component.KindActionBar:
 		out, err = rc.renderRow(node, available)
 	case component.KindGrid, component.KindStatusGrid:
 		out, err = rc.renderGrid(node, available)
-	case kindBox, component.KindPanel, component.KindCard, kindSection, component.KindDialog:
+	case component.KindBox, component.KindPanel, component.KindCard, component.KindSection, component.KindDialog:
 		out, err = rc.renderBox(node, available)
-	case kindSplit:
+	case component.KindSplit:
 		out, err = rc.renderSplit(node, available)
 	case component.KindTabs:
 		out, err = rc.renderTabs(node, available)
-	case kindScroll:
+	case component.KindScroll:
 		out, err = rc.renderScroll(node, available)
-	case kindDisclosure:
+	case component.KindDisclosure:
 		out, err = rc.renderDisclosure(node, available)
 	case component.KindSeparator:
 		out = rc.rule(props.StringDefault("label", props.String("text")), available)
@@ -303,35 +303,35 @@ func (rc *renderContext) renderNode(node component.Node, width int) (string, err
 		out = rc.renderList("list", props, available)
 	case component.KindTree:
 		out = rc.renderList("tree", props, available)
-	case kindTimeline:
+	case component.KindTimeline:
 		out = rc.renderList("timeline", props, available)
-	case kindLog:
+	case component.KindLog:
 		out = rc.renderList("log", props, available)
-	case component.KindProgress, kindMeter, kindBar:
+	case component.KindProgress, component.KindMeter, component.KindBar:
 		out = rc.renderProgress(props, available)
 	case component.KindSparkline, component.KindChart:
 		out = rc.renderSparkline(props, available)
-	case component.KindTextInput, kindPasswordInput, kindSearchInput, kindNumberInput, component.KindTextArea, component.KindSelect, component.KindCheckbox, component.KindRadioGroup, component.KindToggle, component.KindSlider, kindDateInput, kindFileInput:
+	case component.KindTextInput, component.KindPasswordInput, component.KindSearchInput, component.KindNumberInput, component.KindTextArea, component.KindSelect, component.KindCheckbox, component.KindRadioGroup, component.KindToggle, component.KindSlider, component.KindDateInput, component.KindFileInput:
 		out = rc.renderInput(kind, props, available)
 	case component.KindButton:
 		out = rc.renderButton(props, available)
 	case component.KindCommandPalette:
 		out, err = rc.renderCommandPalette(node, available)
-	case kindContextMenu:
+	case component.KindContextMenu:
 		out = rc.renderList("menu", props, available)
 	case component.KindBreadcrumb:
 		out = rc.renderBreadcrumb(props, available)
-	case kindPagination:
+	case component.KindPagination:
 		out = rc.renderPagination(props, available)
-	case kindHelp, component.KindKeybindingHint:
+	case component.KindHelp, component.KindKeybindingHint:
 		out = rc.renderHelp(props, available)
 	case component.KindAlert, component.KindToast:
 		out = rc.renderAlert(kind, props, available)
-	case kindLoading, component.KindSpinner:
+	case component.KindLoading, component.KindSpinner:
 		out = rc.renderLoading(props, available)
-	case kindErrorBoundary:
+	case component.KindErrorBoundary:
 		out, err = rc.renderErrorBoundary(node, available)
-	case kindConfirmation, kindPrompt:
+	case component.KindConfirmation, component.KindPrompt:
 		out, err = rc.renderPrompt(kind, node, available)
 	case component.KindTerminal:
 		out = rc.renderTerminal(props, available)
@@ -780,13 +780,13 @@ func (rc *renderContext) renderSparkline(props propMap, width int) string {
 func (rc *renderContext) renderInput(kind component.Kind, props propMap, width int) string {
 	label := sanitize(props.First("label", "name", "title"))
 	value := sanitize(props.First("value", "text", "selected"))
-	if kind == kindPasswordInput && value != "" {
+	if kind == component.KindPasswordInput && value != "" {
 		value = strings.Repeat("•", utf8.RuneCountInString(value))
 		if !rc.opts.Unicode {
 			value = strings.Repeat("*", len(value))
 		}
 	}
-	if !rc.plain && (kind == component.KindTextInput || kind == kindSearchInput || kind == kindPasswordInput || kind == kindNumberInput) {
+	if !rc.plain && (kind == component.KindTextInput || kind == component.KindSearchInput || kind == component.KindPasswordInput || kind == component.KindNumberInput) {
 		model := textinput.New()
 		model.Placeholder = sanitize(props.String("placeholder"))
 		model.SetValue(value)
@@ -823,7 +823,7 @@ func (rc *renderContext) renderInput(kind component.Kind, props propMap, width i
 		return fitLine(firstNonEmpty(label, string(kind))+": "+strings.Join(sanitizeStrings(opts), ", "), width, rc.opts.Unicode)
 	case component.KindTextArea:
 		return fitLine(firstNonEmpty(label, "textarea")+":", width, rc.opts.Unicode) + "\n" + wrapBlock(value, width, rc.opts.Unicode)
-	case kindFileInput, kindDateInput:
+	case component.KindFileInput, component.KindDateInput:
 		return fitLine(firstNonEmpty(label, string(kind))+": "+value, width, rc.opts.Unicode)
 	default:
 		return fitLine(firstNonEmpty(label, string(kind))+": "+value, width, rc.opts.Unicode)

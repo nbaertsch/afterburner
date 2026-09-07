@@ -129,8 +129,9 @@ export function blackBoxSurfaceDescriptor() {
         title: "Afterburner Black Box",
         ownerExtensionId: BLACK_BOX_EXTENSION_ID,
         supportedComponents: [
-            "application", "surface", "viewport", "stack", "row", "grid", "panel", "card", "text",
-            "markdown", "code", "badge", "button", "progress", "table", "toolbar", "tabs",
+            "application", "surface", "viewport", "stack", "row", "grid", "statusGrid", "panel", "card",
+            "empty", "text", "markdown", "code", "icon", "badge", "keyValue", "detail", "alert",
+            "button", "progress", "sparkline", "table", "toolbar", "actionBar", "tabs",
             "commandPalette", "keybindingHint"
         ],
         actions: enterpriseActions().map(action => ({

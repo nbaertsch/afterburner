@@ -10,11 +10,7 @@ export const DEFAULT_MAX_FRAME_BYTES = 1 << 20;
 export const DEFAULT_MAX_JSON_DEPTH = 64;
 
 export const componentKinds = Object.freeze([
-  "application", "window", "surface", "viewport", "stack", "row", "grid", "panel", "card",
-  "separator", "spacer", "text", "markdown", "code", "icon", "badge", "button", "link",
-  "textInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "progress",
-  "spinner", "list", "table", "tree", "form", "toolbar", "tabs", "breadcrumb", "dialog", "toast",
-  "terminal", "canvas", "image", "video", "chart", "commandPalette", "keybindingHint", "extensionOutlet"
+  "application", "window", "surface", "viewport", "stack", "column", "row", "grid", "box", "section", "split", "scroll", "disclosure", "statusGrid", "panel", "card", "separator", "spacer", "empty", "text", "markdown", "code", "icon", "badge", "keyValue", "detail", "alert", "button", "link", "textInput", "passwordInput", "searchInput", "numberInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "dateInput", "fileInput", "progress", "meter", "bar", "sparkline", "spinner", "loading", "list", "table", "tree", "timeline", "log", "form", "toolbar", "actionBar", "contextMenu", "tabs", "breadcrumb", "pagination", "help", "dialog", "toast", "errorBoundary", "confirmation", "prompt", "terminal", "canvas", "image", "video", "chart", "commandPalette", "keybindingHint", "extensionOutlet"
 ]);
 
 export const surfaceKinds = Object.freeze(["terminal", "modal", "panel", "inline", "statusLine", "commandPalette", "overlay"]);
@@ -209,7 +205,7 @@ export function validateUIDocument(tree) {
 }
 
 const builderNames = {
-  application: "application", window: "window", surface: "surface", viewport: "viewport", stack: "stack", row: "row", grid: "grid", panel: "panel", card: "card", separator: "separator", spacer: "spacer", text: "text", markdown: "markdown", code: "code", icon: "icon", badge: "badge", button: "button", link: "link", textInput: "textInput", textArea: "textArea", select: "select", checkbox: "checkbox", radioGroup: "radioGroup", toggle: "toggle", slider: "slider", progress: "progress", spinner: "spinner", list: "list", table: "table", tree: "tree", form: "form", toolbar: "toolbar", tabs: "tabs", breadcrumb: "breadcrumb", dialog: "dialog", toast: "toast", terminal: "terminal", canvas: "canvas", image: "image", video: "video", chart: "chart", commandPalette: "commandPalette", keybindingHint: "keybindingHint", extensionOutlet: "extensionOutlet"
+  application: "application", window: "window", surface: "surface", viewport: "viewport", stack: "stack", column: "column", row: "row", grid: "grid", box: "box", section: "section", split: "split", scroll: "scroll", disclosure: "disclosure", statusGrid: "statusGrid", panel: "panel", card: "card", separator: "separator", spacer: "spacer", empty: "empty", text: "text", markdown: "markdown", code: "code", icon: "icon", badge: "badge", keyValue: "keyValue", detail: "detail", alert: "alert", button: "button", link: "link", textInput: "textInput", passwordInput: "passwordInput", searchInput: "searchInput", numberInput: "numberInput", textArea: "textArea", select: "select", checkbox: "checkbox", radioGroup: "radioGroup", toggle: "toggle", slider: "slider", dateInput: "dateInput", fileInput: "fileInput", progress: "progress", meter: "meter", bar: "bar", sparkline: "sparkline", spinner: "spinner", loading: "loading", list: "list", table: "table", tree: "tree", timeline: "timeline", log: "log", form: "form", toolbar: "toolbar", actionBar: "actionBar", contextMenu: "contextMenu", tabs: "tabs", breadcrumb: "breadcrumb", pagination: "pagination", help: "help", dialog: "dialog", toast: "toast", errorBoundary: "errorBoundary", confirmation: "confirmation", prompt: "prompt", terminal: "terminal", canvas: "canvas", image: "image", video: "video", chart: "chart", commandPalette: "commandPalette", keybindingHint: "keybindingHint", extensionOutlet: "extensionOutlet"
 };
 
 export const components = deepFreeze(Object.fromEntries(Object.entries(builderNames).map(([name, kind]) => [name, (...args) => createNode(kind, ...args)])));
@@ -218,37 +214,66 @@ export const window = components.window;
 export const surface = components.surface;
 export const viewport = components.viewport;
 export const stack = components.stack;
+export const column = components.column;
 export const row = components.row;
 export const grid = components.grid;
+export const box = components.box;
+export const section = components.section;
+export const split = components.split;
+export const scroll = components.scroll;
+export const disclosure = components.disclosure;
+export const statusGrid = components.statusGrid;
 export const panel = components.panel;
 export const card = components.card;
 export const separator = components.separator;
 export const spacer = components.spacer;
+export const empty = components.empty;
 export const text = components.text;
 export const markdown = components.markdown;
 export const code = components.code;
 export const icon = components.icon;
 export const badge = components.badge;
+export const keyValue = components.keyValue;
+export const detail = components.detail;
+export const alert = components.alert;
 export const button = components.button;
 export const link = components.link;
 export const textInput = components.textInput;
+export const passwordInput = components.passwordInput;
+export const searchInput = components.searchInput;
+export const numberInput = components.numberInput;
 export const textArea = components.textArea;
 export const select = components.select;
 export const checkbox = components.checkbox;
 export const radioGroup = components.radioGroup;
 export const toggle = components.toggle;
 export const slider = components.slider;
+export const dateInput = components.dateInput;
+export const fileInput = components.fileInput;
 export const progress = components.progress;
+export const meter = components.meter;
+export const bar = components.bar;
+export const sparkline = components.sparkline;
 export const spinner = components.spinner;
+export const loading = components.loading;
 export const list = components.list;
 export const table = components.table;
 export const tree = components.tree;
+export const timeline = components.timeline;
+export const log = components.log;
 export const form = components.form;
 export const toolbar = components.toolbar;
+export const actionBar = components.actionBar;
+export const contextMenu = components.contextMenu;
 export const tabs = components.tabs;
 export const breadcrumb = components.breadcrumb;
+export const pagination = components.pagination;
+export const help = components.help;
 export const dialog = components.dialog;
 export const toast = components.toast;
+export const errorBoundary = components.errorBoundary;
+export const confirmation = components.confirmation;
+export const prompt = components.prompt;
 export const terminal = components.terminal;
 export const canvas = components.canvas;
 export const image = components.image;

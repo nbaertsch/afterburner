@@ -30,7 +30,15 @@ afterburn ui validate-manifest .\afterburner.json
 
 ## Components and lifecycle
 
-Use the SDK component builders from `sdk\ui` to emit versioned `afterburner.ui` component snapshots and patches. Every node should have a stable `id`, a `kind`, JSON props, and accessibility metadata when the visible label is not obvious. Surfaces move through declared, mounted, rendering, interactive, suspended, disposing, disposed, and failed states.
+Use the SDK component builders from `sdk\ui` to emit versioned `afterburner.ui` component snapshots and patches. Every public component kind has both `ui.components.<kind>(...)` and a named `ui.<kind>(...)` builder. Every node should have a stable `id`, a `kind`, JSON props, and accessibility metadata when the visible label is not obvious. Surfaces move through declared, mounted, rendering, interactive, suspended, disposing, disposed, and failed states.
+
+Public composable design primitives include:
+
+- Layout: `application`, `window`, `surface`, `viewport`, `stack`, `column`, `row`, `grid`, `box`, `section`, `split`, `scroll`, `disclosure`, `panel`, `card`, `separator`, `spacer`.
+- Content/status: `empty`, `text`, `markdown`, `code`, `icon`, `badge`, `keyValue`, `detail`, `alert`, `progress`, `meter`, `bar`, `sparkline`, `spinner`, `loading`, `toast`, `errorBoundary`.
+- Collections/data: `list`, `table`, `tree`, `timeline`, `log`, `chart`.
+- Inputs/actions: `form`, `button`, `link`, `textInput`, `passwordInput`, `searchInput`, `numberInput`, `textArea`, `select`, `checkbox`, `radioGroup`, `toggle`, `slider`, `dateInput`, `fileInput`, `toolbar`, `actionBar`, `contextMenu`, `commandPalette`, `keybindingHint`, `pagination`, `help`, `confirmation`, `prompt`.
+- Surfaces/media/extension points: `dialog`, `terminal`, `canvas`, `image`, `video`, `extensionOutlet`.
 
 ## Security and grants
 

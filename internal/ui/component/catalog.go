@@ -16,8 +16,30 @@ const (
 	KindSurface         Kind = "surface"
 	KindViewport        Kind = "viewport"
 	KindStack           Kind = "stack"
+	KindColumn          Kind = "column"
 	KindRow             Kind = "row"
 	KindGrid            Kind = "grid"
+	KindBox             Kind = "box"
+	KindSection         Kind = "section"
+	KindSplit           Kind = "split"
+	KindScroll          Kind = "scroll"
+	KindDisclosure      Kind = "disclosure"
+	KindTimeline        Kind = "timeline"
+	KindLog             Kind = "log"
+	KindMeter           Kind = "meter"
+	KindBar             Kind = "bar"
+	KindPasswordInput   Kind = "passwordInput"
+	KindSearchInput     Kind = "searchInput"
+	KindNumberInput     Kind = "numberInput"
+	KindDateInput       Kind = "dateInput"
+	KindFileInput       Kind = "fileInput"
+	KindContextMenu     Kind = "contextMenu"
+	KindPagination      Kind = "pagination"
+	KindHelp            Kind = "help"
+	KindLoading         Kind = "loading"
+	KindErrorBoundary   Kind = "errorBoundary"
+	KindConfirmation    Kind = "confirmation"
+	KindPrompt          Kind = "prompt"
 	KindStatusGrid      Kind = "statusGrid"
 	KindPanel           Kind = "panel"
 	KindCard            Kind = "card"
@@ -117,8 +139,14 @@ func PublicCatalog() []CatalogEntry {
 		{KindSurface, StabilityStable, "Mount point bound to a surface descriptor."},
 		{KindViewport, StabilityStable, "Scrollable viewport."},
 		{KindStack, StabilityStable, "One-dimensional vertical layout."},
+		{KindColumn, StabilityStable, "One-dimensional vertical layout column."},
 		{KindRow, StabilityStable, "One-dimensional horizontal layout."},
 		{KindGrid, StabilityStable, "Two-dimensional layout."},
+		{KindBox, StabilityStable, "Generic boxed layout container."},
+		{KindSection, StabilityStable, "Named section container."},
+		{KindSplit, StabilityStable, "Split-pane layout container."},
+		{KindScroll, StabilityStable, "Explicit scrollable region."},
+		{KindDisclosure, StabilityStable, "Expandable/collapsible content region."},
 		{KindStatusGrid, StabilityStable, "Dashboard-style status grid for health and metrics."},
 		{KindPanel, StabilityStable, "Grouped content panel."},
 		{KindCard, StabilityStable, "Elevated content region."},
@@ -136,25 +164,41 @@ func PublicCatalog() []CatalogEntry {
 		{KindButton, StabilityStable, "User-invoked action control."},
 		{KindLink, StabilityStable, "Navigation or external reference."},
 		{KindTextInput, StabilityStable, "Single-line text input."},
+		{KindPasswordInput, StabilityStable, "Secret text input."},
+		{KindSearchInput, StabilityStable, "Search/filter input."},
+		{KindNumberInput, StabilityStable, "Numeric input."},
 		{KindTextArea, StabilityStable, "Multi-line text input."},
 		{KindSelect, StabilityStable, "Single or multi-select input."},
 		{KindCheckbox, StabilityStable, "Boolean checkbox input."},
 		{KindRadioGroup, StabilityStable, "Exclusive option group."},
 		{KindToggle, StabilityStable, "Binary switch control."},
 		{KindSlider, StabilityStable, "Continuous or stepped numeric input."},
+		{KindDateInput, StabilityStable, "Date input."},
+		{KindFileInput, StabilityStable, "File path or file picker input."},
 		{KindProgress, StabilityStable, "Progress indicator."},
+		{KindMeter, StabilityStable, "Bounded scalar meter."},
+		{KindBar, StabilityStable, "Inline bar visualization."},
 		{KindSparkline, StabilityStable, "Compact inline trend visualization."},
 		{KindSpinner, StabilityStable, "Indeterminate progress indicator."},
+		{KindLoading, StabilityStable, "Loading state container."},
 		{KindList, StabilityStable, "Linear collection."},
 		{KindTable, StabilityStable, "Tabular data collection."},
 		{KindTree, StabilityStable, "Hierarchical data collection."},
+		{KindTimeline, StabilityStable, "Chronological event collection."},
+		{KindLog, StabilityStable, "Streaming or historical log view."},
 		{KindForm, StabilityStable, "Validated input group."},
 		{KindToolbar, StabilityStable, "Action strip."},
 		{KindActionBar, StabilityStable, "Primary command/action strip with keyboard affordances."},
+		{KindContextMenu, StabilityStable, "Contextual command menu."},
 		{KindTabs, StabilityStable, "Tabbed content switcher."},
 		{KindBreadcrumb, StabilityStable, "Navigation path."},
+		{KindPagination, StabilityStable, "Paged collection navigation."},
+		{KindHelp, StabilityStable, "Contextual help content."},
 		{KindDialog, StabilityStable, "Modal or non-modal dialog."},
 		{KindToast, StabilityStable, "Transient notification."},
+		{KindErrorBoundary, StabilityStable, "Recoverable render error boundary."},
+		{KindConfirmation, StabilityStable, "Confirmation prompt."},
+		{KindPrompt, StabilityStable, "User prompt or command prompt UI."},
 		{KindTerminal, StabilityStable, "Terminal surface projection."},
 		{KindCanvas, StabilityStable, "Extension-owned canvas."},
 		{KindImage, StabilityStable, "Image content."},

@@ -373,7 +373,7 @@ func sdkContractNode(t *testing.T, kind component.Kind) component.Node {
 	id := "sdk-" + strings.ToLower(strings.ReplaceAll(string(kind), ".", "-"))
 	child := nodeWithProps(t, component.KindText, map[string]any{"value": "child content"})
 	switch kind {
-	case component.KindApplication, component.KindWindow, component.KindSurface, component.KindViewport, component.KindStack, kindColumn, component.KindRow, component.KindPanel, component.KindCard, kindBox, kindSection, kindSplit, component.KindForm, component.KindToolbar, component.KindActionBar, component.KindCanvas, component.KindExtensionOutlet, kindRoot:
+	case component.KindApplication, component.KindWindow, component.KindSurface, component.KindViewport, component.KindStack, component.KindColumn, component.KindRow, component.KindPanel, component.KindCard, component.KindBox, component.KindSection, component.KindSplit, component.KindForm, component.KindToolbar, component.KindActionBar, component.KindCanvas, component.KindExtensionOutlet, kindRoot:
 		return component.Node{ID: id, Kind: kind, Props: mustJSON(t, map[string]any{"title": string(kind) + " title"}), Children: []component.Node{child}}
 	case component.KindGrid:
 		return component.Node{ID: id, Kind: kind, Props: mustJSON(t, map[string]any{"columns": 2}), Children: []component.Node{child, nodeWithProps(t, component.KindText, map[string]any{"value": "second cell"})}}
@@ -391,21 +391,21 @@ func sdkContractNode(t *testing.T, kind component.Kind) component.Node {
 		return nodeWithProps(t, kind, map[string]any{"items": []map[string]any{{"key": "sdk", "value": string(kind)}}})
 	case component.KindTable:
 		return nodeWithProps(t, kind, sdkTableProps(string(kind), "ok", 65))
-	case component.KindList, component.KindTree, kindTimeline, kindLog, kindContextMenu:
+	case component.KindList, component.KindTree, component.KindTimeline, component.KindLog, component.KindContextMenu:
 		return nodeWithProps(t, kind, map[string]any{"items": []string{"alpha", "beta"}, "selected": "alpha"})
-	case component.KindProgress, kindMeter, kindBar:
+	case component.KindProgress, component.KindMeter, component.KindBar:
 		return nodeWithProps(t, kind, map[string]any{"value": 65, "min": 0, "max": 100, "label": string(kind)})
 	case component.KindSparkline, component.KindChart:
 		return nodeWithProps(t, kind, map[string]any{"value": 0.65, "label": string(kind)})
-	case component.KindTextInput, kindPasswordInput, kindSearchInput, kindNumberInput, component.KindTextArea, component.KindSelect, component.KindCheckbox, component.KindRadioGroup, component.KindToggle, component.KindSlider, kindDateInput, kindFileInput:
+	case component.KindTextInput, component.KindPasswordInput, component.KindSearchInput, component.KindNumberInput, component.KindTextArea, component.KindSelect, component.KindCheckbox, component.KindRadioGroup, component.KindToggle, component.KindSlider, component.KindDateInput, component.KindFileInput:
 		return nodeWithProps(t, kind, map[string]any{"label": string(kind) + " control", "value": "sample", "checked": true, "options": []string{"one", "two"}})
 	case component.KindButton:
 		return nodeWithProps(t, kind, map[string]any{"label": "button control", "actionId": "go"})
 	case component.KindTabs:
 		return nodeWithProps(t, kind, map[string]any{"items": []string{"Alpha", "Beta"}, "selected": "Alpha"})
-	case kindScroll:
+	case component.KindScroll:
 		return component.Node{ID: id, Kind: kind, Props: mustJSON(t, map[string]any{"start": 0, "count": 1, "total": 2}), Children: []component.Node{nodeWithProps(t, component.KindText, map[string]any{"value": "scroll line"})}}
-	case kindDisclosure:
+	case component.KindDisclosure:
 		return component.Node{ID: id, Kind: kind, Props: mustJSON(t, map[string]any{"title": "Details", "expanded": true}), Children: []component.Node{child}}
 	case component.KindSeparator:
 		return nodeWithProps(t, kind, map[string]any{"label": "separator"})
@@ -417,17 +417,17 @@ func sdkContractNode(t *testing.T, kind component.Kind) component.Node {
 		return nodeWithProps(t, kind, map[string]any{"query": "deploy", "items": []string{"Deploy"}})
 	case component.KindBreadcrumb:
 		return nodeWithProps(t, kind, map[string]any{"items": []string{"Home", "Project"}, "selected": "Home"})
-	case kindPagination:
+	case component.KindPagination:
 		return nodeWithProps(t, kind, map[string]any{"page": 1, "total": 2})
-	case kindHelp:
+	case component.KindHelp:
 		return nodeWithProps(t, kind, map[string]any{"title": "help title"})
 	case component.KindAlert, component.KindToast:
 		return nodeWithProps(t, kind, map[string]any{"message": string(kind) + " message", "severity": "info"})
-	case kindLoading, component.KindSpinner:
+	case component.KindLoading, component.KindSpinner:
 		return nodeWithProps(t, kind, map[string]any{"message": "loading"})
-	case kindErrorBoundary:
+	case component.KindErrorBoundary:
 		return component.Node{ID: id, Kind: kind, Props: mustJSON(t, map[string]any{"title": "error boundary"}), Children: []component.Node{child}}
-	case kindConfirmation, kindPrompt, component.KindDialog:
+	case component.KindConfirmation, component.KindPrompt, component.KindDialog:
 		return component.Node{ID: id, Kind: kind, Props: mustJSON(t, map[string]any{"title": string(kind), "modal": false}), Children: []component.Node{child}}
 	case component.KindTerminal:
 		return nodeWithProps(t, kind, map[string]any{"title": "terminal title", "alt": "terminal output"})
@@ -458,27 +458,27 @@ func sampleNode(t *testing.T, kind component.Kind) component.Node {
 	switch kind {
 	case component.KindGrid, component.KindStatusGrid:
 		return component.Node{ID: string(kind), Kind: kind, Props: mustJSON(t, map[string]any{"columns": 2}), Children: []component.Node{nodeWithProps(t, "text", map[string]any{"text": "cell 1"}), nodeWithProps(t, "text", map[string]any{"text": "cell 2"})}}
-	case component.KindRow, component.KindToolbar, component.KindActionBar, kindSplit, component.KindForm:
+	case component.KindRow, component.KindToolbar, component.KindActionBar, component.KindSplit, component.KindForm:
 		return component.Node{ID: string(kind), Kind: kind, Children: []component.Node{nodeWithProps(t, "button", map[string]any{"label": "Run"}), nodeWithProps(t, "badge", map[string]any{"label": "OK"})}}
-	case component.KindStack, kindColumn, component.KindApplication, component.KindWindow, component.KindSurface, component.KindViewport, kindRoot:
+	case component.KindStack, component.KindColumn, component.KindApplication, component.KindWindow, component.KindSurface, component.KindViewport, kindRoot:
 		return component.Node{ID: string(kind), Kind: kind, Children: []component.Node{nodeWithProps(t, "text", base)}}
-	case kindBox, component.KindPanel, component.KindCard, kindSection, component.KindDialog, kindConfirmation, kindPrompt:
+	case component.KindBox, component.KindPanel, component.KindCard, component.KindSection, component.KindDialog, component.KindConfirmation, component.KindPrompt:
 		return component.Node{ID: string(kind), Kind: kind, Props: mustJSON(t, base), Children: []component.Node{nodeWithProps(t, "text", base)}}
 	case component.KindTabs:
 		return component.Node{ID: string(kind), Kind: kind, Props: mustJSON(t, map[string]any{"tabs": []string{"One", "Two"}, "selected": 1}), Children: []component.Node{nodeWithProps(t, "text", map[string]any{"text": "one"}), nodeWithProps(t, "text", map[string]any{"text": "two"})}}
-	case kindScroll:
+	case component.KindScroll:
 		return component.Node{ID: string(kind), Kind: kind, Props: mustJSON(t, map[string]any{"start": 1, "count": 2, "total": 5, "virtualized": true}), Children: []component.Node{nodeWithProps(t, "text", map[string]any{"text": "a\nb\nc\nd"})}}
-	case kindDisclosure:
+	case component.KindDisclosure:
 		return component.Node{ID: string(kind), Kind: kind, Props: mustJSON(t, map[string]any{"title": "Details", "expanded": true}), Children: []component.Node{nodeWithProps(t, "text", base)}}
 	case component.KindTable:
 		return nodeWithProps(t, kind, map[string]any{"columns": []string{"Name", "State"}, "rows": []map[string]any{{"Name": "Build", "State": "green"}, {"Name": "Test", "State": "blue"}}})
-	case component.KindList, component.KindTree, kindTimeline, kindLog, kindContextMenu:
+	case component.KindList, component.KindTree, component.KindTimeline, component.KindLog, component.KindContextMenu:
 		return nodeWithProps(t, kind, map[string]any{"items": []any{"alpha", map[string]any{"label": "beta"}}, "selected": 1, "virtualized": true, "total": 4})
-	case component.KindProgress, kindMeter, kindBar:
+	case component.KindProgress, component.KindMeter, component.KindBar:
 		return nodeWithProps(t, kind, map[string]any{"percent": 0.42})
 	case component.KindSparkline, component.KindChart:
 		return nodeWithProps(t, kind, map[string]any{"values": []float64{1, 4, 2, 8, 3}})
-	case component.KindKeyValue, component.KindDetail, kindHelp, component.KindKeybindingHint:
+	case component.KindKeyValue, component.KindDetail, component.KindHelp, component.KindKeybindingHint:
 		return nodeWithProps(t, kind, map[string]any{"items": []map[string]any{{"key": "Esc", "value": "Close"}, {"key": "Enter", "value": "Accept"}}})
 	case component.KindCheckbox:
 		return nodeWithProps(t, kind, map[string]any{"label": "Agree", "checked": true})
@@ -488,15 +488,15 @@ func sampleNode(t *testing.T, kind component.Kind) component.Node {
 		return nodeWithProps(t, kind, map[string]any{"label": "Volume", "percent": 0.7})
 	case component.KindAlert, component.KindToast:
 		return nodeWithProps(t, kind, map[string]any{"severity": "warning", "message": "Heads up"})
-	case kindLoading, component.KindSpinner:
+	case component.KindLoading, component.KindSpinner:
 		return nodeWithProps(t, kind, map[string]any{"message": "Loading"})
-	case kindErrorBoundary:
+	case component.KindErrorBoundary:
 		return nodeWithProps(t, kind, map[string]any{"error": "Failure"})
 	case component.KindCommandPalette:
 		return nodeWithProps(t, kind, map[string]any{"query": "deploy", "items": []string{"Deploy app", "Rollback"}})
 	case component.KindBreadcrumb:
 		return nodeWithProps(t, kind, map[string]any{"items": []string{"Home", "Project", "Run"}})
-	case kindPagination:
+	case component.KindPagination:
 		return nodeWithProps(t, kind, map[string]any{"page": 2, "total": 5})
 	case component.KindTerminal:
 		return nodeWithProps(t, kind, map[string]any{"repaint": "terminal\x1b[31m red"})
@@ -553,7 +553,7 @@ func walkSDKProps(t *testing.T, node component.Node, sawTable, sawProgress *bool
 			}
 		}
 		*sawTable = true
-	case component.KindProgress, kindMeter:
+	case component.KindProgress, component.KindMeter:
 		if !props.Has("value") || !props.Has("min") || !props.Has("max") {
 			t.Fatalf("%s fixture progress missing value/min/max", node.ID)
 		}
