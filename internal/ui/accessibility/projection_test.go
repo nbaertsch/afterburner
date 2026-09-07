@@ -129,7 +129,7 @@ func TestSecretInputsDoNotExposeValueAsAccessibleName(t *testing.T) {
 
 func TestAriaPropsPopulateAccessibilityProjection(t *testing.T) {
 	tree := SourceTree{SurfaceID: "s", Root: SourceNode{ID: "root", Kind: "application", Children: []SourceNode{
-		{ID: "assertive", Kind: "statusGrid", Props: map[string]any{"label": "Build failed", "ariaLive": "assertive", "ariaDescription": "See failed job details", "ariaInvalid": "spelling", "ariaCurrent": "page", "ariaPosInSet": 2, "ariaSetSize": 5, "ariaAtomic": true, "ariaRelevant": []any{"additions", "text"}, "ariaLabelledBy": "heading summary", "ariaDescribedBy": []any{"details", "hint"}}},
+		{ID: "assertive", Kind: "statusGrid", Props: map[string]any{"label": "Build failed", "ariaLive": "assertive", "ariaDescription": "See failed job details", "ariaInvalid": "spelling", "ariaCurrent": "page", "ariaPosInSet": 2, "ariaSetSize": 5, "ariaAtomic": true, "ariaRelevant": []any{"additions", "text"}, "ariaLabelledBy": "heading summary", "ariaDescribedBy": []any{"details", "hint"}, "ariaControls": "details-panel", "ariaActiveDescendant": "failed-job"}},
 		{ID: "quiet", Kind: "alert", Props: map[string]any{"message": "Saved", "live": "off"}},
 	}}}
 	projected := Project(tree, ProjectionOptions{KeyboardOnly: true, Now: func() time.Time { return time.Unix(6, 0).UTC() }})
@@ -149,7 +149,7 @@ func TestAriaPropsPopulateAccessibilityProjection(t *testing.T) {
 	if assertive.Description != "See failed job details" || assertive.States["invalid"] != "spelling" || assertive.States["current"] != "page" || assertive.States["positionInSet"] != "2" || assertive.States["setSize"] != "5" || assertive.States["atomic"] != "true" || assertive.States["relevant"] != "additions text" {
 		t.Fatalf("ARIA state aliases should populate accessible description and states: %#v", assertive)
 	}
-	if strings.Join(assertive.Relations["labelledBy"], ",") != "heading,summary" || strings.Join(assertive.Relations["describedBy"], ",") != "details,hint" {
+	if strings.Join(assertive.Relations["labelledBy"], ",") != "heading,summary" || strings.Join(assertive.Relations["describedBy"], ",") != "details,hint" || strings.Join(assertive.Relations["controls"], ",") != "details-panel" || strings.Join(assertive.Relations["activeDescendant"], ",") != "failed-job" {
 		t.Fatalf("ARIA relation aliases should populate relation IDs: %#v", assertive.Relations)
 	}
 	if projected.LiveSummary != "Build failed See failed job details" {

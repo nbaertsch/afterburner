@@ -505,6 +505,12 @@ func addAriaAliases(states map[string]string, relations map[string][]string, pro
 	if describedBy := stringListProp(props, "ariaDescribedBy", "aria-describedby", "describedBy"); len(describedBy) > 0 {
 		relations["describedBy"] = describedBy
 	}
+	if controls := stringListProp(props, "ariaControls", "aria-controls", "controls"); len(controls) > 0 {
+		relations["controls"] = controls
+	}
+	if activeDescendant := stringListProp(props, "ariaActiveDescendant", "aria-activedescendant", "activeDescendant"); len(activeDescendant) > 0 {
+		relations["activeDescendant"] = activeDescendant
+	}
 }
 
 func boolProp(props map[string]any, key string, fallback bool) bool {
