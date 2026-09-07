@@ -58,6 +58,23 @@ const installResult = spawnSync(afterburn, ["install", "black-box", "byo-models"
 if (installResult.status !== 0) {
   throw new Error(`failed to install local built-ins for visual UAT: status=${installResult.status} stdout=${installResult.stdout} stderr=${installResult.stderr}`);
 }
+const registry = JSON.parse(readFileSync(join(isolatedAfterburnerHome, "registry.json"), "utf8"));
+const blackBoxActivePath = registry.extensions?.["black-box"]?.activePath;
+if (!blackBoxActivePath) throw new Error("visual UAT did not install an active Black Box package");
+const forbiddenCanvasFiles = [
+  join(blackBoxActivePath, "lib", "session-extension.mjs"),
+  join(blackBoxActivePath, "extensions", "BlackBox", "extension.mjs"),
+  join(blackBoxActivePath, "afterburner.json")
+];
+const forbiddenCanvasMatches = forbiddenCanvasFiles.flatMap(file => {
+  if (!existsSync(file)) return [];
+  const source = readFileSync(file, "utf8");
+  const matches = [...source.matchAll(/createCanvas|openModalCanvas|canvasRpc\.open|canvases:\s*canvas|"canvas"/g)].map(match => match[0]);
+  return matches.map(match => ({ file, match }));
+});
+if (forbiddenCanvasMatches.length > 0) {
+  throw new Error(`installed Black Box still exposes generic canvas fallback: ${JSON.stringify(forbiddenCanvasMatches)}`);
+}
 
 const env = { ...process.env, COPILOT_RUNTIME_EXTENSION_DEBUG: "1", AFTERBURNER_HOME: isolatedAfterburnerHome, AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH: "1" };
 delete env.COPILOT_AGENT_SESSION_ID;
