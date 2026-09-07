@@ -218,6 +218,10 @@ type modalScrollRenderer interface {
 	ScrollModal(key string) bool
 }
 
+type modalClickRenderer interface {
+	ClickModal(row, col int) (string, bool)
+}
+
 func NewModalServer(broker *Broker, renderer ModalRenderer) (*ModalServer, error) {
 	server := &ModalServer{
 		broker:               broker,
@@ -801,6 +805,20 @@ func (s *ModalServer) handleInputKey(key string) {
 		s.requestClose(identity, generation, key)
 		return
 	}
+	if row, col, ok := modalMouseClick(key); ok {
+		clickKey, hit := "", false
+		if clicker, ok := s.renderer.(modalClickRenderer); ok {
+			clickKey, hit = clicker.ClickModal(row, col)
+		}
+		if !hit {
+			return
+		}
+		key = clickKey
+		if key == "escape" {
+			s.requestClose(identity, generation, key)
+			return
+		}
+	}
 	if modalIsScrollKey(key) {
 		if scroller, ok := s.renderer.(modalScrollRenderer); ok && scroller.ScrollModal(key) {
 			return
@@ -904,6 +922,9 @@ func modalCSIInputKey(seq []byte) string {
 		return modalWindowsVTInputKey(seq[:len(seq)-1])
 	}
 	text := string(seq)
+	if key := modalSGRMouseInputKey(text); key != "" {
+		return key
+	}
 	switch text {
 	case "A":
 		return "up"
@@ -935,6 +956,45 @@ func modalCSIInputKey(seq []byte) string {
 		}
 	}
 	return ""
+}
+
+func modalSGRMouseInputKey(text string) string {
+	if len(text) < 2 || text[0] != '<' || text[len(text)-1] != 'M' {
+		return ""
+	}
+	fields := strings.Split(strings.TrimSuffix(strings.TrimPrefix(text, "<"), "M"), ";")
+	if len(fields) != 3 {
+		return ""
+	}
+	button, err1 := strconv.Atoi(fields[0])
+	col, err2 := strconv.Atoi(fields[1])
+	row, err3 := strconv.Atoi(fields[2])
+	if err1 != nil || err2 != nil || err3 != nil || row <= 0 || col <= 0 {
+		return ""
+	}
+	if button&64 != 0 {
+		if button&1 == 0 {
+			return "up"
+		}
+		return "down"
+	}
+	if button&3 == 0 {
+		return fmt.Sprintf("mouse:left:%d:%d", row, col)
+	}
+	return ""
+}
+
+func modalMouseClick(key string) (int, int, bool) {
+	if !strings.HasPrefix(key, "mouse:left:") {
+		return 0, 0, false
+	}
+	fields := strings.Split(strings.TrimPrefix(key, "mouse:left:"), ":")
+	if len(fields) != 2 {
+		return 0, 0, false
+	}
+	row, err1 := strconv.Atoi(fields[0])
+	col, err2 := strconv.Atoi(fields[1])
+	return row, col, err1 == nil && err2 == nil && row > 0 && col > 0
 }
 
 func modalWindowsVTInputKey(body []byte) string {
@@ -1157,6 +1217,15 @@ func (r *TerminalModalRenderer) ShowModal(frame ModalFrame) {
 	body, scrollOffset := renderModalFrame(r.screen.Snapshot(), frame, r.scrollOffset)
 	r.scrollOffset = scrollOffset
 	_, _ = io.WriteString(r.writer, body)
+}
+
+func (r *TerminalModalRenderer) ClickModal(row, col int) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active || r.writer == nil {
+		return "", false
+	}
+	return modalActionKeyAt(r.activeFrame, newModalLayout(r.screen.Snapshot()), row, col)
 }
 
 func (r *TerminalModalRenderer) ScrollModal(key string) bool {
@@ -1559,19 +1628,61 @@ func moveModalCursor(out *strings.Builder, row, col int) {
 func modalActionsText(frame ModalFrame) string {
 	parts := make([]string, 0, len(frame.Actions)+1)
 	for _, action := range frame.Actions {
-		label := printableModalText(action.Label, false)
-		if label == "" {
-			label = printableModalText(action.Name, false)
-		}
-		if action.Key != "" {
-			label = "[" + printableModalText(action.Key, false) + "] " + label
-		}
-		if action.Description != "" {
-			label += " — " + printableModalText(action.Description, false)
-		}
-		parts = append(parts, label)
+		parts = append(parts, modalActionLabel(action))
 	}
 	return strings.Join(parts, "  ")
+}
+
+func modalActionLabel(action ModalAction) string {
+	label := printableModalText(action.Label, false)
+	if label == "" {
+		label = printableModalText(action.Name, false)
+	}
+	if action.Key != "" {
+		label = "[" + printableModalText(action.Key, false) + "] " + label
+	}
+	if action.Description != "" {
+		label += " — " + printableModalText(action.Description, false)
+	}
+	return label
+}
+
+func modalActionKeyAt(frame ModalFrame, layout modalLayout, row, col int) (string, bool) {
+	actionRow, ok := modalActionRow(frame, layout)
+	if !ok || row != actionRow || col < layout.innerLeft || col >= layout.innerLeft+layout.innerWidth {
+		return "", false
+	}
+	cursor := layout.innerLeft
+	for _, action := range frame.Actions {
+		label := modalActionLabel(action)
+		width := lipgloss.Width(label)
+		if col >= cursor && col < cursor+width {
+			return firstNonEmpty(action.Key, action.Name), true
+		}
+		cursor += width + 2
+	}
+	closeLabel := "q/Esc Close"
+	if col >= cursor && col < cursor+lipgloss.Width(closeLabel) {
+		return "escape", true
+	}
+	return "", false
+}
+
+func modalActionRow(frame ModalFrame, layout modalLayout) (int, bool) {
+	if layout.footerRows <= 0 || layout.compact {
+		return 0, false
+	}
+	row := layout.footerStartRow
+	if row < layout.top+layout.panelHeight-1 {
+		row++
+	}
+	if frame.Footer != "" && row < layout.top+layout.panelHeight-1 {
+		row++
+	}
+	if row < layout.top+layout.panelHeight-1 {
+		return row, true
+	}
+	return 0, false
 }
 
 func modalFrameBodyLines(frame ModalFrame, width int) []string {

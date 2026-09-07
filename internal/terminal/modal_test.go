@@ -316,6 +316,47 @@ func TestModalServerScrollsOverflowWithoutExtensionAction(t *testing.T) {
 	}
 }
 
+func TestModalServerRoutesMouseWheelAndActionClicks(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pollTimeout = 20 * time.Millisecond
+	var body strings.Builder
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&body, "line %02d\n", i)
+	}
+	response := callModalServer(t, server, map[string]any{
+		"type": "open", "id": "black-box", "title": "Clickable", "body": body.String(),
+		"actions": []map[string]any{{"name": "refresh", "label": "Refresh", "key": "r"}},
+	})
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	output.Reset()
+	if _, err := server.HandleInput([]byte("\x1b[<65;10;10M")); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "lines 2-") || !strings.Contains(text, "line 02") {
+		t.Fatalf("mouse wheel down did not scroll modal: %q", text)
+	}
+	layout := newModalLayout(renderer.Snapshot())
+	actionRow, ok := modalActionRow(ModalFrame{Actions: []ModalAction{{Name: "refresh", Label: "Refresh", Key: "r"}}}, layout)
+	if !ok {
+		t.Fatal("action row should be hittable")
+	}
+	if _, err := server.HandleInput([]byte(fmt.Sprintf("\x1b[<0;%d;%dM", layout.innerLeft+1, actionRow))); err != nil {
+		t.Fatal(err)
+	}
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "action" || response.Event.ActionName != "refresh" || response.Event.Key != "r" {
+		t.Fatalf("mouse click should invoke action: %#v", response)
+	}
+}
+
 func TestModalServerScrollsSplitAndModifiedArrowSequences(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})
