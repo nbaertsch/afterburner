@@ -582,7 +582,7 @@ func runCompatibility(args []string, opts Options) (int, error) {
 
 func runUICommand(ctx context.Context, args []string, opts Options) (int, error) {
 	if len(args) == 0 {
-		return 2, fmt.Errorf("usage: afterburn ui doctor|inspect|trace|validate-manifest|render-fixture|simulate|certify|grant|revoke|policy")
+		return 2, fmt.Errorf("usage: afterburn ui doctor|catalog|inspect|trace|validate-manifest|render-fixture|simulate|certify|grant|revoke|policy")
 	}
 	subcommand := args[0]
 	args = args[1:]
@@ -601,6 +601,16 @@ func runUICommand(ctx context.Context, args []string, opts Options) (int, error)
 		}
 		io.WriteString(opts.Stdout, tooling.HumanReport(report))
 		return statusExit(report), nil
+	case "catalog":
+		if len(args) != 0 && !(len(args) == 1 && args[0] == "--json") {
+			return 2, fmt.Errorf("usage: afterburn ui catalog [--json]")
+		}
+		catalog := tooling.Catalog()
+		if len(args) == 1 {
+			return writeToolingJSON(opts.Stdout, catalog)
+		}
+		fmt.Fprint(opts.Stdout, tooling.FormatCatalog(catalog))
+		return 0, nil
 	case "inspect":
 		if len(args) != 1 && !(len(args) == 2 && args[0] == "--json") {
 			return 2, fmt.Errorf("usage: afterburn ui inspect [--json] <extension>")
@@ -931,6 +941,7 @@ Usage:
   afterburn extension <command>
   afterburn core install
   afterburn ui doctor [--json]
+  afterburn ui catalog [--json]
   afterburn ui inspect [--json] <extension>
   afterburn ui trace --extension <id> --redacted [--json]
   afterburn ui validate-manifest [--json] <path>

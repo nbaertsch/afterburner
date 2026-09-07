@@ -49,6 +49,30 @@ func TestCoreUpdateStatusWarningReportsFailedReplacement(t *testing.T) {
 	}
 }
 
+func TestUICatalogCommand(t *testing.T) {
+	var stdout bytes.Buffer
+	code, err := Run(context.Background(), []string{"ui", "catalog"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("Run returned code=%d err=%v output=%s", code, err, stdout.String())
+	}
+	for _, want := range []string{"Afterburner UI afterburner.ui revision 1", "Components", "Surfaces", "Capabilities", "ui.observability.black-box.sink"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("catalog output missing %q: %q", want, stdout.String())
+		}
+	}
+
+	stdout.Reset()
+	code, err = Run(context.Background(), []string{"ui", "catalog", "--json"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("JSON catalog returned code=%d err=%v output=%s", code, err, stdout.String())
+	}
+	for _, want := range []string{"\"components\"", "\"surfaces\"", "\"capabilities\""} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("catalog JSON missing %q: %q", want, stdout.String())
+		}
+	}
+}
+
 func TestUIValidateManifestCommand(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "extension.mjs"), []byte("export {};"), 0o600); err != nil {
