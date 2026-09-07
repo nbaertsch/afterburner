@@ -681,9 +681,21 @@ func runUICommand(ctx context.Context, args []string, opts Options) (int, error)
 		}
 		return 1, nil
 	case "render-fixture":
-		fixture, renderOpts, asJSON, err := parseRenderArgs(args)
+		fixture, renderOpts, asJSON, listOnly, err := parseRenderArgs(args)
 		if err != nil {
 			return 2, err
+		}
+		if listOnly {
+			fixtures := tooling.FixtureNames()
+			if asJSON {
+				return writeToolingJSON(opts.Stdout, struct {
+					Fixtures []string `json:"fixtures"`
+				}{fixtures})
+			}
+			for _, name := range fixtures {
+				fmt.Fprintln(opts.Stdout, name)
+			}
+			return 0, nil
 		}
 		result, err := tooling.RenderFixture(ctx, fixture, renderOpts)
 		if err != nil {
@@ -841,46 +853,49 @@ func parseTraceArgs(args []string) (string, bool, bool, error) {
 	return extensionID, redacted, asJSON, nil
 }
 
-func parseRenderArgs(args []string) (string, tooling.RenderOptions, bool, error) {
+func parseRenderArgs(args []string) (string, tooling.RenderOptions, bool, bool, error) {
 	renderOpts := tooling.RenderOptions{Width: 96, Height: 40, ColorMode: render.ColorModeMono, Plain: true, Unicode: false}
 	asJSON := false
+	listOnly := false
 	var fixture string
-	usage := "usage: afterburn ui render-fixture [--json] [--width <columns>] [--height <rows>] [--theme <id>] [--color mono|16|256|truecolor|high-contrast] [--unicode] <fixture>"
+	usage := "usage: afterburn ui render-fixture [--json] [--list] [--width <columns>] [--height <rows>] [--theme <id>] [--color mono|16|256|truecolor|high-contrast] [--unicode] <fixture>"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--json":
 			asJSON = true
+		case "--list":
+			listOnly = true
 		case "--unicode":
 			renderOpts.Unicode = true
 		case "--width":
 			if i+1 >= len(args) {
-				return "", renderOpts, false, errors.New(usage)
+				return "", renderOpts, false, false, errors.New(usage)
 			}
 			i++
 			width, err := strconv.Atoi(args[i])
 			if err != nil || width <= 0 {
-				return "", renderOpts, false, fmt.Errorf("--width must be a positive integer")
+				return "", renderOpts, false, false, fmt.Errorf("--width must be a positive integer")
 			}
 			renderOpts.Width = width
 		case "--height":
 			if i+1 >= len(args) {
-				return "", renderOpts, false, errors.New(usage)
+				return "", renderOpts, false, false, errors.New(usage)
 			}
 			i++
 			height, err := strconv.Atoi(args[i])
 			if err != nil || height <= 0 {
-				return "", renderOpts, false, fmt.Errorf("--height must be a positive integer")
+				return "", renderOpts, false, false, fmt.Errorf("--height must be a positive integer")
 			}
 			renderOpts.Height = height
 		case "--theme":
 			if i+1 >= len(args) {
-				return "", renderOpts, false, errors.New(usage)
+				return "", renderOpts, false, false, errors.New(usage)
 			}
 			i++
 			renderOpts.Theme = args[i]
 		case "--color":
 			if i+1 >= len(args) {
-				return "", renderOpts, false, errors.New(usage)
+				return "", renderOpts, false, false, errors.New(usage)
 			}
 			i++
 			switch render.ColorMode(args[i]) {
@@ -888,20 +903,23 @@ func parseRenderArgs(args []string) (string, tooling.RenderOptions, bool, error)
 				renderOpts.ColorMode = render.ColorMode(args[i])
 				renderOpts.Plain = renderOpts.ColorMode == render.ColorModeMono
 			default:
-				return "", renderOpts, false, fmt.Errorf("--color must be one of mono, 16, 256, truecolor, high-contrast")
+				return "", renderOpts, false, false, fmt.Errorf("--color must be one of mono, 16, 256, truecolor, high-contrast")
 			}
 		default:
 			if fixture == "" {
 				fixture = args[i]
 			} else {
-				return "", renderOpts, false, errors.New(usage)
+				return "", renderOpts, false, false, errors.New(usage)
 			}
 		}
 	}
-	if fixture == "" {
-		return "", renderOpts, false, errors.New(usage)
+	if fixture == "" && !listOnly {
+		return "", renderOpts, false, false, errors.New(usage)
 	}
-	return fixture, renderOpts, asJSON, nil
+	if fixture != "" && listOnly {
+		return "", renderOpts, false, false, errors.New(usage)
+	}
+	return fixture, renderOpts, asJSON, listOnly, nil
 }
 
 func parseSimulateArgs(args []string) (tooling.SimulationOptions, bool, error) {
@@ -1014,7 +1032,7 @@ Usage:
   afterburn ui inspect [--json] <extension>
   afterburn ui trace --extension <id> --redacted [--json]
   afterburn ui validate-manifest [--json] <path>
-  afterburn ui render-fixture [--json] [--width <columns>] [--height <rows>] [--theme <id>] [--color <mode>] [--unicode] <fixture>
+  afterburn ui render-fixture [--json] [--list] [--width <columns>] [--height <rows>] [--theme <id>] [--color <mode>] [--unicode] <fixture>
   afterburn ui simulate --extension <id> --surface <surface> [--json]
   afterburn ui certify --extension <id> [--surface <surface>] [--json]
   afterburn ui grant <extension> <capability> [resource]

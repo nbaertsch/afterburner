@@ -119,6 +119,24 @@ func TestUIGrantRejectsUnknownCapability(t *testing.T) {
 	}
 }
 
+func TestUIRenderFixtureCommandListsFixtures(t *testing.T) {
+	var stdout bytes.Buffer
+	code, err := Run(context.Background(), []string{"ui", "render-fixture", "--list"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("Run returned code=%d err=%v output=%s", code, err, stdout.String())
+	}
+	for _, want := range []string{"all-components", "component-gallery", "black-box-certification"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("fixture list missing %q: %q", want, stdout.String())
+		}
+	}
+	stdout.Reset()
+	code, err = Run(context.Background(), []string{"ui", "render-fixture", "--list", "--json"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 || !strings.Contains(stdout.String(), "\"fixtures\"") {
+		t.Fatalf("JSON fixture list failed code=%d err=%v output=%q", code, err, stdout.String())
+	}
+}
+
 func TestUIRenderFixtureCommand(t *testing.T) {
 	var stdout bytes.Buffer
 	code, err := Run(context.Background(), []string{"ui", "render-fixture", "black-box-certification"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
