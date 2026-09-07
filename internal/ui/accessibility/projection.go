@@ -596,6 +596,12 @@ func addAriaAliases(states map[string]string, relations map[string][]string, pro
 	if details := stringListProp(props, "ariaDetails", "aria-details", "details"); len(details) > 0 {
 		relations["details"] = details
 	}
+	if owns := stringListProp(props, "ariaOwns", "aria-owns", "owns"); len(owns) > 0 {
+		relations["owns"] = owns
+	}
+	if flowTo := stringListProp(props, "ariaFlowTo", "aria-flowto", "flowTo"); len(flowTo) > 0 {
+		relations["flowTo"] = flowTo
+	}
 }
 
 func boolProp(props map[string]any, key string, fallback bool) bool {
