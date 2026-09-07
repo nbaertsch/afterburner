@@ -525,14 +525,16 @@ func addInputStates(states map[string]string, kind string, props map[string]any)
 
 func addAriaAliases(states map[string]string, relations map[string][]string, props map[string]any) {
 	for state, keys := range map[string][]string{
-		"disabled": {"ariaDisabled", "aria-disabled"},
-		"readonly": {"ariaReadOnly", "aria-readonly"},
-		"required": {"ariaRequired", "aria-required"},
-		"selected": {"ariaSelected", "aria-selected"},
-		"checked":  {"ariaChecked", "aria-checked"},
-		"expanded": {"ariaExpanded", "aria-expanded"},
-		"pressed":  {"ariaPressed", "aria-pressed", "pressed"},
-		"busy":     {"ariaBusy", "aria-busy"},
+		"disabled":   {"ariaDisabled", "aria-disabled"},
+		"readonly":   {"ariaReadOnly", "aria-readonly"},
+		"required":   {"ariaRequired", "aria-required"},
+		"selected":   {"ariaSelected", "aria-selected"},
+		"checked":    {"ariaChecked", "aria-checked"},
+		"expanded":   {"ariaExpanded", "aria-expanded"},
+		"pressed":    {"ariaPressed", "aria-pressed", "pressed"},
+		"busy":       {"ariaBusy", "aria-busy"},
+		"grabbed":    {"ariaGrabbed", "aria-grabbed", "grabbed"},
+		"dropEffect": {"ariaDropEffect", "aria-dropeffect", "dropEffect"},
 	} {
 		if value := stringPropAny(props, keys...); value != "" {
 			states[state] = value
