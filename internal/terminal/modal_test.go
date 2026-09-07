@@ -345,6 +345,22 @@ func TestTerminalModalRendererProjectsDocumentActionControls(t *testing.T) {
 	}
 }
 
+func TestTerminalModalRendererProjectsDocumentMediaAndStatus(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 120, Rows: 34})
+	renderer.ShowModal(ModalFrame{
+		Title:    "Media Modal",
+		Status:   "Fallbacks",
+		Document: json.RawMessage(`{"root":{"kind":"dialog","children":[{"kind":"toast","props":{"message":"Saved successfully"}},{"kind":"loading","props":{"label":"Syncing state"}},{"kind":"errorBoundary","props":{"title":"Preview failed"}},{"kind":"empty","props":{"message":"Nothing selected"}},{"kind":"chart","props":{"title":"Latency chart","description":"p95 trend"}},{"kind":"image","props":{"label":"Architecture diagram","alt":"system layout"}},{"kind":"video","props":{"label":"Demo recording","caption":"modal walkthrough"}},{"kind":"terminal","props":{"label":"Build output","description":"last run"}},{"kind":"canvas","props":{"label":"Nested canvas","description":"rich-only surface"}},{"kind":"extensionOutlet","props":{"label":"Plugin slot","description":"third-party content"}}]}}`),
+	})
+	text := output.String()
+	for _, want := range []string{"⚠ Saved successfully", "⏳ Syncing state", "✕ Preview failed", "Nothing selected", "Chart: Latency chart — p95 trend", "Image: Architecture diagram — system layout", "Video: Demo recording — modal walkthrough", "Terminal: Build output — last run", "Canvas: Nested canvas — rich-only surface", "ExtensionOutlet: Plugin slot — third-party content"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("projected media/status node missing %q: %q", want, text)
+		}
+	}
+}
+
 func TestModalServerScrollsOverflowWithoutExtensionAction(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})

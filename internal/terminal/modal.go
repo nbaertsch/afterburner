@@ -1906,8 +1906,16 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 			return
 		}
 		appendModalLine(lines, label+": "+modalSparklineProp(node.Props["values"]))
-	case "alert":
-		appendModalLine(lines, "⚠ "+firstNonEmpty(modalStringProp(node.Props, "message"), modalStringProp(node.Props, "title")))
+	case "alert", "toast":
+		appendModalLine(lines, modalStatusLine(node, "⚠"))
+	case "empty":
+		appendModalLine(lines, firstNonEmpty(modalStringProp(node.Props, "message"), modalStringProp(node.Props, "label"), "No content."))
+	case "spinner", "loading":
+		appendModalLine(lines, modalStatusLine(node, "⏳"))
+	case "errorBoundary":
+		appendModalLine(lines, modalStatusLine(node, "✕"))
+	case "image", "video", "chart", "terminal", "canvas", "extensionOutlet":
+		appendModalLine(lines, modalEmbeddedSurfaceLine(node))
 	case "panel":
 		title := modalStringProp(node.Props, "title")
 		if strings.EqualFold(title, "Details") {
@@ -1984,6 +1992,17 @@ func appendModalCardLine(lines *[]string, node modalDocumentNode) {
 		cleaned[1] = modalToneGlyph(firstNonEmpty(modalStringProp(node.Props, "tone"), cleaned[1])) + " " + cleaned[1]
 	}
 	appendModalLine(lines, "  • "+strings.Join(cleaned, "  │  "))
+}
+
+func modalStatusLine(node modalDocumentNode, marker string) string {
+	message := firstNonEmpty(modalStringProp(node.Props, "message"), modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), modalStringProp(node.Props, "value"), "Status")
+	return marker + " " + printableModalText(message, false)
+}
+
+func modalEmbeddedSurfaceLine(node modalDocumentNode) string {
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "title"), node.ID, strings.Title(node.Kind))
+	summary := firstNonEmpty(modalStringProp(node.Props, "alt"), modalStringProp(node.Props, "description"), modalStringProp(node.Props, "caption"), modalStringProp(node.Props, "source"), "available in rich UI")
+	return strings.Title(node.Kind) + ": " + printableModalText(label, false) + " — " + printableModalText(summary, false)
 }
 
 func modalActionControlLine(node modalDocumentNode, fallback string) string {
