@@ -144,6 +144,12 @@ func TestRendererConsumesSDKShapedCatalogProps(t *testing.T) {
 	if err != nil || !strings.Contains(codeFrame.Plain, "fmt.Println") || !strings.Contains(codeFrame.Plain, "go") {
 		t.Fatalf("code/language props not rendered: frame=%q err=%v", codeFrame.Plain, err)
 	}
+	for _, kind := range []component.Kind{component.KindAlert, component.KindToast, component.KindLoading, component.KindSpinner, component.KindChart, component.KindCommandPalette, component.KindTerminal, component.KindImage, component.KindVideo} {
+		frame, err := NewPlainRenderer(testOptions(80, ColorModeMono, true, DefaultTheme())).RenderFrame(context.Background(), component.Tree{SurfaceID: "child-composition", Revision: 1, Root: component.Node{ID: "root", Kind: kind, Props: mustJSON(t, map[string]any{"label": string(kind), "message": string(kind)}), Children: []component.Node{nodeWithProps(t, component.KindText, map[string]any{"value": "nested child content"})}}})
+		if err != nil || !strings.Contains(frame.Plain, "nested child content") {
+			t.Fatalf("%s dropped child content: frame=%q err=%v", kind, frame.Plain, err)
+		}
+	}
 	failover := NewFailoverRenderer(failingEngine{}, NewPlainRenderer(testOptions(80, ColorModeMono, true, DefaultTheme())))
 	fallback, err := failover.RenderFrame(context.Background(), sdkContractTree(t, component.KindStatusGrid))
 	if err != nil || fallback.Renderer != RendererPlain || !strings.Contains(fallback.Plain, "ok") {

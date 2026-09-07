@@ -310,7 +310,7 @@ func (rc *renderContext) renderNode(node component.Node, width int) (string, err
 	case component.KindProgress, component.KindMeter, component.KindBar:
 		out = rc.renderProgress(props, available)
 	case component.KindSparkline, component.KindChart:
-		out = rc.renderSparkline(props, available)
+		out, err = rc.renderSparklineNode(node, available)
 	case component.KindTextInput, component.KindPasswordInput, component.KindSearchInput, component.KindNumberInput, component.KindTextArea, component.KindSelect, component.KindCheckbox, component.KindRadioGroup, component.KindToggle, component.KindSlider, component.KindDateInput, component.KindFileInput:
 		out = rc.renderInput(kind, props, available)
 	case component.KindButton:
@@ -326,17 +326,17 @@ func (rc *renderContext) renderNode(node component.Node, width int) (string, err
 	case component.KindHelp, component.KindKeybindingHint:
 		out = rc.renderHelp(props, available)
 	case component.KindAlert, component.KindToast:
-		out = rc.renderAlert(kind, props, available)
+		out, err = rc.renderAlertNode(kind, node, available)
 	case component.KindLoading, component.KindSpinner:
-		out = rc.renderLoading(props, available)
+		out, err = rc.renderLoadingNode(node, available)
 	case component.KindErrorBoundary:
 		out, err = rc.renderErrorBoundary(node, available)
 	case component.KindConfirmation, component.KindPrompt:
 		out, err = rc.renderPrompt(kind, node, available)
 	case component.KindTerminal:
-		out = rc.renderTerminal(props, available)
+		out, err = rc.renderTerminalNode(node, available)
 	case component.KindImage, component.KindVideo:
-		out = rc.styled("muted", "["+string(kind)+": "+sanitize(props.First("alt", "label", "src"))+"]")
+		out, err = rc.renderMediaNode(kind, node, available)
 	default:
 		out, err = rc.renderUnknown(node, available)
 	}
@@ -735,6 +735,28 @@ func normalizeUnitValue(value float64) float64 {
 	return clampFloat(value, 0, 1)
 }
 
+func (rc *renderContext) appendRenderedChildren(out string, node component.Node, width int) (string, error) {
+	if len(node.Children) == 0 {
+		return out, nil
+	}
+	children, err := rc.renderContainer(node, width)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(out) == "" {
+		return children, nil
+	}
+	if strings.TrimSpace(children) == "" {
+		return out, nil
+	}
+	return out + "\n" + children, nil
+}
+
+func (rc *renderContext) renderSparklineNode(node component.Node, width int) (string, error) {
+	out := rc.renderSparkline(parseProps(node.Props), width)
+	return rc.appendRenderedChildren(out, node, width)
+}
+
 func (rc *renderContext) renderSparkline(props propMap, width int) string {
 	values := props.Floats("values")
 	if len(values) == 0 {
@@ -849,6 +871,15 @@ func (rc *renderContext) renderCommandPalette(node component.Node, width int) (s
 	if strings.TrimSpace(list) != "" {
 		body += "\n" + list
 	}
+	if len(node.Children) > 0 {
+		children, err := rc.renderContainer(node, width)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(children) != "" {
+			body += "\n" + children
+		}
+	}
 	return rc.box(sanitize(props.StringDefault("title", "Command Palette")), body, width), nil
 }
 
@@ -878,14 +909,17 @@ func (rc *renderContext) renderHelp(props propMap, width int) string {
 	return wrapBlock(sanitize(props.First("text", "message", "description", "title", "label", "content", "markdown")), width, rc.opts.Unicode)
 }
 
-func (rc *renderContext) renderAlert(kind component.Kind, props propMap, width int) string {
+func (rc *renderContext) renderAlertNode(kind component.Kind, node component.Node, width int) (string, error) {
+	props := parseProps(node.Props)
 	role := props.StringDefault("severity", props.StringDefault("variant", "info"))
 	label := strings.ToUpper(string(kind))
 	msg := sanitize(props.First("message", "text", "title", "description"))
-	return fitLine(rc.styled(role, label+": "+msg), width, rc.opts.Unicode)
+	out := fitLine(rc.styled(role, label+": "+msg), width, rc.opts.Unicode)
+	return rc.appendRenderedChildren(out, node, width)
 }
 
-func (rc *renderContext) renderLoading(props propMap, width int) string {
+func (rc *renderContext) renderLoadingNode(node component.Node, width int) (string, error) {
+	props := parseProps(node.Props)
 	msg := sanitize(props.StringDefault("message", "Loading"))
 	spin := "…"
 	if !rc.plain && rc.opts.ColorMode != ColorModeMono && rc.opts.Unicode {
@@ -894,7 +928,8 @@ func (rc *renderContext) renderLoading(props propMap, width int) string {
 	} else if !rc.opts.Unicode {
 		spin = "..."
 	}
-	return fitLine(rc.styled("loading", spin+" "+msg), width, rc.opts.Unicode)
+	out := fitLine(rc.styled("loading", spin+" "+msg), width, rc.opts.Unicode)
+	return rc.appendRenderedChildren(out, node, width)
 }
 
 func (rc *renderContext) renderErrorBoundary(node component.Node, width int) (string, error) {
@@ -925,9 +960,17 @@ func (rc *renderContext) renderPrompt(kind component.Kind, node component.Node, 
 	return rc.box(strings.Title(string(kind)), body, width), nil
 }
 
-func (rc *renderContext) renderTerminal(props propMap, width int) string {
+func (rc *renderContext) renderTerminalNode(node component.Node, width int) (string, error) {
+	props := parseProps(node.Props)
 	text := sanitize(props.First("repaint", "screen", "text", "value", "content", "title", "alt"))
-	return fitBlock(text, width, rc.opts.Height, rc.opts.Unicode)
+	out := fitBlock(text, width, rc.opts.Height, rc.opts.Unicode)
+	return rc.appendRenderedChildren(out, node, width)
+}
+
+func (rc *renderContext) renderMediaNode(kind component.Kind, node component.Node, width int) (string, error) {
+	props := parseProps(node.Props)
+	out := rc.styled("muted", "["+string(kind)+": "+sanitize(props.First("alt", "label", "src"))+"]")
+	return rc.appendRenderedChildren(out, node, width)
 }
 
 func (rc *renderContext) renderUnknown(node component.Node, width int) (string, error) {
