@@ -479,7 +479,21 @@ func addRangeStates(states map[string]string, kind string, props map[string]any)
 }
 
 func addAriaAliases(states map[string]string, relations map[string][]string, props map[string]any) {
-	if invalid := stringProp(props, "ariaInvalid"); invalid != "" {
+	for state, keys := range map[string][]string{
+		"disabled": {"ariaDisabled", "aria-disabled"},
+		"readonly": {"ariaReadOnly", "aria-readonly"},
+		"required": {"ariaRequired", "aria-required"},
+		"selected": {"ariaSelected", "aria-selected"},
+		"checked":  {"ariaChecked", "aria-checked"},
+		"expanded": {"ariaExpanded", "aria-expanded"},
+		"pressed":  {"ariaPressed", "aria-pressed", "pressed"},
+		"busy":     {"ariaBusy", "aria-busy"},
+	} {
+		if value := stringPropAny(props, keys...); value != "" {
+			states[state] = value
+		}
+	}
+	if invalid := stringPropAny(props, "ariaInvalid", "aria-invalid"); invalid != "" {
 		states["invalid"] = invalid
 	}
 	if current := stringProp(props, "ariaCurrent"); current != "" {
