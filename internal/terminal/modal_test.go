@@ -361,6 +361,22 @@ func TestTerminalModalRendererProjectsDocumentMediaAndStatus(t *testing.T) {
 	}
 }
 
+func TestTerminalModalRendererProjectsDocumentChromePrimitives(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 120, Rows: 34})
+	renderer.ShowModal(ModalFrame{
+		Title:    "Chrome Modal",
+		Status:   "Document",
+		Document: json.RawMessage(`{"root":{"kind":"dialog","children":[{"kind":"section","props":{"title":"Overview"},"children":[{"kind":"badge","props":{"label":"Healthy","tone":"success"}},{"kind":"icon","props":{"icon":"◆","label":"Native surface"}}]},{"kind":"separator","props":{"label":"Next"}},{"kind":"spacer"},{"kind":"disclosure","props":{"label":"Advanced"},"children":[{"kind":"text","props":{"value":"Hidden details are visible in terminal fallback."}}]}]}}`),
+	})
+	text := output.String()
+	for _, want := range []string{"▌ Overview", "[Healthy] success", "◆ Native surface", "── Next", "▌ Advanced", "Hidden details are visible in terminal fallback."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("projected chrome primitive missing %q: %q", want, text)
+		}
+	}
+}
+
 func TestModalServerScrollsOverflowWithoutExtensionAction(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})

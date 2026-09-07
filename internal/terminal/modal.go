@@ -1878,6 +1878,17 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 	switch kind {
 	case "dialog", "application", "row", "column", "stack", "group", "toolbar", "actionBar":
 		appendModalDocumentChildren(lines, node.Children, context)
+	case "section", "box", "disclosure":
+		appendModalSection(lines, firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), strings.Title(kind)))
+		appendModalDocumentChildren(lines, node.Children, context)
+	case "separator":
+		appendModalSeparator(lines, node)
+	case "spacer":
+		appendModalLine(lines, "")
+	case "icon":
+		appendModalLine(lines, modalIconLine(node))
+	case "badge":
+		appendModalLine(lines, modalBadgeLine(node))
 	case "form":
 		appendModalSection(lines, firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), "Form"))
 		appendModalDocumentChildren(lines, node.Children, context)
@@ -1975,6 +1986,33 @@ func appendModalDocumentChildren(lines *[]string, children []modalDocumentNode, 
 	for _, child := range children {
 		appendModalDocumentNodeLines(lines, child, context)
 	}
+}
+
+func appendModalSeparator(lines *[]string, node modalDocumentNode) {
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "title"))
+	if label == "" {
+		appendModalLine(lines, "────────")
+		return
+	}
+	appendModalLine(lines, "── "+label+" "+strings.Repeat("─", 6))
+}
+
+func modalIconLine(node modalDocumentNode) string {
+	icon := firstNonEmpty(modalStringProp(node.Props, "icon"), modalStringProp(node.Props, "name"), "•")
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "title"), modalStringProp(node.Props, "description"))
+	if label == "" {
+		return icon
+	}
+	return icon + " " + label
+}
+
+func modalBadgeLine(node modalDocumentNode) string {
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "text"), modalStringProp(node.Props, "value"), "Badge")
+	tone := modalStringProp(node.Props, "tone")
+	if tone == "" {
+		return "[" + label + "]"
+	}
+	return "[" + label + "] " + tone
 }
 
 func appendModalCardLine(lines *[]string, node modalDocumentNode) {
