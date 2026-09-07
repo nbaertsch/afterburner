@@ -2066,9 +2066,9 @@ func modalBadgeLine(node modalDocumentNode) string {
 	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "text"), modalStringProp(node.Props, "value"), "Badge")
 	tone := modalStringProp(node.Props, "tone")
 	if tone == "" {
-		return "[" + label + "]"
+		return "• " + label
 	}
-	return "[" + label + "] " + tone
+	return modalToneGlyph(tone) + " " + label
 }
 
 func appendModalCardLine(lines *[]string, node modalDocumentNode) {

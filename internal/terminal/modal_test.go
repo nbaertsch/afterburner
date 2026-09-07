@@ -420,7 +420,7 @@ func TestTerminalModalRendererProjectsDocumentChromePrimitives(t *testing.T) {
 		Document: json.RawMessage(`{"root":{"kind":"dialog","children":[{"kind":"section","props":{"title":"Overview"},"children":[{"kind":"badge","props":{"label":"Healthy","tone":"success"}},{"kind":"icon","props":{"icon":"◆","label":"Native surface"}}]},{"kind":"separator","props":{"label":"Next"}},{"kind":"spacer"},{"kind":"disclosure","props":{"label":"Advanced"},"children":[{"kind":"text","props":{"value":"Hidden details are visible in terminal fallback."}}]}]}}`),
 	})
 	text := output.String()
-	for _, want := range []string{"▌ Overview", "[Healthy] success", "◆ Native surface", "── Next", "▌ Advanced", "Hidden details are visible in terminal fallback."} {
+	for _, want := range []string{"▌ Overview", "✓ Healthy", "◆ Native surface", "── Next", "▌ Advanced", "Hidden details are visible in terminal fallback."} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("projected chrome primitive missing %q: %q", want, text)
 		}
