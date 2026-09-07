@@ -1194,7 +1194,7 @@ func (r *TerminalModalRenderer) ScrollModal(key string) bool {
 	if r.scrollOffset == oldOffset {
 		return false
 	}
-	body, scrollOffset := renderModalFrame(snapshot, r.activeFrame, r.scrollOffset)
+	body, scrollOffset := renderModalScrollFrame(snapshot, layout, r.activeFrame, bodyLines, r.scrollOffset, maxScroll)
 	r.scrollOffset = scrollOffset
 	_, _ = io.WriteString(r.writer, body)
 	return true
@@ -1217,6 +1217,26 @@ func renderModalFrame(snapshot TerminalSnapshot, frame ModalFrame, scrollOffset 
 	} else {
 		writeEnterpriseModalPanel(&out, layout, frame, bodyLines, scrollOffset, maxScroll, styles)
 	}
+	out.WriteString("\x1b[0m\x1b[?25h")
+	return out.String(), scrollOffset
+}
+
+func renderModalScrollFrame(snapshot TerminalSnapshot, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int) (string, int) {
+	scrollOffset = clampInt(scrollOffset, 0, maxScroll)
+	if layout.compact {
+		return renderModalFrame(snapshot, frame, scrollOffset)
+	}
+	styles := newModalStyles()
+	var out strings.Builder
+	out.Grow(maxInt(1, layout.panelWidth*(layout.headerRows+layout.separatorRows+layout.bodyRows+layout.footerRows)*2))
+	out.WriteString("\x1b[?25l\x1b[0m")
+	writeModalHeader(&out, layout, frame, bodyLines, scrollOffset, maxScroll, styles)
+	separatorRow := layout.top + 1 + layout.headerRows
+	if layout.separatorRows > 0 {
+		writeModalText(&out, separatorRow, layout.innerLeft, layout.innerWidth, styles.muted, strings.Repeat("─", layout.innerWidth))
+	}
+	writeModalBody(&out, layout, bodyLines, scrollOffset, styles)
+	writeModalFooter(&out, layout, frame, maxScroll, styles)
 	out.WriteString("\x1b[0m\x1b[?25h")
 	return out.String(), scrollOffset
 }
