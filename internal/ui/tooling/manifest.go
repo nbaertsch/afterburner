@@ -20,6 +20,7 @@ import (
 )
 
 var manifestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+var uiStableIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._:-]{0,127}$`)
 
 type UIDeclaration struct {
 	Protocol      string                 `json:"protocol"`
@@ -139,6 +140,8 @@ func validateUIDeclaration(raw json.RawMessage) (*UIDeclaration, []string, []str
 	for _, s := range ui.Surfaces {
 		if strings.TrimSpace(s.ID) == "" {
 			errs = append(errs, "ui.surfaces[].id is required")
+		} else if !uiStableIDPattern.MatchString(s.ID) {
+			errs = append(errs, fmt.Sprintf("ui surface id %q must be a stable lowercase id", s.ID))
 		}
 		if seenSurfaces[s.ID] {
 			errs = append(errs, fmt.Sprintf("duplicate ui surface %q", s.ID))

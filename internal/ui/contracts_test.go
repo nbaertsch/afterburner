@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -89,6 +90,28 @@ func TestComponentSchemaKindsMatchPublicCatalog(t *testing.T) {
 	}
 	if !reflect.DeepEqual(schemaKinds, catalogKinds) {
 		t.Fatalf("schema component kinds differ from public catalog\n--- schema\n%v\n--- catalog\n%v", schemaKinds, catalogKinds)
+	}
+}
+
+func TestUISchemasRejectInvalidSurfaceID(t *testing.T) {
+	extensionSchema := readJSON(t, filepath.Join("..", "..", "schemas", "extension-ui-v1.schema.json"))
+	extensionDocument := map[string]any{
+		"protocol": "afterburner.ui",
+		"revision": float64(1),
+		"surfaces": []any{map[string]any{"id": "Panel Main", "kind": "panel"}},
+	}
+	if err := (schemaValidator{root: extensionSchema, allowExternalRefs: true}).validate(extensionSchema, extensionDocument, "fixture"); err == nil {
+		t.Fatal("extension UI schema accepted an invalid surface id")
+	}
+
+	componentSchema := readJSON(t, filepath.Join("..", "..", "schemas", "ui-component-v1.schema.json"))
+	componentDocument := map[string]any{
+		"root":      map[string]any{"id": "app-root", "kind": "application"},
+		"revision":  float64(1),
+		"surfaceId": "Panel Main",
+	}
+	if err := (schemaValidator{root: componentSchema}).validate(componentSchema, componentDocument, "fixture"); err == nil {
+		t.Fatal("component schema accepted an invalid surfaceId")
 	}
 }
 
@@ -409,6 +432,16 @@ func (v schemaValidator) validate(schema any, document any, path string) error {
 		value, _ := document.(string)
 		if len(value) < int(minLength) {
 			return fmt.Errorf("%s length %d, want at least %d", path, len(value), int(minLength))
+		}
+	}
+	if pattern, ok := schemaMap["pattern"].(string); ok {
+		value, _ := document.(string)
+		matched, err := regexp.MatchString(pattern, value)
+		if err != nil {
+			return fmt.Errorf("invalid schema pattern %q at %s: %v", pattern, path, err)
+		}
+		if !matched {
+			return fmt.Errorf("%s = %#v, does not match pattern %q", path, document, pattern)
 		}
 	}
 	if minimum, ok := schemaMap["minimum"].(float64); ok {
