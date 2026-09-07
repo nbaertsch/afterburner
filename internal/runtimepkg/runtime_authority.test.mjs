@@ -143,6 +143,21 @@ test("global runtime addon does not expose forgeable privileged authority", asyn
   assert.equal(typeof addon.diagnostics.getRuntimeObserverDiagnostics, "function");
 });
 
+test("runtimeExtensionApi exposes composable UI component catalog", async () => {
+  const context = await loadRuntimeAuthority();
+  const api = context.runtimeExtensionApi("C:\\extensions\\sample", { extensionId: "sample", manifest: extensionManifest("sample", ["modal-canvas"]) });
+  assert.ok(Array.isArray(api.ui.componentCatalog));
+  assert.deepEqual(api.ui.componentCatalog.map(entry => entry.kind), api.ui.componentKinds);
+  for (const entry of api.ui.componentCatalog) {
+    assert.equal(entry.stability, "stable", `stability for ${entry.kind}`);
+    assert.equal(typeof entry.description, "string", `description for ${entry.kind}`);
+    assert.equal(typeof api.ui.components[entry.kind], "function", `components.${entry.kind}`);
+    assert.equal(typeof api.ui[entry.kind], "function", `ui.${entry.kind}`);
+  }
+  assert.equal(api.ui.section({ title: "Section" }, [], { id: "section-fixture" }).kind, "section");
+  assert.equal(api.ui.prompt({ title: "Prompt" }, [], { id: "prompt-fixture" }).kind, "prompt");
+});
+
 test("runtimeExtensionApi binds modal ownership and blocks forged black-box owner", async () => {
   const context = await loadRuntimeAuthority();
   const api = context.runtimeExtensionApi("C:\\extensions\\attacker", {
