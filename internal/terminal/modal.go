@@ -1880,6 +1880,9 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 	switch kind {
 	case "dialog", "application", "row", "column", "stack", "group", "toolbar", "actionBar":
 		appendModalDocumentChildren(lines, node.Children, context)
+	case "form":
+		appendModalSection(lines, firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), "Form"))
+		appendModalDocumentChildren(lines, node.Children, context)
 	case "statusGrid", "grid":
 		label := modalStringProp(node.Props, "label")
 		if strings.Contains(strings.ToLower(label), "status cards") {
@@ -1889,7 +1892,7 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 		appendModalDocumentChildren(lines, node.Children, context)
 	case "card":
 		appendModalCardLine(lines, node)
-	case "progress":
+	case "progress", "meter", "bar", "slider":
 		label := firstNonEmpty(modalStringProp(node.Props, "label"), "Progress")
 		if modalHasLinePrefix(*lines, label+":") {
 			return
@@ -1922,6 +1925,18 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 		appendModalLine(lines, modalStringProp(node.Props, "code"))
 	case "text":
 		appendModalLine(lines, modalStringProp(node.Props, "value"))
+	case "keyValue", "detail":
+		appendModalFieldLine(lines, firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "key")), modalStringProp(node.Props, "value"))
+	case "textInput", "searchInput", "numberInput", "dateInput", "fileInput", "passwordInput":
+		appendModalInputLine(lines, node)
+	case "textArea":
+		appendModalTextAreaLines(lines, node)
+	case "select", "radioGroup":
+		appendModalFieldLine(lines, firstNonEmpty(modalStringProp(node.Props, "label"), "Selection"), modalChoiceText(node.Props))
+	case "checkbox":
+		appendModalLine(lines, modalCheckboxLine(node, "☐", "☑"))
+	case "toggle":
+		appendModalLine(lines, modalCheckboxLine(node, "○", "●"))
 	case "button":
 		// Buttons are already summarized from frame actions in the modal header/body.
 	default:
@@ -1953,6 +1968,66 @@ func appendModalCardLine(lines *[]string, node modalDocumentNode) {
 		cleaned[1] = modalToneGlyph(firstNonEmpty(modalStringProp(node.Props, "tone"), cleaned[1])) + " " + cleaned[1]
 	}
 	appendModalLine(lines, "  • "+strings.Join(cleaned, "  │  "))
+}
+
+func appendModalInputLine(lines *[]string, node modalDocumentNode) {
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "name"), modalStringProp(node.Props, "id"), "Input")
+	value := modalStringProp(node.Props, "value")
+	if node.Kind == "passwordInput" && value != "" {
+		value = strings.Repeat("•", minInt(8, utf8.RuneCountInString(value)))
+	}
+	if value == "" {
+		value = firstNonEmpty(modalStringProp(node.Props, "placeholder"), "empty")
+		value = "‹" + value + "›"
+	}
+	appendModalFieldLine(lines, label, value)
+}
+
+func appendModalTextAreaLines(lines *[]string, node modalDocumentNode) {
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "name"), "Text")
+	appendModalLine(lines, label+":")
+	for _, line := range wrapModalText(modalStringProp(node.Props, "value"), 72) {
+		appendModalLine(lines, "  "+line)
+	}
+}
+
+func appendModalFieldLine(lines *[]string, label, value string) {
+	label = strings.TrimSpace(printableModalText(label, false))
+	value = strings.TrimSpace(printableModalText(value, false))
+	if label == "" && value == "" {
+		return
+	}
+	if label == "" {
+		appendModalLine(lines, value)
+		return
+	}
+	if value == "" {
+		value = "empty"
+	}
+	appendModalLine(lines, label+": "+value)
+}
+
+func modalCheckboxLine(node modalDocumentNode, off, on string) string {
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "name"), node.ID, "Option")
+	state := off
+	if modalBoolProp(node.Props, "checked") || modalBoolProp(node.Props, "selected") || modalBoolProp(node.Props, "value") {
+		state = on
+	}
+	return state + " " + label
+}
+
+func modalChoiceText(props map[string]any) string {
+	selected := firstNonEmpty(modalStringProp(props, "value"), modalStringProp(props, "selected"), modalStringProp(props, "selectedValue"))
+	options, _ := props["options"].([]any)
+	for _, option := range options {
+		entry, _ := option.(map[string]any)
+		value := modalStringProp(entry, "value")
+		label := firstNonEmpty(modalStringProp(entry, "label"), value)
+		if modalBoolProp(entry, "selected") || (selected != "" && value == selected) || (selected != "" && label == selected) {
+			return firstNonEmpty(label, selected)
+		}
+	}
+	return firstNonEmpty(selected, modalStringProp(props, "placeholder"), "none")
 }
 
 func appendModalTableLines(lines *[]string, node modalDocumentNode, context string) {
@@ -2201,6 +2276,22 @@ func modalStringProp(props map[string]any, key string) string {
 		return ""
 	}
 	return fmt.Sprint(value)
+}
+
+func modalBoolProp(props map[string]any, key string) bool {
+	if props == nil {
+		return false
+	}
+	switch value := props[key].(type) {
+	case bool:
+		return value
+	case string:
+		return strings.EqualFold(value, "true") || strings.EqualFold(value, "yes") || value == "1"
+	case float64:
+		return value != 0
+	default:
+		return false
+	}
 }
 
 func modalSparklineProp(value any) string {

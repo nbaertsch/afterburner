@@ -280,6 +280,25 @@ func TestTerminalModalRendererProjectsDocumentBody(t *testing.T) {
 	}
 }
 
+func TestTerminalModalRendererProjectsDocumentFormControls(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 120, Rows: 34})
+	renderer.ShowModal(ModalFrame{
+		Title:    "Form Modal",
+		Status:   "Inputs",
+		Document: json.RawMessage(`{"root":{"kind":"dialog","children":[{"kind":"form","props":{"title":"Deployment settings"},"children":[{"kind":"textInput","props":{"label":"Name","value":"production"}},{"kind":"passwordInput","props":{"label":"Token","value":"secret-value"}},{"kind":"searchInput","props":{"label":"Search","placeholder":"filter services"}},{"kind":"textArea","props":{"label":"Notes","value":"first line\nsecond line"}},{"kind":"select","props":{"label":"Region","value":"west","options":[{"value":"east","label":"US East"},{"value":"west","label":"US West"}]}},{"kind":"checkbox","props":{"label":"Enable audit","checked":true}},{"kind":"toggle","props":{"label":"Dry run","value":false}},{"kind":"slider","props":{"label":"Rollout","value":35,"status":"35%"}}]}]}}`),
+	})
+	text := output.String()
+	for _, want := range []string{"▌ Deployment settings", "Name: production", "Token: ••••••••", "Search: ‹filter services›", "Notes:", "first line", "second line", "Region: US West", "☑ Enable audit", "○ Dry run", "Rollout: ███░░░░░░░ 35%"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("projected form control missing %q: %q", want, text)
+		}
+	}
+	if strings.Contains(text, "secret-value") {
+		t.Fatalf("password input leaked raw value: %q", text)
+	}
+}
+
 func TestModalServerScrollsOverflowWithoutExtensionAction(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})
