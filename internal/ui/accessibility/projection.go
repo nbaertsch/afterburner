@@ -132,6 +132,7 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 	}
 	addAriaAliases(node.States, node.Relations, source.Props)
 	addInputStates(node.States, source.Kind, source.Props)
+	addCollectionStates(node.States, source.Kind, source.Props)
 	if isDialogKind(source.Kind) {
 		node.States["modal"] = fmt.Sprint(modalProp(source.Props))
 	}
@@ -520,6 +521,23 @@ func addInputStates(states map[string]string, kind string, props map[string]any)
 	}
 	if kind == "textArea" {
 		states["multiline"] = "true"
+	}
+}
+
+func addCollectionStates(states map[string]string, kind string, props map[string]any) {
+	switch kind {
+	case "list", "table", "tree", "timeline", "log", "tabs", "pagination", "select", "radioGroup", "contextMenu", "commandPalette":
+	default:
+		return
+	}
+	for state, keys := range map[string][]string{
+		"activeIndex":   {"activeIndex", "highlightedIndex"},
+		"selectedIndex": {"selectedIndex", "selected"},
+		"itemCount":     {"itemCount", "count", "total"},
+	} {
+		if value := stringPropAny(props, keys...); value != "" {
+			states[state] = value
+		}
 	}
 }
 

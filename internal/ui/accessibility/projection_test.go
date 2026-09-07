@@ -65,6 +65,9 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 	if byID["sdk-pagination"].Role != RoleNavigation || !hasShortcut(byID["sdk-pagination"].KeyboardActions, "Arrow keys", "navigate") {
 		t.Fatalf("pagination should project as keyboard navigation: %#v", byID["sdk-pagination"])
 	}
+	if byID["sdk-list"].States["activeIndex"] != "0" || byID["sdk-list"].States["selectedIndex"] != "1" || byID["sdk-list"].States["itemCount"] != "2" {
+		t.Fatalf("collection controls should expose selection/count state: %#v", byID["sdk-list"])
+	}
 	if byID["sdk-breadcrumb"].Role != RoleNavigation {
 		t.Fatalf("breadcrumb should project as a navigation landmark: %#v", byID["sdk-breadcrumb"])
 	}
@@ -253,7 +256,7 @@ func sdkProps(kind string) map[string]any {
 	case "slider":
 		return map[string]any{"label": kind + " control", "ariaValueNow": 0.5, "ariaValueMin": 0, "ariaValueMax": 1, "ariaValueText": "50 percent"}
 	case "list", "tree", "timeline", "log", "contextMenu", "tabs", "breadcrumb":
-		return map[string]any{"items": []string{"alpha", "beta"}, "selected": "alpha"}
+		return map[string]any{"items": []string{"alpha", "beta"}, "selected": "alpha", "selectedIndex": 1, "activeIndex": 0, "itemCount": 2}
 	case "table", "grid", "statusGrid":
 		return map[string]any{"columns": []string{"name", "status"}, "rows": [][]string{{"sdk", "ok"}}}
 	case "progress", "meter", "bar", "sparkline", "chart":
