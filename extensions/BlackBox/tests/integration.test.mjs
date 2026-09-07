@@ -77,7 +77,7 @@ test("modal activation requests from other sessions are discarded on runtime sta
     assert.deepEqual(await service.consumeModalOpenRequests(), []);
 });
 
-test("stale modal activation requests are discarded on runtime startup", async t => {
+test("preexisting modal activation requests are discarded on runtime startup", async t => {
     const home = await workDirectory("modal-activation-stale");
     t.after(() => cleanup(home));
     const configPath = join(home, "config", "black-box.json");
@@ -87,14 +87,16 @@ test("stale modal activation requests are discarded on runtime startup", async t
     await mkdir(stateDirectory, { recursive: true });
     await writeFile(join(stateDirectory, "modal-activation.jsonl"), JSON.stringify({
         schemaVersion: 1,
-        requestId: "stale-request",
+        requestId: "preexisting-request",
+        sessionId: "same-session",
         surfaceId: "afterburner-black-box-live",
-        createdAt: new Date(Date.now() - 60_000).toISOString(),
+        createdAt: new Date().toISOString(),
         input: {}
     }) + "\n", "utf8");
+    await delay(5);
     const service = await startBlackBoxService({
         mode: "runtime",
-        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, SESSION_ID: "same-session" }
     });
     t.after(() => service.close());
     assert.deepEqual(await service.consumeModalOpenRequests(), []);

@@ -99,6 +99,7 @@ export async function startBlackBoxService(options = {}) {
     const root = options.root ?? resolveDataRoot(env);
     const mode = options.mode ?? "session";
     const processId = options.processId ?? process.pid;
+    const serviceStartedAt = Date.now();
     const runId = options.runId ?? randomBytes(6).toString("hex");
     const configuredSessionId = env.SESSION_ID ?? env.COPILOT_AGENT_SESSION_ID;
     const activationSessionId = configuredSessionId ?? `process:${processId}`;
@@ -330,7 +331,7 @@ export async function startBlackBoxService(options = {}) {
                 if (request?.schemaVersion !== 1 || typeof request.surfaceId !== "string" || typeof request.requestId !== "string") return false;
                 if (typeof request.sessionId === "string" && request.sessionId !== activationSessionId) return false;
                 const createdAt = Date.parse(request.createdAt ?? "");
-                return Number.isFinite(createdAt) && now - createdAt <= MODAL_ACTIVATION_MAX_AGE_MS;
+                return Number.isFinite(createdAt) && createdAt >= serviceStartedAt && now - createdAt <= MODAL_ACTIVATION_MAX_AGE_MS;
             });
         },
         async completeModalOpenRequest(request, result = {}) {
