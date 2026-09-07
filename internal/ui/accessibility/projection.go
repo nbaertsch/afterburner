@@ -522,6 +522,9 @@ func addAriaAliases(states map[string]string, relations map[string][]string, pro
 	if size := stringPropAny(props, "ariaSetSize", "aria-setsize", "setSize"); size != "" {
 		states["setSize"] = size
 	}
+	if level := stringPropAny(props, "ariaLevel", "aria-level", "level"); level != "" {
+		states["level"] = level
+	}
 	if atomic := stringPropAny(props, "ariaAtomic", "aria-atomic", "atomic"); atomic != "" {
 		states["atomic"] = atomic
 	}
