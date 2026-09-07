@@ -64,9 +64,7 @@
           "kind": "bar",
           "props": {
             "label": "bar",
-            "max": 100,
-            "min": 0,
-            "value": 65
+            "value": 0.65
           },
           "accessibility": {
             "name": "bar"
@@ -612,9 +610,7 @@
           "kind": "meter",
           "props": {
             "label": "meter",
-            "max": 100,
-            "min": 0,
-            "value": 65
+            "value": 0.65
           },
           "accessibility": {
             "name": "meter"
@@ -701,9 +697,7 @@
           "kind": "progress",
           "props": {
             "label": "progress",
-            "max": 100,
-            "min": 0,
-            "value": 65
+            "value": 0.65
           },
           "accessibility": {
             "name": "progress"
@@ -963,31 +957,14 @@
           "kind": "statusGrid",
           "props": {
             "columns": [
-              {
-                "id": "name",
-                "title": "Name"
-              },
-              {
-                "id": "status",
-                "title": "Status"
-              }
+              "name",
+              "status"
             ],
             "rows": [
-              {
-                "id": "row-statusgrid",
-                "cells": {
-                  "name": "statusGrid",
-                  "status": {
-                    "display": {
-                      "kind": "badge",
-                      "props": {
-                        "label": "ok"
-                      }
-                    },
-                    "plain": "ok"
-                  }
-                }
-              }
+              [
+                "statusGrid",
+                "ok"
+              ]
             ]
           },
           "accessibility": {
@@ -1018,31 +995,14 @@
           "kind": "table",
           "props": {
             "columns": [
-              {
-                "id": "name",
-                "title": "Name"
-              },
-              {
-                "id": "status",
-                "title": "Status"
-              }
+              "name",
+              "status"
             ],
             "rows": [
-              {
-                "id": "row-table",
-                "cells": {
-                  "name": "table",
-                  "status": {
-                    "display": {
-                      "kind": "badge",
-                      "props": {
-                        "label": "ok"
-                      }
-                    },
-                    "plain": "ok"
-                  }
-                }
-              }
+              [
+                "table",
+                "ok"
+              ]
             ]
           },
           "accessibility": {

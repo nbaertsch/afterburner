@@ -166,6 +166,28 @@ func TestAllComponentsFixtureCoversPublicCatalog(t *testing.T) {
 	}
 }
 
+func TestGeneratedAllComponentsFixtureIsCurrent(t *testing.T) {
+	actual, err := json.MarshalIndent(AllComponentsFixture(), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual = append(actual, '\n')
+	path := filepath.Join("testdata", "fixtures", "all-components.generated.json")
+	expected, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("UPDATE_UI_FIXTURES") == "1" {
+		if err := os.WriteFile(path, actual, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if strings.ReplaceAll(string(expected), "\r\n", "\n") != string(actual) {
+		t.Fatalf("%s is stale; run UPDATE_UI_FIXTURES=1 go test ./internal/ui/tooling -run TestGeneratedAllComponentsFixtureIsCurrent", path)
+	}
+}
+
 func TestFixtureFilesAreValidAndAbuseEnvelopeFails(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join("testdata", "fixtures", "*.json"))
 	if err != nil {
