@@ -113,6 +113,10 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 		if a11y.SetSize > 0 {
 			node.States["setSize"] = fmt.Sprint(a11y.SetSize)
 		}
+		addBoolState(node.States, "atomic", a11y.Atomic)
+		if len(a11y.Relevant) > 0 {
+			node.States["relevant"] = strings.Join(a11y.Relevant, " ")
+		}
 		node.KeyboardActions = append(node.KeyboardActions, a11y.KeyboardShortcut...)
 	}
 	for _, key := range []string{"disabled", "required", "readonly", "selected", "checked", "expanded", "invalid"} {
@@ -488,6 +492,12 @@ func addAriaAliases(states map[string]string, relations map[string][]string, pro
 	}
 	if size := stringPropAny(props, "ariaSetSize", "aria-setsize", "setSize"); size != "" {
 		states["setSize"] = size
+	}
+	if atomic := stringPropAny(props, "ariaAtomic", "aria-atomic", "atomic"); atomic != "" {
+		states["atomic"] = atomic
+	}
+	if relevant := stringListProp(props, "ariaRelevant", "aria-relevant", "relevant"); len(relevant) > 0 {
+		states["relevant"] = strings.Join(relevant, " ")
 	}
 	if labelledBy := stringListProp(props, "ariaLabelledBy", "aria-labelledby", "labelledBy"); len(labelledBy) > 0 {
 		relations["labelledBy"] = labelledBy
