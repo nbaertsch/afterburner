@@ -114,6 +114,9 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 	if isDialogKind(source.Kind) {
 		node.States["modal"] = fmt.Sprint(boolProp(source.Props, "modal", false))
 	}
+	if source.Kind == "loading" || source.Kind == "spinner" {
+		node.States["busy"] = "true"
+	}
 	node.Focusable = isFocusableKind(source.Kind) && node.States["disabled"] != "true"
 	if opts.KeyboardOnly || node.Focusable {
 		node.KeyboardActions = mergeShortcuts(node.KeyboardActions, keyboardForKind(source.Kind, source.Props)...)

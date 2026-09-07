@@ -83,8 +83,8 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 	if byID["sdk-keybindinghint"].Role != RoleTooltip {
 		t.Fatalf("keybinding hints should project as tooltips: %#v", byID["sdk-keybindinghint"])
 	}
-	if byID["sdk-loading"].Live != LivePolite || byID["sdk-spinner"].Live != LivePolite {
-		t.Fatalf("loading indicators should be polite live regions: loading=%#v spinner=%#v", byID["sdk-loading"], byID["sdk-spinner"])
+	if byID["sdk-loading"].Live != LivePolite || byID["sdk-spinner"].Live != LivePolite || byID["sdk-loading"].States["busy"] != "true" || byID["sdk-spinner"].States["busy"] != "true" {
+		t.Fatalf("loading indicators should be polite busy live regions: loading=%#v spinner=%#v", byID["sdk-loading"], byID["sdk-spinner"])
 	}
 	modal := byID["sdk-dialog-modal"]
 	if modal.States["modal"] != "true" || !hasShortcut(modal.KeyboardActions, "Tab", "cycle focus") {
