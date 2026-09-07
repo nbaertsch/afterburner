@@ -200,12 +200,12 @@ func validateRelativeEntrypoint(root, entrypoint string) error {
 }
 
 func validSurfaceKind(kind string) bool {
-	switch surface.Kind(kind) {
-	case surface.KindTerminal, surface.KindModal, surface.KindPanel, surface.KindInline, surface.KindStatusLine, surface.KindCommandPalette, surface.KindOverlay:
-		return true
-	default:
-		return false
+	for _, entry := range surface.PublicCatalog() {
+		if string(entry.Kind) == kind {
+			return true
+		}
 	}
+	return false
 }
 
 func validUICapability(value string) bool {

@@ -62,6 +62,22 @@ func TestValidateManifestRejectsBadUIRevision(t *testing.T) {
 	}
 }
 
+func TestValidateManifestRejectsUnsupportedUISurface(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "extension.mjs"), []byte("export {};"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "afterburner.json")
+	manifest := `{"schemaVersion":1,"id":"bad-surface","displayName":"Bad Surface","visibility":"private","requires":{"afterburner":"1"},"runtime":{"execution":"in-process","entrypoint":"extension.mjs"},"ui":{"protocol":"afterburner.ui","revision":1,"surfaces":[{"id":"main","kind":"sideQuest"}]}}`
+	if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := ValidateManifest(path)
+	if result.Valid || !strings.Contains(strings.Join(result.Errors, "\n"), "unsupported ui surface kind \"sideQuest\"") {
+		t.Fatalf("expected unsupported surface error, got %#v", result)
+	}
+}
+
 func TestValidateManifestRejectsUnsupportedUIComponent(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "extension.mjs"), []byte("export {};"), 0o600); err != nil {
