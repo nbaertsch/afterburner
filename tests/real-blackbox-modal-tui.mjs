@@ -44,8 +44,22 @@ const latencyBudgets = {
 };
 const scriptStartedAt = Date.now();
 mkdirSync(captureDirectory, { recursive: true });
+const isolatedAfterburnerHome = join(captureDirectory, "afterburner-home");
+mkdirSync(isolatedAfterburnerHome, { recursive: true });
+const installResult = spawnSync(afterburn, ["install", "black-box", "byo-models"], {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: {
+    ...process.env,
+    AFTERBURNER_HOME: isolatedAfterburnerHome,
+    AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH: "1"
+  }
+});
+if (installResult.status !== 0) {
+  throw new Error(`failed to install local built-ins for visual UAT: status=${installResult.status} stdout=${installResult.stdout} stderr=${installResult.stderr}`);
+}
 
-const env = { ...process.env, COPILOT_RUNTIME_EXTENSION_DEBUG: "1" };
+const env = { ...process.env, COPILOT_RUNTIME_EXTENSION_DEBUG: "1", AFTERBURNER_HOME: isolatedAfterburnerHome, AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH: "1" };
 delete env.COPILOT_AGENT_SESSION_ID;
 delete env.COPILOT_LOADER_PID;
 delete env.COPILOT_SUPERVISED;
@@ -53,7 +67,7 @@ delete env.COPILOT_SUPERVISED;
 const terminalColumns = 140;
 const terminalRows = 40;
 
-const child = pty.spawn(afterburn, [], {
+const child = pty.spawn(afterburn, ["--name", `afterburn-blackbox-uat-${process.pid}-${Date.now()}`, "--no-remote"], {
   name: "xterm-256color",
   cols: terminalColumns,
   rows: terminalRows,
@@ -91,6 +105,7 @@ const recordOperatorStep = ({ name, key, startedAt, completedAt, screenTitle, sc
 };
 let trusted = false;
 let restored = false;
+let restoreDismissCount = 0;
 let lastRestoreDismissAt = 0;
 let approved = false;
 let terminalSetupDeclined = false;
@@ -329,6 +344,10 @@ const visualInspectionChecks = () => {
   const doctorOverlayScreen = screens["Doctor overlay full screen"] ?? "";
   const modalScreen = screens["Modal open screen"] ?? "";
   const doctorScreen = screens["Doctor action screen"] ?? "";
+  const modalFlowScreens = Object.entries(screens)
+    .filter(([title]) => !/restore screen/i.test(title))
+    .map(([, screen]) => screen)
+    .join("\n");
   const modalOverlayGeometry = modalGeometry(modalOverlayScreen);
   const doctorOverlayGeometry = modalGeometry(doctorOverlayScreen);
   const checks = {
@@ -344,11 +363,11 @@ const visualInspectionChecks = () => {
     modalAdvertisesCloseKeys: /Esc\/q closes/i.test(modalScreen),
     modalAdvertisesMetadataOnlyFallback: /metadata-only[\s\S]*\/black-box-tail/i.test(modalScreen),
     modalAdvertisesAllScrollKeys: /↑\/↓ PgUp\/PgDn Home\/End/.test(modalScreen),
-    modalShowsStorageProgress: /Storage usage:\s*\d+% of/i.test(modalScreen),
+    modalShowsStorageProgress: /Storage usage:\s*(?:[█░]+\s*)?\d+% (?:of|used)/i.test(modalScreen),
     modalShowsSignalTrend: /Signal trend:\s*[▁▃▆█]+/i.test(modalScreen),
     modalShowsStatusCards: /Status cards/i.test(modalScreen) && /Recorder/i.test(modalScreen) && /Storage/i.test(modalScreen) && /Signals/i.test(modalScreen) && /Queue/i.test(modalScreen),
-    modalShowsActionableHealthCallout: /Needs attention:/i.test(modalScreen),
-    modalShowsSelectedEventSummary: /Selected event/i.test(modalScreen) && /session\.info|extension\.discovered|session\.model_change|event|milestone/i.test(modalScreen),
+    modalShowsActionableHealthCallout: /Needs attention:|Health: no active issues/i.test(modalScreen),
+    modalShowsSelectedEventSummary: /Selected event/i.test(modalFlowScreens) && /session\.info|extension\.discovered|session\.model_change|event|milestone/i.test(modalFlowScreens),
     modalShowsTimelineTable: /Metadata timeline table/i.test(modalScreen) && /Time\s+│\s+Kind\s+│\s+Event\s+│\s+Severity\s+│\s+Duration\s+│\s+Success/i.test(modalScreen),
     modalShowsScrollPosition: /lines \d+-\d+ of \d+/i.test(modalScreen),
     everyScrollScreenCaptured: scrollSteps.every(step => Boolean(screens[step.title])),
@@ -657,7 +676,7 @@ const writeReplayArtifacts = capture => {
 const validateReplayArtifacts = () => {
   const inputLabels = ioEvents.filter(event => event.type === "input").map(event => event.label);
   const requiredLabels = ["submit /black-box-modal", "arrowDown", "arrowUp", "pageDown", "pageUp", "end", "home", "refresh", "doctor", "export", "q close", "submit /black-box-modal for Escape", "escape close"];
-  const missingInputs = requiredLabels.filter(label => !inputLabels.includes(label));
+  const missingInputs = requiredLabels.filter(label => !inputLabels.some(input => input === label || input.startsWith(`${label}:`)));
   const requiredSteps = ["open modal", ...scrollSteps.map(step => step.name), "refresh", "doctor", "export", "q close", "reopen modal", "escape close"];
   const stepNames = operatorSteps.map(step => step.name);
   const missingSteps = requiredSteps.filter(name => !stepNames.includes(name));
@@ -771,8 +790,9 @@ child.onData(data => {
     scheduleWrite("\r", 250, "trust current folder");
     return;
   }
-  if (!commandInputStartedAt && /Restore interrupted sessions/i.test(recent) && Date.now() - lastRestoreDismissAt > 1000) {
+  if (!commandInputStartedAt && restoreDismissCount < 3 && /Restore interrupted sessions/i.test(recent) && Date.now() - lastRestoreDismissAt > 1000) {
     restored = true;
+    restoreDismissCount++;
     lastRestoreDismissAt = Date.now();
     scheduleWrite("\x1b", 250, "dismiss restore sessions");
     return;

@@ -349,6 +349,20 @@ func TestTerminalModalRendererProjectsDocumentCollectionsAndNavigation(t *testin
 	}
 }
 
+func TestTerminalModalRendererProjectsCompactDocumentActionBar(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 120, Rows: 34})
+	renderer.ShowModal(ModalFrame{
+		Title:    "Action Bar",
+		Status:   "Compact",
+		Document: json.RawMessage(`{"root":{"kind":"dialog","children":[{"kind":"actionBar","props":{"label":"Primary actions"},"children":[{"kind":"button","props":{"label":"Refresh","keybinding":"r"}},{"kind":"button","props":{"label":"Doctor","keybinding":"d"}},{"kind":"button","props":{"label":"Close","keybinding":"q"}}]}]}}`),
+	})
+	text := output.String()
+	if !strings.Contains(text, "Primary actions: [r] Refresh [d] Doctor [q] Close") {
+		t.Fatalf("compact action bar missing: %q", text)
+	}
+}
+
 func TestTerminalModalRendererProjectsDocumentActionControls(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 120, Rows: 34})

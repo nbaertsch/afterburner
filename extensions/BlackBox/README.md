@@ -11,8 +11,7 @@ afterburn uninstall black-box
 
 Uninstalling preserves configuration and recorded data. Black Box stores bounded JSONL segments
 under `AFTERBURNER_HOME\extension-data\black-box` and exposes `/black-box`, `/black-box-modal`,
-`/black-box-tail`, `/black-box-tail-stop`, `/black-box-export`, `/black-box-doctor`, and the
-`afterburner-black-box` command canvas.
+`/black-box-tail`, `/black-box-tail-stop`, `/black-box-export`, and `/black-box-doctor`.
 
 `/black-box-modal` requests the runtime-owned native modal surface `afterburner-black-box-live`.
 When the Afterburner terminal broker is attached, the runtime opens a host-rendered overlay with

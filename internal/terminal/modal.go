@@ -1848,7 +1848,6 @@ func modalDocumentBodyLines(frame ModalFrame, width int) []string {
 	if frame.Footer != "" {
 		raw = append(raw, printableModalText(frame.Footer, true))
 	}
-	raw = append(raw, modalPriorityBodyLines(frame.Body)...)
 	appendModalDocumentNodeLines(&raw, tree.Root, "", width)
 	return compactModalBodyLines(raw, width)
 }
@@ -1876,8 +1875,10 @@ func modalShortcutSummary(actions []ModalAction) string {
 func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, context string, width int) {
 	kind := strings.TrimSpace(node.Kind)
 	switch kind {
-	case "dialog", "application", "row", "column", "stack", "group", "toolbar", "actionBar":
+	case "dialog", "application", "row", "column", "stack", "group", "toolbar":
 		appendModalDocumentChildren(lines, node.Children, context, width)
+	case "actionBar":
+		appendModalLine(lines, modalDocumentActionBarLine(node))
 	case "surface", "window", "viewport", "split", "scroll":
 		appendModalContainer(lines, node, context, width)
 	case "breadcrumb":
@@ -2027,6 +2028,20 @@ func appendModalContextMenuLines(lines *[]string, node modalDocumentNode, width 
 		appendModalLine(lines, "  • "+modalActionControlLine(modalDocumentNode{Kind: "button", Props: entry}, "Menu item"))
 	}
 	appendModalDocumentChildren(lines, node.Children, "Context menu", width)
+}
+
+func modalDocumentActionBarLine(node modalDocumentNode) string {
+	label := firstNonEmpty(modalStringProp(node.Props, "label"), "Actions")
+	parts := make([]string, 0, len(node.Children))
+	for _, child := range node.Children {
+		if child.Kind == "button" || child.Kind == "link" {
+			parts = append(parts, modalActionControlLine(child, "Action"))
+		}
+	}
+	if len(parts) == 0 {
+		return label + ": none"
+	}
+	return label + ": " + strings.Join(parts, "  ")
 }
 
 func appendModalSeparator(lines *[]string, node modalDocumentNode) {

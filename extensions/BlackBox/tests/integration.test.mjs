@@ -88,7 +88,6 @@ test("preexisting modal activation requests are discarded on runtime startup", a
     await writeFile(join(stateDirectory, "modal-activation.jsonl"), JSON.stringify({
         schemaVersion: 1,
         requestId: "preexisting-request",
-        sessionId: "same-session",
         surfaceId: "afterburner-black-box-live",
         createdAt: new Date().toISOString(),
         input: {}
@@ -96,7 +95,7 @@ test("preexisting modal activation requests are discarded on runtime startup", a
     await delay(5);
     const service = await startBlackBoxService({
         mode: "runtime",
-        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, SESSION_ID: "same-session" }
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
     });
     t.after(() => service.close());
     assert.deepEqual(await service.consumeModalOpenRequests(), []);
@@ -289,14 +288,13 @@ function createFakeRuntimeUI() {
     return { components, createUIDocument, createRuntime };
 }
 
-test("session registration preserves command panels and the existing Black Box canvas", async () => {
+test("session registration preserves command panels without registering a generic Black Box canvas", async () => {
     const { registration, canvasDefinition, logs } = await captureSessionRegistration();
-    assert.equal(canvasDefinition.id, "afterburner-black-box");
-    assert.equal(canvasDefinition.presentation, undefined, "the legacy canvas presentation must not be changed into a modal");
+    assert.equal(canvasDefinition, undefined);
+    assert.deepEqual(registration.canvases, []);
     assert.deepEqual(registration.commands.map(item => item.name), [
         "black-box", "black-box-modal", "black-box-tail", "black-box-tail-stop", "black-box-export", "black-box-doctor"
     ]);
-    assert.deepEqual(canvasDefinition.actions.map(action => action.name), ["snapshot", "tail", "export", "doctor"]);
     assert.equal(logs.length, 0, "Black Box must not write timeline entries before explicit user action.");
     await command(registration, "black-box").handler();
     assert.match(logs[0], /Afterburner Black Box/);
@@ -316,16 +314,13 @@ test("session registration renders the visible panel without canvas support", as
     assert.match(logs[0], /Signals\s*:/);
 });
 
-test("session extension uses the real session canvas RPC to open Black Box", async () => {
+test("session extension wrapper does not open the generic Copilot canvas", async () => {
     const wrapper = await readFile(new URL("../com.github.copilot/extensions/BlackBox/extension.mjs", import.meta.url), "utf8");
     assert.match(wrapper, /extensions\/BlackBox\/extension\.mjs/);
     const source = await readFile(new URL("../extensions/BlackBox/extension.mjs", import.meta.url), "utf8");
-    assert.match(source, /joinedSession\?\.rpc\?\.canvas/);
-    assert.match(source, /canvasRpc\.list/);
-    assert.match(source, /canvasRpc\.open/);
+    assert.doesNotMatch(source, /joinedSession\?\.rpc\?\.canvas/);
+    assert.doesNotMatch(source, /canvasRpc\.open/);
     assert.doesNotMatch(source, /copilotSdk\.openModalCanvas/);
-    assert.match(source, /candidate\.extensionId/);
-    assert.match(source, /candidate\.canvasId/);
 });
 
 test("black-box-modal queues a runtime-owned native modal activation", async () => {

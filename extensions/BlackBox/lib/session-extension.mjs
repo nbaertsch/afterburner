@@ -86,7 +86,7 @@ async function safeAction(action) {
     catch { return { ok: false, error: "black-box-unavailable" }; }
 }
 
-export async function buildSessionRegistration({ service, createCanvas, joinSession }) {
+export async function buildSessionRegistration({ service, joinSession }) {
     let session;
     let liveTailTimer = null;
     const liveTailSeen = new Set();
@@ -110,56 +110,6 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
         }, 2000);
         liveTailTimer.unref?.();
     };
-    const canvas = typeof createCanvas === "function" ? createCanvas({
-        id: "afterburner-black-box",
-        displayName: "Afterburner Black Box",
-        description: "Metadata-only session timeline, anomalies, milestones, storage health, and sanitized exports.",
-        actions: [
-            {
-                name: "snapshot",
-                description: "Return the current metadata-only Black Box status.",
-                inputSchema: { type: "object", properties: {}, additionalProperties: false },
-                handler: async () => safeAction(() => service.status())
-            },
-            {
-                name: "tail",
-                description: "Return recent sanitized timeline records.",
-                inputSchema: {
-                    type: "object",
-                    properties: { limit: { type: "integer", minimum: 1, maximum: 500 } },
-                    additionalProperties: false
-                },
-                handler: async input => safeAction(() => service.tail(input ?? {}))
-            },
-            {
-                name: "export",
-                description: "Create a sanitized Black Box export bundle.",
-                inputSchema: {
-                    type: "object",
-                    properties: { maxRecords: { type: "integer", minimum: 1 } },
-                    additionalProperties: false
-                },
-                handler: async input => safeAction(async () => {
-                    const result = await service.exportBundle(input ?? {});
-                    return { ok: true, path: result.path, manifest: result.manifest };
-                })
-            },
-            {
-                name: "doctor",
-                description: "Check configuration, native tailing, storage integrity, and drop counters.",
-                inputSchema: { type: "object", properties: {}, additionalProperties: false },
-                handler: async () => safeAction(() => service.doctor())
-            }
-        ],
-        open: async () => {
-            const status = await safeAction(() => service.status());
-            return {
-                title: "Afterburner Black Box",
-                status: status?.storage ? statusLine(status) : "Black Box is unavailable."
-            };
-        }
-    }) : null;
-
     const logSafely = async action => {
         try { await action(); }
         catch { await session?.log("Black Box operation failed without affecting the session."); }
@@ -236,11 +186,11 @@ export async function buildSessionRegistration({ service, createCanvas, joinSess
                 handler: async () => logSafely(async () => session.log(JSON.stringify(await service.doctor(), null, 2)))
             }
         ],
-        canvases: canvas ? [canvas] : []
+        canvases: []
     });
     return {
         session,
-        canvas,
+        canvas: null,
         stopLiveTail: stopLiveTailTimer
     };
 }

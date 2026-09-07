@@ -753,7 +753,7 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
     const scroll = typeof c.scroll === "function" ? c.scroll : c.panel;
     try {
         const root = c.dialog({ title, status: frame.status, modal: true }, [
-            surface({ title: "Black Box command center", mode: "metadata-only", density: "comfortable" }, [
+            surface({ mode: "metadata-only", density: "comfortable" }, [
                 c.breadcrumb?.({ items: [
                     { id: "afterburner", label: "Afterburner" },
                     { id: "black-box", label: "Black Box" },
@@ -770,8 +770,7 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
                         actionBindings: { activate: action.name }
                     })
                 ), { id: "bb-modal-action-bar", accessibility: { role: "toolbar", name: "Black Box action bar" } }),
-                viewport({ label: "Black Box live observability viewport" }, [
-                    statusGrid({ label: "Black Box modal status cards", columns: ["recorder", "storage", "signals", "queue"] }, [
+                viewport({}, [                    statusGrid({ label: "Black Box modal status cards", columns: ["recorder", "storage", "signals", "queue"] }, [
                         metricCard(c, "bb-modal-card-recorder", "Recorder", status.enabled ? "Enabled" : "Disabled", `${status.mode ?? "unknown"} · ${status.analytics?.totalRecords ?? records.length} records`, status.enabled ? "success" : "warning"),
                         metricCard(c, "bb-modal-card-storage", "Storage", `${status.storage?.segmentCount ?? 0} segment(s)`, `${formatBytes(status.storage?.segmentBytes)} used`, healthTone),
                         metricCard(c, "bb-modal-card-signals", "Signals", `${status.analytics?.anomalyCount ?? 0} anomalies`, `${status.analytics?.milestoneCount ?? 0} milestones`, status.analytics?.anomalyCount ? "warning" : "success"),
@@ -782,7 +781,7 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
                         accessibility: { role: "progressbar", name: "Black Box modal storage usage", valueText: `${formatPercent(progressValue)} used` }
                     }),
                     ...modalSignalTrendNodes(c, records),
-                    ...modalHealthAlertNodes(c, status, state.lifecycle),
+                    ...modalHealthStateNodes(c, status, state.lifecycle),
                     ...modalActiveResultPanels(c, state),
                     c.tabs?.({
                         label: "Black Box modal sections",
@@ -793,8 +792,8 @@ function buildEnterpriseModalDocument(ui, { status, records, selected, state, he
                             { id: "export", label: "Export" }
                         ]
                     }, [], { id: "bb-modal-tabs", accessibility: { role: "tablist", name: "Black Box modal sections" } }),
-                    split({ label: "Timeline and detail split", responsive: { collapseBelowColumns: 100, orientation: "vertical" } }, [
-                        scroll({ label: "Scrollable metadata timeline" }, [
+                    split({ responsive: { collapseBelowColumns: 100, orientation: "vertical" } }, [
+                        scroll({}, [
                             c.panel({ title: "Metadata timeline", width: "58%" }, [
                                 c.text({ value: `${records.length} filtered record(s); showing ${records.length}. Sort ${state.sort?.field ?? "timestamp"} ${state.sort?.direction ?? "desc"}.`, tone: "muted" }, [], { id: "bb-modal-timeline-status", accessibility: { role: "status", name: "Timeline status" } }),
                                 c.table({
@@ -939,13 +938,21 @@ function modalHealthCalloutLines(status, lifecycle = {}) {
     return issues.length ? ["", `Needs attention: ${issues.join(" · ")}`] : [];
 }
 
-function modalHealthAlertNodes(c, status, lifecycle = {}) {
+function modalHealthStateNodes(c, status, lifecycle = {}) {
     const issues = modalHealthIssues(status, lifecycle);
-    if (!issues.length || typeof c.alert !== "function") return [];
-    return [c.alert({ severity: "warning", message: `Needs attention: ${issues.join(" · ")}` }, [], {
-        id: "bb-modal-health-alert",
-        accessibility: { role: "alert", name: "Black Box health warnings" }
-    })];
+    if (issues.length && typeof c.alert === "function") {
+        return [c.alert({ severity: "warning", message: `Needs attention: ${issues.join(" · ")}` }, [], {
+            id: "bb-modal-health-alert",
+            accessibility: { role: "alert", name: "Black Box health warnings" }
+        })];
+    }
+    if (typeof c.badge === "function") {
+        return [c.badge({ label: "Health: no active issues", tone: "success" }, [], {
+            id: "bb-modal-health-ok",
+            accessibility: { role: "status", name: "Black Box health" }
+        })];
+    }
+    return [];
 }
 
 function modalSignalTrend(records = []) {
