@@ -590,6 +590,12 @@ func addAriaAliases(states map[string]string, relations map[string][]string, pro
 	if activeDescendant := stringListProp(props, "ariaActiveDescendant", "aria-activedescendant", "activeDescendant"); len(activeDescendant) > 0 {
 		relations["activeDescendant"] = activeDescendant
 	}
+	if errorMessage := stringListProp(props, "ariaErrorMessage", "aria-errormessage", "errorMessage"); len(errorMessage) > 0 {
+		relations["errorMessage"] = errorMessage
+	}
+	if details := stringListProp(props, "ariaDetails", "aria-details", "details"); len(details) > 0 {
+		relations["details"] = details
+	}
 }
 
 func boolProp(props map[string]any, key string, fallback bool) bool {
