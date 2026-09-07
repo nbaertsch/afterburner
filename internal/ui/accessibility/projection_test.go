@@ -68,6 +68,9 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 	if byID["sdk-breadcrumb"].Role != RoleNavigation {
 		t.Fatalf("breadcrumb should project as a navigation landmark: %#v", byID["sdk-breadcrumb"])
 	}
+	if !hasShortcut(byID["sdk-dateinput"].KeyboardActions, "Enter", "confirm date") || !hasShortcut(byID["sdk-fileinput"].KeyboardActions, "Enter", "browse files") {
+		t.Fatalf("date/file inputs should expose keyboard actions: date=%#v file=%#v", byID["sdk-dateinput"], byID["sdk-fileinput"])
+	}
 	modal := byID["sdk-dialog-modal"]
 	if modal.States["modal"] != "true" || !hasShortcut(modal.KeyboardActions, "Tab", "cycle focus") {
 		t.Fatalf("modal dialog semantics mismatch: %#v", modal)
