@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -317,14 +318,7 @@ func preissueModalCapabilities(server *terminal.ModalServer, value *registry.Reg
 	if server == nil || value == nil {
 		return nil
 	}
-	blackBox, ok := value.Extensions[terminal.ModalBlackBoxOwnerExtensionID]
-	if !ok || !blackBox.Enabled || !registry.IsTrustedBuiltinEntry(blackBox) {
-		return nil
-	}
-	registrations := []terminal.ModalRegistration{
-		{OwnerExtensionID: terminal.ModalBlackBoxOwnerExtensionID, CanvasID: terminal.ModalBlackBoxCanvasID, SurfaceID: terminal.ModalBlackBoxSurfaceID},
-		{OwnerExtensionID: terminal.ModalLegacyOwnerExtensionID, CanvasID: terminal.ModalLegacyCanvasID, SurfaceID: terminal.ModalLegacySurfaceID},
-	}
+	registrations := preissuedModalRegistrations(value)
 	capabilities := make([]terminal.ModalCapability, 0, len(registrations))
 	for _, registration := range registrations {
 		capability, err := server.RegisterModalCanvas(registration)
@@ -333,6 +327,42 @@ func preissueModalCapabilities(server *terminal.ModalServer, value *registry.Reg
 		}
 	}
 	return capabilities
+}
+
+func preissuedModalRegistrations(value *registry.Registry) []terminal.ModalRegistration {
+	if value == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(value.Extensions))
+	for id := range value.Extensions {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	registrations := []terminal.ModalRegistration{}
+	for _, id := range ids {
+		entry := value.Extensions[id]
+		if !entry.Enabled || !entry.Verified || !manifestHasCapability(entry.Manifest, "modal-canvas") {
+			continue
+		}
+		if id == terminal.ModalBlackBoxOwnerExtensionID && registry.IsTrustedBuiltinEntry(entry) {
+			registrations = append(registrations,
+				terminal.ModalRegistration{OwnerExtensionID: terminal.ModalBlackBoxOwnerExtensionID, CanvasID: terminal.ModalBlackBoxCanvasID, SurfaceID: terminal.ModalBlackBoxSurfaceID},
+				terminal.ModalRegistration{OwnerExtensionID: terminal.ModalLegacyOwnerExtensionID, CanvasID: terminal.ModalLegacyCanvasID, SurfaceID: terminal.ModalLegacySurfaceID},
+			)
+			continue
+		}
+		registrations = append(registrations, terminal.ModalRegistration{OwnerExtensionID: id, CanvasID: id, SurfaceID: id})
+	}
+	return registrations
+}
+
+func manifestHasCapability(manifest registry.Manifest, capability string) bool {
+	for _, candidate := range manifest.Capabilities {
+		if candidate == capability {
+			return true
+		}
+	}
+	return false
 }
 
 func prepareModalPipes(server *terminal.ModalServer, surfaces []terminal.ModalCapability) (func(), func() error, error) {

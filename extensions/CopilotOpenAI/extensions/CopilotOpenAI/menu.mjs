@@ -1,3 +1,13 @@
+export const MENU_ID = "copilot-openai";
+
+export const menuActions = Object.freeze([
+    { name: "start", label: "Start", key: "s", description: "Start or reuse the localhost bridge." },
+    { name: "stop", label: "Stop", key: "x", description: "Stop this session's bridge listener." },
+    { name: "status", label: "Status", key: "r", description: "Refresh bridge status." },
+    { name: "doctor", label: "Doctor", key: "d", description: "Show sanitized bridge diagnostics." },
+    { name: "close", label: "Close", key: "q", description: "Close this menu." }
+]);
+
 export function menuStatus(snapshot = {}, detail = undefined) {
     const active = snapshot?.active === true;
     return [
@@ -10,74 +20,27 @@ export function menuStatus(snapshot = {}, detail = undefined) {
     ].filter(Boolean).join(" · ");
 }
 
-export function menuBody({ snapshot = {}, configuredPath, detail = undefined } = {}) {
+export function menuBody({ snapshot = {}, configuredPath, detail = undefined, diagnostics = false } = {}) {
     return [
-        "Copilot OpenAI Bridge management",
-        "=================================",
-        menuStatus(snapshot, detail),
+        "Use Tab/Shift+Tab to focus actions; Enter or Space activates the focused action.",
+        "Keyboard shortcuts: s Start · x Stop · r Status · d Doctor · q Close",
+        "",
         `API key: ${snapshot?.apiKeyRequired ? "required" : "not required"}`,
         `Config: ${configuredPath}`,
+        detail ? `Detail: ${detail}` : undefined,
         "",
-        "Interactive actions:",
-        "• Start / reuse bridge",
-        "• Stop bridge",
-        "• Refresh status",
-        "• Doctor diagnostics"
-    ].join("\n");
+        diagnostics ? "Sanitized diagnostics:" : "Interactive actions:",
+        diagnostics ? JSON.stringify(snapshot, null, 2) : "• Start / reuse bridge\n• Stop bridge\n• Refresh status\n• Doctor diagnostics"
+    ].filter(Boolean).join("\n");
 }
 
-export function createManagementCanvas({ createCanvas, getStatus, startBridge, stopBridge, configuredPath }) {
-    const canvasState = async (detail = undefined) => {
-        const snapshot = getStatus();
-        return {
-            title: "Copilot OpenAI Bridge",
-            status: menuStatus(snapshot, detail),
-            body: menuBody({ snapshot, configuredPath, detail }),
-            diagnostics: snapshot
-        };
+export function modalFrame({ snapshot = {}, configuredPath, detail = undefined, diagnostics = false } = {}) {
+    return {
+        id: MENU_ID,
+        title: "Copilot OpenAI Bridge",
+        status: menuStatus(snapshot, detail),
+        body: menuBody({ snapshot, configuredPath, detail, diagnostics }),
+        footer: "s start · x stop · r status · d doctor · q close",
+        actions: menuActions
     };
-
-    return createCanvas({
-        id: "afterburner-copilot-openai-menu",
-        displayName: "Copilot OpenAI Bridge",
-        description: "Interactive management menu for the localhost OpenAI-compatible Copilot bridge.",
-        actions: [
-            {
-                name: "start",
-                label: "Start",
-                description: "Start or reuse the localhost bridge.",
-                handler: async () => canvasState(`bridge ready at ${(await startBridge()).endpoint ?? "not allocated"}`)
-            },
-            {
-                name: "stop",
-                label: "Stop",
-                description: "Stop this session's bridge listener.",
-                handler: async () => {
-                    await stopBridge();
-                    return canvasState("bridge stopped");
-                }
-            },
-            {
-                name: "status",
-                label: "Status",
-                description: "Refresh bridge status.",
-                handler: async () => canvasState("status refreshed")
-            },
-            {
-                name: "doctor",
-                label: "Doctor",
-                description: "Show sanitized bridge diagnostics.",
-                handler: async () => ({ ...(await canvasState("diagnostics refreshed")), diagnostics: getStatus() })
-            }
-        ],
-        open: async () => {
-            const snapshot = await startBridge();
-            return {
-                title: "Copilot OpenAI Bridge",
-                status: menuStatus(snapshot, "interactive menu open"),
-                body: menuBody({ snapshot, configuredPath, detail: "interactive menu open" }),
-                diagnostics: getStatus()
-            };
-        }
-    });
 }

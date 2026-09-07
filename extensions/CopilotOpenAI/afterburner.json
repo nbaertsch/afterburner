@@ -13,7 +13,7 @@
     "entrypoint": "runtime/extension.mjs",
     "execution": "in-process"
   },
-  "capabilities": ["session-command", "canvas"],
+  "capabilities": ["session-command", "modal-canvas"],
   "sessionExtension": {
     "entrypoint": "com.github.copilot/extensions/CopilotOpenAI/extension.mjs"
   }

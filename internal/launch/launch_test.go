@@ -241,7 +241,7 @@ func TestWriteNativeBootstrapContainsOnlyPreissuedSurfaces(t *testing.T) {
 	}
 }
 
-func TestPreissueModalCapabilitiesRequiresVerifiedBlackBoxIdentity(t *testing.T) {
+func TestPreissueModalCapabilitiesRequiresVerifiedModalCapability(t *testing.T) {
 	server, err := terminal.NewModalServer(nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -249,27 +249,39 @@ func TestPreissueModalCapabilitiesRequiresVerifiedBlackBoxIdentity(t *testing.T)
 	generic := registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{
 		"black-box": {
 			Enabled:  true,
-			Manifest: registry.Manifest{ID: "black-box", Visibility: "public"},
+			Manifest: registry.Manifest{ID: "black-box", Visibility: "public", Capabilities: []string{"modal-canvas"}},
 			Source:   registry.Source{Type: "path", Value: `C:\\tmp\\black-box`},
 			Identity: registry.IdentityBinding{ExtensionID: "black-box", ManifestHash: "sha256:m", TreeHash: "sha256:t", SourceType: "path", SourceValue: `C:\\tmp\\black-box`, GrantEpoch: 1},
 		},
 	}}
 	if got := preissueModalCapabilities(server, &generic); len(got) != 0 {
-		t.Fatalf("generic black-box received capabilities: %#v", got)
+		t.Fatalf("unverified black-box received capabilities: %#v", got)
 	}
 
 	verified := registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{
-		"black-box": {
-			Enabled:  true,
-			Manifest: registry.Manifest{ID: "black-box", Visibility: "builtin"},
-			Source:   registry.Source{Type: "embedded", Value: "black-box"},
-			Identity: registry.IdentityBinding{ExtensionID: "black-box", ManifestHash: "sha256:m", TreeHash: "sha256:t", SourceType: "embedded", SourceValue: "black-box", SignerID: "afterburner-core", SignerFingerprint: "builtin:black-box", BuiltinSigned: true, RegistryEpoch: 1, GrantEpoch: 1},
-			Verified: true,
-		},
+		"black-box":      verifiedEntry("black-box", "builtin", "embedded", "black-box", true, []string{"modal-canvas"}),
+		"copilot-openai": verifiedEntry("copilot-openai", "private", "path", `C:\\repo\\extensions\\CopilotOpenAI`, false, []string{"modal-canvas"}),
+		"no-modal":       verifiedEntry("no-modal", "private", "path", `C:\\repo\\extensions\\NoModal`, false, []string{"session-command"}),
 	}}
 	got := preissueModalCapabilities(server, &verified)
-	if len(got) != 2 || got[0].OwnerExtensionID != "black-box" || got[1].OwnerExtensionID != "black-box" {
-		t.Fatalf("verified black-box surfaces = %#v", got)
+	if len(got) != 3 {
+		t.Fatalf("verified modal surfaces = %#v", got)
+	}
+	if got[0].OwnerExtensionID != "black-box" || got[0].SurfaceID != "afterburner-black-box-live" || got[1].SurfaceID != "black-box" {
+		t.Fatalf("black-box compatibility surfaces = %#v", got[:2])
+	}
+	if got[2].OwnerExtensionID != "copilot-openai" || got[2].CanvasID != "copilot-openai" || got[2].SurfaceID != "copilot-openai" {
+		t.Fatalf("copilot-openai modal surface = %#v", got[2])
+	}
+}
+
+func verifiedEntry(id, visibility, sourceType, sourceValue string, builtinSigned bool, capabilities []string) registry.Entry {
+	return registry.Entry{
+		Enabled:  true,
+		Manifest: registry.Manifest{ID: id, Visibility: visibility, Capabilities: capabilities},
+		Source:   registry.Source{Type: sourceType, Value: sourceValue},
+		Identity: registry.IdentityBinding{ExtensionID: id, ManifestHash: "sha256:m", TreeHash: "sha256:t", SourceType: sourceType, SourceValue: sourceValue, SignerID: "afterburner-core", SignerFingerprint: "builtin:" + id, BuiltinSigned: builtinSigned, RegistryEpoch: 1, GrantEpoch: 1},
+		Verified: true,
 	}
 }
 

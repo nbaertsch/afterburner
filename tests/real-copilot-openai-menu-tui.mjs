@@ -151,18 +151,18 @@ let commandInputStartedAt = 0;
 let commandSentAt = 0;
 let commandSubmitRetryAt = 0;
 let menuSeenAt = 0;
-let statusSentAt = 0;
-let statusSeenAt = 0;
-let statusRawLength = 0;
-let startSentAt = 0;
-let startSeenAt = 0;
-let startRawLength = 0;
-let doctorSentAt = 0;
-let doctorSeenAt = 0;
-let doctorRawLength = 0;
-let stopSentAt = 0;
-let stopSeenAt = 0;
-let stopRawLength = 0;
+const actionSteps = [
+  { name: "status action", key: "r", want: /status refreshed/i, assertions: ["Status shortcut refreshed visible state"] },
+  { name: "doctor action", key: "d", want: /Sanitized diagnostics|diagnostics refreshed/i, assertions: ["Doctor shortcut displayed sanitized diagnostics"] },
+  { name: "stop action", key: "x", want: /bridge stopped|State:\s*stopped/i, assertions: ["Stop shortcut stopped the bridge"] },
+  { name: "start action", key: "s", want: /bridge ready|State:\s*running|Endpoint:\s*127\.0\.0\.1:\d+/i, assertions: ["Start shortcut started or reused the bridge"] }
+];
+let actionIndex = 0;
+let activeActionRawLength = 0;
+const actionSentAt = {};
+const actionSeenAt = {};
+let closeSentAt = 0;
+let closeSeenAt = 0;
 let finished = false;
 let pendingCommand = null;
 let nextCommandAllowedAt = 0;
@@ -271,9 +271,11 @@ const finish = (exitCode, message) => {
     },
     assertions: {
       oneSlashCommandMenuVisible: ioEvents.some(event => event.type === "input" && event.display.includes("/copilot-openai")),
-      interactiveCanvasOpened: /Canvas opened:\s*Copilot OpenAI Bridge/i.test(plain),
-      noTextFallback: !/interactive menu could not open|Ready:\s*\/copilot-openai|Diagnostics:/i.test(plain),
-      packageHasCanvasCapability: (entry?.manifest?.capabilities ?? []).includes("canvas"),
+      nativeModalRendered: /Copilot OpenAI Bridge[\s\S]*Keyboard shortcuts: s Start · x Stop · r Status · d Doctor · q Close/i.test(plain),
+      noCanvasOnlyFallback: !/Canvas opened:\s*Copilot OpenAI Bridge/i.test(plain),
+      noTextFallback: !/interactive menu could not open|native menu unavailable/i.test(plain),
+      everyAdvertisedActionExercised: actionSteps.every(step => Boolean(actionSeenAt[step.name])) && Boolean(closeSeenAt),
+      packageHasModalCapability: (entry?.manifest?.capabilities ?? []).includes("modal-canvas"),
       packageHasOneWrapper: (existsSync(join(activePath, "com.github.copilot", "extensions")) ? readdirSync(join(activePath, "com.github.copilot", "extensions")) : []).join(",") === "CopilotOpenAI"
     },
     operatorSteps,
@@ -336,13 +338,47 @@ child.onData(data => {
     writeInput("\r\n", "retry /copilot-openai submit");
   }
   if (commandSentAt && !menuSeenAt && /Unknown command:\s*\/copilot-openai/i.test(recent)) return finish(1, "Copilot rejected /copilot-openai as an unknown command");
-  if (commandSentAt && !menuSeenAt && /interactive menu could not open/i.test(recent)) return finish(1, "CopilotOpenAI reported that the interactive menu could not open");
+  if (commandSentAt && !menuSeenAt && /native menu unavailable|interactive menu could not open/i.test(recent)) return finish(1, "CopilotOpenAI reported that the native interactive menu could not open");
+  if (/Canvas opened:\s*Copilot OpenAI Bridge/i.test(recent)) return finish(1, "CopilotOpenAI fell back to generic canvas-open text instead of native rendered UI");
 
-  const menuReady = /Canvas opened:\s*Copilot OpenAI Bridge/i.test(text);
+  const menuReady = /Copilot OpenAI Bridge[\s\S]*Keyboard shortcuts: s Start · x Stop · r Status · d Doctor · q Close/i.test(text);
   if (commandSentAt && !menuSeenAt && menuReady) {
     menuSeenAt = Date.now();
-    recordStep("open interactive canvas menu", "/copilot-openai", commandSentAt, menuSeenAt, ["single slash command accepted", "interactive Copilot OpenAI Bridge canvas opened", "no static text fallback"]);
-    finish(0, `real-copilot-openai-menu-tui-ok menuOpenLatencyMs=${menuSeenAt - commandSentAt} report=${artifactPath("copilot-openai-menu-tui-report.png")}`);
+    recordStep("open native modal menu", "/copilot-openai", commandSentAt, menuSeenAt, ["single slash command accepted", "native modal title rendered", "keyboard shortcuts visible"]);
+    const step = actionSteps[actionIndex];
+    actionSentAt[step.name] = Date.now();
+    activeActionRawLength = raw.length;
+    setTimeout(() => writeInput(step.key, step.name), 300).unref?.();
+    return;
+  }
+
+  const activeStep = actionSteps[actionIndex];
+  if (menuSeenAt && activeStep && actionSentAt[activeStep.name] && !actionSeenAt[activeStep.name] && activeStep.want.test(stripAnsi(raw.slice(activeActionRawLength)))) {
+    actionSeenAt[activeStep.name] = Date.now();
+    recordStep(activeStep.name, activeStep.key, actionSentAt[activeStep.name], actionSeenAt[activeStep.name], activeStep.assertions);
+    actionIndex++;
+    const nextStep = actionSteps[actionIndex];
+    if (nextStep) {
+      setTimeout(() => {
+        actionSentAt[nextStep.name] = Date.now();
+        activeActionRawLength = raw.length;
+        writeInput(nextStep.key, nextStep.name);
+      }, 300).unref?.();
+      return;
+    }
+    setTimeout(() => {
+      closeSentAt = Date.now();
+      activeActionRawLength = raw.length;
+      writeInput("q", "close action");
+    }, 300).unref?.();
+    return;
+  }
+
+  if (closeSentAt && !closeSeenAt && /\/ commands|tab next tab|\? help|@ files · # issues/i.test(stripAnsi(raw.slice(activeActionRawLength)))) {
+    closeSeenAt = Date.now();
+    recordStep("close action", "q", closeSentAt, closeSeenAt, ["Close shortcut returned focus to Copilot prompt"]);
+    const actionSummary = actionSteps.map(step => `${step.name}:${actionSeenAt[step.name] - actionSentAt[step.name]}ms`).join(",");
+    finish(0, `real-copilot-openai-menu-tui-ok openLatencyMs=${menuSeenAt - commandSentAt} actions=${actionSummary} closeLatencyMs=${closeSeenAt - closeSentAt} report=${artifactPath("copilot-openai-menu-tui-report.png")}`);
   }
 });
 

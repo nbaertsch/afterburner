@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { test } from "node:test";
 import { CopilotSessionAdapter, createBridge, loadConfig, normalizeModel } from "../extensions/CopilotOpenAI/bridge.mjs";
-import { createManagementCanvas } from "../extensions/CopilotOpenAI/menu.mjs";
+import { MENU_ID, menuActions, modalFrame } from "../extensions/CopilotOpenAI/menu.mjs";
 
 async function withBridge(adapter, fn, config = { port: 0 }) {
     const bridge = createBridge({ adapter, config });
@@ -30,15 +30,17 @@ test("session extension exposes one management command with menu actions", async
     const wrapper = await readFile(new URL("../com.github.copilot/extensions/CopilotOpenAI/extension.mjs", import.meta.url), "utf8");
     const menuSource = await readFile(new URL("../extensions/CopilotOpenAI/menu.mjs", import.meta.url), "utf8");
     const wrappers = await readdir(new URL("../com.github.copilot/extensions", import.meta.url), { withFileTypes: true });
-    assert.match(source, /createCanvas/);
-    assert.match(source, /canvases:\s*\[managementCanvas\]/);
+    assert.doesNotMatch(source, /createCanvas/);
+    assert.match(source, /requestModalOpen/);
+    assert.match(source, /canvases:\s*\[\]/);
     const commandNames = [...source.matchAll(/name:\s*"(copilot-openai[^"]*)"/g)].map(match => match[1]);
     assert.deepEqual(commandNames, ["copilot-openai"]);
     for (const removed of ["copilot-openai-start", "copilot-openai-stop", "copilot-openai-doctor"]) {
         assert.doesNotMatch(source, new RegExp(`name:\\s*"${removed}"`));
     }
-    assert.match(source, /session\.rpc\.canvas\.open/);
-    assert.match(source, /afterburner-copilot-openai-menu/);
+    assert.doesNotMatch(source, /session\.rpc\.canvas\.open/);
+    assert.match(source, /requestModalOpen/);
+    assert.match(menuSource, /MENU_ID = "copilot-openai"/);
     for (const action of ["start", "stop", "status", "doctor"]) {
         assert.match(menuSource, new RegExp(`name:\\s*"${action}"`));
     }
@@ -51,33 +53,15 @@ test("session extension exposes one management command with menu actions", async
     assert.doesNotMatch(source, /export async function activate/);
 });
 
-test("management canvas exposes working interactive actions", async () => {
-    let active = false;
-    let started = 0;
-    let stopped = 0;
-    const canvas = createManagementCanvas({
-        configuredPath: "C:\\afterburner\\config\\copilot-openai.json",
-        createCanvas: options => options,
-        getStatus: () => ({ active, endpoint: active ? "127.0.0.1:41425" : null, modelCount: 2, requestCount: 3, errorCount: 0, apiKeyRequired: false }),
-        startBridge: async () => { active = true; started++; return { active, endpoint: "127.0.0.1:41425", modelCount: 2, requestCount: 3, errorCount: 0, apiKeyRequired: false }; },
-        stopBridge: async () => { active = false; stopped++; }
-    });
-    assert.equal(canvas.id, "afterburner-copilot-openai-menu");
-    assert.deepEqual(canvas.actions.map(action => action.name), ["start", "stop", "status", "doctor"]);
-    const opened = await canvas.open();
-    assert.equal(started, 1);
-    assert.match(opened.status, /running/);
-    assert.match(opened.body, /Interactive actions/);
-    const start = await canvas.actions[0].handler();
-    assert.equal(started, 2);
-    assert.match(start.status, /bridge ready/);
-    const refreshed = await canvas.actions[2].handler();
-    assert.match(refreshed.status, /status refreshed/);
-    const doctor = await canvas.actions[3].handler();
-    assert.equal(doctor.diagnostics.endpoint, "127.0.0.1:41425");
-    const stoppedState = await canvas.actions[1].handler();
-    assert.equal(stopped, 1);
-    assert.match(stoppedState.status, /stopped/);
+test("native modal frame advertises keyboard actions", () => {
+    const snapshot = { active: true, endpoint: "127.0.0.1:41425", modelCount: 2, requestCount: 3, errorCount: 0, apiKeyRequired: false };
+    const frame = modalFrame({ snapshot, configuredPath: "C:\\afterburner\\config\\copilot-openai.json", detail: "interactive menu open" });
+    assert.equal(MENU_ID, "copilot-openai");
+    assert.equal(frame.title, "Copilot OpenAI Bridge");
+    assert.match(frame.status, /running/);
+    assert.match(frame.body, /Keyboard shortcuts: s Start · x Stop · r Status · d Doctor · q Close/);
+    assert.deepEqual(menuActions.map(action => action.name), ["start", "stop", "status", "doctor", "close"]);
+    assert.deepEqual(menuActions.map(action => action.key), ["s", "x", "r", "d", "q"]);
 });
 
 test("normalizes Copilot catalog entries into OpenAI model objects", () => {
