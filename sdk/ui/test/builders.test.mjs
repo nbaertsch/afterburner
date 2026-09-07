@@ -18,6 +18,7 @@ import {
   surfaceCatalog,
   surfaceKinds,
   text,
+  validateSurfaceDescriptor,
   validateUIDocument
 } from "../dist/afterburner-ui.mjs";
 
@@ -51,6 +52,10 @@ test("TypeScript declarations cover public SDK catalogs and builders", async () 
   for (const kind of componentKinds) {
     assert.match(declarations, new RegExp(`export const ${kind}:`), `${kind} builder declaration missing`);
   }
+});
+
+test("surface descriptors reject unknown supported component kinds", () => {
+  assert.throws(() => validateSurfaceDescriptor({ id: "panel", kind: "panel", supportedComponents: ["text", "madeUpWidget"] }), /Unknown supported component kind 'madeUpWidget'/);
 });
 
 test("builders cover the full W0 component catalog and produce stable IDs", () => {

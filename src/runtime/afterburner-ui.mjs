@@ -806,6 +806,9 @@ export function validateSurfaceDescriptor(descriptor) {
   assertObject(descriptor, "surface descriptor");
   validateStableId(descriptor.id, "surface id");
   if (!surfaceKindSet.has(descriptor.kind)) fail("ui.invalidEnvelope", `Unknown surface kind '${String(descriptor.kind)}'.`);
+  for (const kind of descriptor.supportedComponents ?? []) {
+    if (!componentKindSet.has(kind)) fail("ui.unknownComponentKind", `Unknown supported component kind '${String(kind)}'.`);
+  }
   for (const action of descriptor.actions ?? []) validateActionDescriptor(action);
   for (const source of descriptor.dataSources ?? []) validateDataSourceDescriptor(source);
   for (const stream of descriptor.streams ?? []) validateStreamDescriptor(stream);

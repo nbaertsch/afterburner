@@ -43,6 +43,10 @@ test("runtime SDK component kinds stay aligned with JSON schema", async () => {
   assert.deepEqual(schema.$defs.kind.enum, publicKinds);
 });
 
+test("runtime SDK rejects unknown supported surface components", () => {
+  assert.throws(() => ui.validateSurfaceDescriptor({ id: "panel", kind: "panel", supportedComponents: ["text", "madeUpWidget"] }), /Unknown supported component kind 'madeUpWidget'/);
+});
+
 test("runtime SDK surface catalog stays aligned with extension UI schema", async () => {
   const schema = JSON.parse(await readFile(new URL("../../schemas/extension-ui-v1.schema.json", import.meta.url), "utf8"));
   const schemaKinds = schema.properties.surfaces.items.properties.kind.enum;
