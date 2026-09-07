@@ -353,6 +353,8 @@ func keyboardForKind(kind string, props map[string]any) []Shortcut {
 		return []Shortcut{{Key: "Enter", Description: "browse files"}, {Key: "Tab", Description: "leave field"}}
 	case "table", "list", "tree", "tabs", "select", "radioGroup", "slider", "pagination", "log", "commandPalette", "toolbar", "actionBar", "contextMenu":
 		return []Shortcut{{Key: "Arrow keys", Description: "navigate"}, {Key: "Enter", Description: "select"}}
+	case "terminal":
+		return []Shortcut{{Key: "Arrow keys", Description: "navigate terminal history"}, {Key: "PageUp/PageDown", Description: "page terminal output"}, {Key: "Tab", Description: "leave terminal"}}
 	case "dialog", "confirmation", "prompt":
 		shortcuts := []Shortcut{{Key: "Esc", Description: "dismiss"}}
 		if boolProp(props, "modal", false) {

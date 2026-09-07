@@ -77,6 +77,9 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 	if !byID["sdk-actionbar"].Focusable || !byID["sdk-toolbar"].Focusable {
 		t.Fatalf("action bars and toolbars should be focusable: action=%#v toolbar=%#v", byID["sdk-actionbar"], byID["sdk-toolbar"])
 	}
+	if !hasShortcut(byID["sdk-terminal"].KeyboardActions, "PageUp/PageDown", "page terminal output") {
+		t.Fatalf("terminal should expose keyboard paging semantics: %#v", byID["sdk-terminal"])
+	}
 	modal := byID["sdk-dialog-modal"]
 	if modal.States["modal"] != "true" || !hasShortcut(modal.KeyboardActions, "Tab", "cycle focus") {
 		t.Fatalf("modal dialog semantics mismatch: %#v", modal)
