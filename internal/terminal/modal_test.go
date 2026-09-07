@@ -280,6 +280,26 @@ func TestTerminalModalRendererProjectsDocumentBody(t *testing.T) {
 	}
 }
 
+func TestTerminalModalRendererProjectsResponsiveDocumentTable(t *testing.T) {
+	frame := ModalFrame{
+		Title:    "Narrow Table",
+		Status:   "Responsive",
+		Document: json.RawMessage(`{"root":{"kind":"dialog","children":[{"kind":"table","props":{"label":"Deployments","columns":[{"id":"service","title":"Service"},{"id":"status","title":"Status"},{"id":"summary","title":"Summary"}],"rows":[{"service":"api-with-a-very-long-name","status":"healthy","summary":"serving production traffic without errors"}]}}]}}`),
+	}
+	lines := modalFrameBodyLines(frame, 56)
+	text := strings.Join(lines, "\n")
+	for _, want := range []string{"Deployments", "Service", "Status", "Summary", "api-with-a-very", "serving production"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("responsive table missing %q: %q", want, text)
+		}
+	}
+	for _, line := range lines {
+		if utf8.RuneCountInString(line) > 56 {
+			t.Fatalf("table row overflowed modal width: %q", line)
+		}
+	}
+}
+
 func TestTerminalModalRendererDoesNotDuplicateCloseHintWithoutActions(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})

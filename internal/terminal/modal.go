@@ -1849,7 +1849,7 @@ func modalDocumentBodyLines(frame ModalFrame, width int) []string {
 		raw = append(raw, printableModalText(frame.Footer, true))
 	}
 	raw = append(raw, modalPriorityBodyLines(frame.Body)...)
-	appendModalDocumentNodeLines(&raw, tree.Root, "")
+	appendModalDocumentNodeLines(&raw, tree.Root, "", width)
 	return compactModalBodyLines(raw, width)
 }
 
@@ -1873,14 +1873,14 @@ func modalShortcutSummary(actions []ModalAction) string {
 	return "Shortcuts: " + strings.Join(parts, " · ") + " · ↑/↓ PgUp/PgDn Home/End Scroll"
 }
 
-func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, context string) {
+func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, context string, width int) {
 	kind := strings.TrimSpace(node.Kind)
 	switch kind {
 	case "dialog", "application", "row", "column", "stack", "group", "toolbar", "actionBar":
-		appendModalDocumentChildren(lines, node.Children, context)
+		appendModalDocumentChildren(lines, node.Children, context, width)
 	case "section", "box", "disclosure":
 		appendModalSection(lines, firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), strings.Title(kind)))
-		appendModalDocumentChildren(lines, node.Children, context)
+		appendModalDocumentChildren(lines, node.Children, context, width)
 	case "separator":
 		appendModalSeparator(lines, node)
 	case "spacer":
@@ -1891,14 +1891,14 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 		appendModalLine(lines, modalBadgeLine(node))
 	case "form":
 		appendModalSection(lines, firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), "Form"))
-		appendModalDocumentChildren(lines, node.Children, context)
+		appendModalDocumentChildren(lines, node.Children, context, width)
 	case "statusGrid", "grid":
 		label := modalStringProp(node.Props, "label")
 		if strings.Contains(strings.ToLower(label), "status cards") {
 			label = "Status cards"
 		}
 		appendModalSection(lines, firstNonEmpty(label, "Status cards"))
-		appendModalDocumentChildren(lines, node.Children, context)
+		appendModalDocumentChildren(lines, node.Children, context, width)
 	case "card":
 		appendModalCardLine(lines, node)
 	case "progress", "meter", "bar", "slider":
@@ -1933,7 +1933,7 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 			title = "Selected event"
 		}
 		appendModalSection(lines, title)
-		appendModalDocumentChildren(lines, node.Children, title)
+		appendModalDocumentChildren(lines, node.Children, title, width)
 	case "list", "tree":
 		appendModalListLines(lines, node)
 	case "timeline", "log":
@@ -1945,7 +1945,7 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 	case "keybindingHint":
 		appendModalLine(lines, modalKeybindingHintLine(node))
 	case "table":
-		appendModalTableLines(lines, node, context)
+		appendModalTableLines(lines, node, context, width)
 	case "markdown":
 		appendModalLine(lines, modalStringProp(node.Props, "markdown"))
 	case "code":
@@ -1978,13 +1978,13 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 		if title := firstNonEmpty(modalStringProp(node.Props, "title"), modalStringProp(node.Props, "label"), modalStringProp(node.Props, "message")); title != "" {
 			appendModalLine(lines, title)
 		}
-		appendModalDocumentChildren(lines, node.Children, context)
+		appendModalDocumentChildren(lines, node.Children, context, width)
 	}
 }
 
-func appendModalDocumentChildren(lines *[]string, children []modalDocumentNode, context string) {
+func appendModalDocumentChildren(lines *[]string, children []modalDocumentNode, context string, width int) {
 	for _, child := range children {
-		appendModalDocumentNodeLines(lines, child, context)
+		appendModalDocumentNodeLines(lines, child, context, width)
 	}
 }
 
@@ -2230,7 +2230,7 @@ func modalValueSummary(value any) string {
 	return firstNonEmpty(modalStringProp(entry, "label"), modalStringProp(entry, "title"), modalStringProp(entry, "message"), modalStringProp(entry, "value"), modalStringProp(entry, "id"))
 }
 
-func appendModalTableLines(lines *[]string, node modalDocumentNode, context string) {
+func appendModalTableLines(lines *[]string, node modalDocumentNode, context string, width int) {
 	label := modalStringProp(node.Props, "label")
 	if strings.EqualFold(context, "Metadata timeline") && strings.EqualFold(label, "Timeline table") {
 		label = "Metadata timeline table"
@@ -2253,14 +2253,9 @@ func appendModalTableLines(lines *[]string, node modalDocumentNode, context stri
 		}
 		headers = append(headers, header)
 	}
-	columnWidths := modalTableColumnWidths(headers, 0)
-	if len(headers) > 0 {
-		appendModalLine(lines, modalTableRow(headers, columnWidths))
-		appendModalLine(lines, modalTableDivider(columnWidths))
-	}
+	tableRows := make([][]string, 0, minInt(len(rows), 10))
 	for index, row := range rows {
 		if index >= 10 {
-			appendModalLine(lines, fmt.Sprintf("… %d more row(s)", len(rows)-index))
 			break
 		}
 		entry, _ := row.(map[string]any)
@@ -2272,7 +2267,18 @@ func appendModalTableLines(lines *[]string, node modalDocumentNode, context stri
 		for _, id := range columnIDs {
 			cells = append(cells, modalTableCellValue(id, cellValues[id]))
 		}
+		tableRows = append(tableRows, cells)
+	}
+	columnWidths := modalTableColumnWidths(headers, tableRows, width)
+	if len(headers) > 0 {
+		appendModalLine(lines, modalTableRow(headers, columnWidths))
+		appendModalLine(lines, modalTableDivider(columnWidths))
+	}
+	for _, cells := range tableRows {
 		appendModalLine(lines, modalTableRow(cells, columnWidths))
+	}
+	if len(rows) > len(tableRows) {
+		appendModalLine(lines, fmt.Sprintf("… %d more row(s)", len(rows)-len(tableRows)))
 	}
 }
 
@@ -2411,17 +2417,45 @@ func modalProgressBar(value any) string {
 	return strings.Repeat("█", filled) + strings.Repeat("░", 10-filled)
 }
 
-func modalTableColumnWidths(headers []string, _ int) []int {
-	defaults := []int{20, 9, 30, 8, 8, 7}
+func modalTableColumnWidths(headers []string, rows [][]string, available int) []int {
+	if len(headers) == 0 {
+		return nil
+	}
+	separatorWidth := maxInt(0, len(headers)-1) * lipgloss.Width(" │ ")
+	available = maxInt(len(headers), available-separatorWidth)
 	widths := make([]int, len(headers))
-	for i := range headers {
-		if i < len(defaults) {
-			widths[i] = defaults[i]
-		} else {
-			widths[i] = 12
+	for i, header := range headers {
+		widths[i] = clampInt(lipgloss.Width(header), 3, 24)
+	}
+	for _, row := range rows {
+		for i, cell := range row {
+			if i >= len(widths) {
+				break
+			}
+			widths[i] = minInt(32, maxInt(widths[i], lipgloss.Width(cell)))
 		}
 	}
+	for modalWidthSum(widths) > available {
+		largest := 0
+		for i := range widths {
+			if widths[i] > widths[largest] {
+				largest = i
+			}
+		}
+		if widths[largest] <= 3 {
+			break
+		}
+		widths[largest]--
+	}
 	return widths
+}
+
+func modalWidthSum(values []int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total
 }
 
 func modalTableRow(cells []string, widths []int) string {
