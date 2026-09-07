@@ -351,7 +351,7 @@ const visualScreen = (value, titlePattern = null) => {
 const capturedScreens = () => [
   ["Modal overlay full screen", extractOverlayEvidence(modalOpenRaw, /Afterburner Black Box Live/gi)],
   ["Modal open screen", visualScreen(modalOpenRaw, /Afterburner Black Box Live/gi)],
-  ...focusSteps.map(step => [step.title, visualScreen(focusRaw[step.name], /Afterburner Black Box (?:Live|Doctor)/gi)]),
+  ...focusSteps.map(step => [step.title, renderTerminalScreen(focusRaw[step.name])]),
   ...scrollSteps.map(step => [step.title, visualScreen(scrollRaw[step.name], /Afterburner Black Box Live/gi)]),
   ["Refresh action screen", visualScreen(refreshRaw, /Afterburner Black Box Live/gi)],
   ["Doctor overlay full screen", extractOverlayEvidence(doctorRaw, /Afterburner Black Box Doctor/gi)],
@@ -396,6 +396,7 @@ const visualInspectionChecks = () => {
     .join("\n");
   const modalOverlayGeometry = modalGeometry(modalOverlayScreen);
   const doctorOverlayGeometry = modalGeometry(doctorOverlayScreen);
+  const focusScreens = Object.fromEntries(focusSteps.map(step => [step.name, screens[step.title] ?? ""]));
   const checks = {
     modalPreservesBackdrop: /Afterburner Black Box Live/i.test(modalOverlayScreen) && /(?:Copilot v|\/ commands|open sidebar)/i.test(modalOverlayScreen),
     doctorPreservesBackdrop: /Afterburner Black Box Doctor/i.test(doctorOverlayScreen) && /(?:Copilot v|\/ commands|open sidebar)/i.test(doctorOverlayScreen),
@@ -416,6 +417,11 @@ const visualInspectionChecks = () => {
     modalShowsSelectedEventSummary: /Selected event/i.test(modalFlowScreens) && /session\.info|extension\.discovered|session\.model_change|event|milestone/i.test(modalFlowScreens),
     modalShowsTimelineTable: /Metadata timeline table/i.test(modalScreen) && /Time\s+│\s+Kind\s+│\s+Event\s+│\s+Severity\s+│\s+Duration\s+│\s+Success/i.test(modalScreen),
     modalShowsScrollPosition: /lines \d+-\d+ of \d+/i.test(modalScreen),
+    everyFocusScreenCaptured: focusSteps.every(step => Boolean(screens[step.title])),
+    focusTabShowsDoctor: /▶\s*\[d\] Doctor\s*◀/i.test(focusScreens.focusDoctor),
+    focusShiftTabShowsRefresh: /▶\s*\[r\] Refresh\s*◀/i.test(focusScreens.focusRefresh),
+    focusSpaceActivatesRefresh: /Storage usage:[\s\S]*▶\s*\[r\] Refresh\s*◀/i.test(focusScreens.spaceRefresh),
+    focusEnterActivatesDoctor: /▌\s*Doctor|"healthy"/i.test(focusScreens.enterDoctor),
     everyScrollScreenCaptured: scrollSteps.every(step => Boolean(screens[step.title])),
     refreshScreenCaptured: /Afterburner Black Box Live/i.test(screens["Refresh action screen"] ?? ""),
     doctorScreenCaptured: /Afterburner Black Box Doctor/i.test(doctorScreen),
