@@ -28,20 +28,19 @@ test("session extension exposes one management command with menu actions", async
     const source = await readFile(new URL("../extensions/CopilotOpenAI/extension.mjs", import.meta.url), "utf8");
     const wrapper = await readFile(new URL("../com.github.copilot/extensions/CopilotOpenAI/extension.mjs", import.meta.url), "utf8");
     const wrappers = await readdir(new URL("../com.github.copilot/extensions", import.meta.url), { withFileTypes: true });
-    assert.doesNotMatch(source, /createCanvas/);
-    assert.match(source, /canvases:\s*\[\]/);
+    assert.match(source, /createCanvas/);
+    assert.match(source, /canvases:\s*\[managementCanvas\]/);
     const commandNames = [...source.matchAll(/name:\s*"(copilot-openai[^"]*)"/g)].map(match => match[1]);
     assert.deepEqual(commandNames, ["copilot-openai"]);
     for (const removed of ["copilot-openai-start", "copilot-openai-stop", "copilot-openai-doctor"]) {
         assert.doesNotMatch(source, new RegExp(`name:\\s*"${removed}"`));
     }
-    assert.match(source, /\/copilot-openai\s+Open this management panel and start\/reuse the bridge/);
-    assert.match(source, /status refreshed/);
-    assert.match(source, /localhost bridge started or reused/);
-    assert.match(source, /sanitized diagnostics displayed below/);
-    assert.match(source, /Diagnostics:/);
-    assert.match(source, /Ready: \/copilot-openai endpoint=/);
-    assert.match(source, /management menu/i);
+    assert.match(source, /session\.rpc\.canvas\.open/);
+    assert.match(source, /afterburner-copilot-openai-menu/);
+    for (const action of ["start", "stop", "status", "doctor"]) {
+        assert.match(source, new RegExp(`name:\\s*"${action}"`));
+    }
+    assert.match(source, /interactive management menu/i);
     assert.doesNotMatch(source, /\/copilot-openai (?:start|stop|status|doctor)/);
     assert.deepEqual(wrappers.filter(entry => entry.isDirectory()).map(entry => entry.name), ["CopilotOpenAI"]);
     assert.equal(wrapper.trim(), "export * from \"../../../extensions/CopilotOpenAI/extension.mjs\";");

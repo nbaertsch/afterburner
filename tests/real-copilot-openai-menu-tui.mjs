@@ -270,12 +270,11 @@ const finish = (exitCode, message) => {
       wrapperFiles: existsSync(join(activePath, "com.github.copilot", "extensions")) ? readdirSync(join(activePath, "com.github.copilot", "extensions")) : []
     },
     assertions: {
-      oneSlashCommandMenuVisible: /\/copilot-openai/i.test(plain),
-      noGenericCanvasOpened: !/Canvas opened:/i.test(plain),
-      bridgeReady: /Ready:\s*\/copilot-openai[\s\S]*active=true/i.test(plain),
-      statusDisplayed: /status refreshed/i.test(plain) || /Ready:\s*\/copilot-openai/i.test(plain),
-      diagnosticsDisplayed: /diagnostics=sanitized/i.test(plain),
-      endpointDisplayed: /endpoint=127\.0\.0\.1:\d+/i.test(plain) || /"endpoint"\s*:\s*"127\.0\.0\.1:\d+"/i.test(plain)
+      oneSlashCommandMenuVisible: ioEvents.some(event => event.type === "input" && event.display.includes("/copilot-openai")),
+      interactiveCanvasOpened: /Canvas opened:\s*Copilot OpenAI Bridge/i.test(plain),
+      noTextFallback: !/interactive menu could not open|Ready:\s*\/copilot-openai|Diagnostics:/i.test(plain),
+      packageHasCanvasCapability: (entry?.manifest?.capabilities ?? []).includes("canvas"),
+      packageHasOneWrapper: (existsSync(join(activePath, "com.github.copilot", "extensions")) ? readdirSync(join(activePath, "com.github.copilot", "extensions")) : []).join(",") === "CopilotOpenAI"
     },
     operatorSteps,
     artifacts: {
@@ -337,13 +336,13 @@ child.onData(data => {
     writeInput("\r\n", "retry /copilot-openai submit");
   }
   if (commandSentAt && !menuSeenAt && /Unknown command:\s*\/copilot-openai/i.test(recent)) return finish(1, "Copilot rejected /copilot-openai as an unknown command");
-  if (/Canvas opened:/i.test(recent)) return finish(1, "Copilot opened a generic canvas instead of showing the management menu in terminal output");
+  if (commandSentAt && !menuSeenAt && /interactive menu could not open/i.test(recent)) return finish(1, "CopilotOpenAI reported that the interactive menu could not open");
 
-  const menuReady = /Ready:\s*\/copilot-openai[\s\S]*endpoint=127\.0\.0\.1:\d+[\s\S]*active=true[\s\S]*diagnostics=sanitized/i.test(text);
+  const menuReady = /Canvas opened:\s*Copilot OpenAI Bridge/i.test(text);
   if (commandSentAt && !menuSeenAt && menuReady) {
     menuSeenAt = Date.now();
-    recordStep("open management panel", "/copilot-openai", commandSentAt, menuSeenAt, ["single command management panel visible", "bridge ready", "endpoint visible", "sanitized diagnostics visible", "no generic canvas message"]);
-    finish(0, `real-copilot-openai-menu-tui-ok readyLatencyMs=${menuSeenAt - commandSentAt} report=${artifactPath("copilot-openai-menu-tui-report.png")}`);
+    recordStep("open interactive canvas menu", "/copilot-openai", commandSentAt, menuSeenAt, ["single slash command accepted", "interactive Copilot OpenAI Bridge canvas opened", "no static text fallback"]);
+    finish(0, `real-copilot-openai-menu-tui-ok menuOpenLatencyMs=${menuSeenAt - commandSentAt} report=${artifactPath("copilot-openai-menu-tui-report.png")}`);
   }
 });
 

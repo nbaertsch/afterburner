@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createCanvas } from "@github/copilot-sdk";
 import { joinSession } from "@github/copilot-sdk/extension";
 import { CopilotSessionAdapter, createBridge, loadConfig } from "./bridge.mjs";
 
@@ -54,51 +55,109 @@ function formatStatus(snapshot = status()) {
     return `Copilot OpenAI bridge listening at ${snapshot.url}; requests=${snapshot.requestCount}; errors=${snapshot.errorCount}; models=${snapshot.modelCount}.`;
 }
 
-function menuText(snapshot = status(), detail = undefined) {
+function menuStatus(snapshot = status(), detail = undefined) {
     const active = snapshot?.active === true;
+    return [
+        `State: ${active ? "running" : "stopped"}`,
+        `Endpoint: ${snapshot?.endpoint ?? "not allocated"}`,
+        `Models: ${snapshot?.modelCount ?? 0}`,
+        `Requests: ${snapshot?.requestCount ?? 0}`,
+        `Errors: ${snapshot?.errorCount ?? 0}`,
+        detail ? `Detail: ${detail}` : undefined
+    ].filter(Boolean).join(" · ");
+}
+
+function menuBody(snapshot = status(), detail = undefined) {
     return [
         "Copilot OpenAI Bridge management",
         "=================================",
-        `State   : ${active ? "running" : "stopped"}`,
-        `Endpoint: ${snapshot?.endpoint ?? "not allocated"}`,
-        `Models  : ${snapshot?.modelCount ?? 0}`,
-        `Requests: ${snapshot?.requestCount ?? 0}`,
-        `Errors  : ${snapshot?.errorCount ?? 0}`,
-        `API key : ${snapshot?.apiKeyRequired ? "required" : "not required"}`,
-        `Config  : ${configuredPath}`,
-        detail ? `Detail  : ${detail}` : "",
+        menuStatus(snapshot, detail),
+        `API key: ${snapshot?.apiKeyRequired ? "required" : "not required"}`,
+        `Config: ${configuredPath}`,
         "",
-        "Use one command:",
-        "  /copilot-openai   Open this management panel and start/reuse the bridge",
-        "",
-        "Panel actions performed:",
-        "  ✓ status refreshed",
-        "  ✓ localhost bridge started or reused",
-        "  ✓ sanitized diagnostics displayed below"
-    ].filter(Boolean).join("\n");
+        "Interactive actions:",
+        "• Start / reuse bridge",
+        "• Stop bridge",
+        "• Refresh status",
+        "• Doctor diagnostics"
+    ].join("\n");
 }
 
-async function handleMenuCommand(input) {
-    const action = commandText(input).replace(/^\/?copilot-openai\b/i, "").trim().split(/\s+/).filter(Boolean)[0]?.toLowerCase() || "open";
-    if (action !== "open" && action !== "menu" && action !== "help") {
-        await session.log(menuText(status(), `unsupported typed action '${action}'; use /copilot-openai to open the managed bridge panel`));
-        return;
+async function canvasState(detail = undefined) {
+    const snapshot = status();
+    return {
+        title: "Copilot OpenAI Bridge",
+        status: menuStatus(snapshot, detail),
+        body: menuBody(snapshot, detail),
+        diagnostics: snapshot
+    };
+}
+
+const managementCanvas = createCanvas({
+    id: "afterburner-copilot-openai-menu",
+    displayName: "Copilot OpenAI Bridge",
+    description: "Interactive management menu for the localhost OpenAI-compatible Copilot bridge.",
+    actions: [
+        {
+            name: "start",
+            label: "Start",
+            description: "Start or reuse the localhost bridge.",
+            handler: async () => canvasState(`bridge ready at ${(await startBridge()).endpoint ?? "not allocated"}`)
+        },
+        {
+            name: "stop",
+            label: "Stop",
+            description: "Stop this session's bridge listener.",
+            handler: async () => {
+                await bridge?.stop?.();
+                return canvasState("bridge stopped");
+            }
+        },
+        {
+            name: "status",
+            label: "Status",
+            description: "Refresh bridge status.",
+            handler: async () => canvasState("status refreshed")
+        },
+        {
+            name: "doctor",
+            label: "Doctor",
+            description: "Show sanitized bridge diagnostics.",
+            handler: async () => ({ ...(await canvasState("diagnostics refreshed")), diagnostics: status() })
+        }
+    ],
+    open: async () => {
+        const snapshot = await startBridge();
+        return {
+            title: "Copilot OpenAI Bridge",
+            status: menuStatus(snapshot, "interactive menu open"),
+            body: menuBody(snapshot, "interactive menu open"),
+            diagnostics: status()
+        };
     }
-    const snapshot = await startBridge();
-    const diagnostics = status();
-    const summary = `Ready: /copilot-openai endpoint=${diagnostics.endpoint ?? "not allocated"} active=${diagnostics.active === true} diagnostics=sanitized`;
-    await session.log(`${menuText(snapshot, "bridge ready")}\n\nDiagnostics:\n${JSON.stringify(diagnostics, null, 2)}\n\n${summary}`);
+});
+
+async function handleMenuCommand() {
+    try {
+        await session.rpc.canvas.open({
+            canvasId: "afterburner-copilot-openai-menu",
+            instanceId: "afterburner-copilot-openai-menu",
+            input: { openedFrom: "/copilot-openai" }
+        });
+    } catch (error) {
+        await session.log(`Copilot OpenAI interactive menu could not open: ${error?.message ?? String(error)}`);
+    }
 }
 
 session = await joinSession({
     commands: [
         {
             name: "copilot-openai",
-            description: "Open and operate the Copilot OpenAI bridge management menu.",
+            description: "Open the interactive Copilot OpenAI bridge management menu.",
             handler: handleMenuCommand
         }
     ],
-    canvases: []
+    canvases: [managementCanvas]
 });
 
 if ((await readConfig()).enabled === true) {

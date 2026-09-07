@@ -16,7 +16,7 @@ Inside the Copilot session, use the single management command:
 /copilot-openai
 ```
 
-That command opens the Copilot OpenAI Bridge management panel, starts or reuses the localhost bridge, refreshes status, and prints sanitized diagnostics. The default URL is `http://127.0.0.1:41425`. Set `AFTERBURNER_COPILOT_OPENAI_PORT` or create `~\.afterburner\config\copilot-openai.json` to choose another port.
+That command opens the interactive Copilot OpenAI Bridge management menu. The menu provides Start, Stop, Status, and Doctor actions and starts or reuses the localhost bridge when opened. The default URL is `http://127.0.0.1:41425`. Set `AFTERBURNER_COPILOT_OPENAI_PORT` or create `~\.afterburner\config\copilot-openai.json` to choose another port.
 
 ## Config
 
