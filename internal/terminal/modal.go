@@ -1206,14 +1206,15 @@ func renderModalFrame(snapshot TerminalSnapshot, frame ModalFrame, scrollOffset 
 	maxScroll := maxInt(0, len(bodyLines)-layout.bodyRows)
 	scrollOffset = clampInt(scrollOffset, 0, maxScroll)
 
+	styles := newModalStyles()
 	var out strings.Builder
 	out.WriteString("\x1b[?25l\x1b[0m\x1b[H")
-	writeBackdrop(&out, snapshot, layout.cols, layout.rows)
-	writeModalShadow(&out, layout)
+	writeBackdrop(&out, snapshot, layout.cols, layout.rows, styles)
+	writeModalShadow(&out, layout, styles)
 	if layout.compact {
-		writeCompactModalPanel(&out, layout, frame)
+		writeCompactModalPanel(&out, layout, frame, styles)
 	} else {
-		writeEnterpriseModalPanel(&out, layout, frame, bodyLines, scrollOffset, maxScroll)
+		writeEnterpriseModalPanel(&out, layout, frame, bodyLines, scrollOffset, maxScroll, styles)
 	}
 	out.WriteString("\x1b[0m\x1b[?25h")
 	return out.String(), scrollOffset
@@ -1339,8 +1340,7 @@ func newModalStyles() modalStyles {
 	}
 }
 
-func writeBackdrop(out *strings.Builder, snapshot TerminalSnapshot, cols, rows int) {
-	styles := newModalStyles()
+func writeBackdrop(out *strings.Builder, snapshot TerminalSnapshot, cols, rows int, styles modalStyles) {
 	for row := 0; row < rows; row++ {
 		line := ""
 		if row < len(snapshot.Rows) {
@@ -1370,11 +1370,10 @@ func terminalSnapshotRowString(row []TerminalCell) string {
 	return strings.TrimRight(line.String(), " ")
 }
 
-func writeModalShadow(out *strings.Builder, layout modalLayout) {
+func writeModalShadow(out *strings.Builder, layout modalLayout, styles modalStyles) {
 	if layout.panelWidth < 4 || layout.panelHeight < 3 {
 		return
 	}
-	styles := newModalStyles()
 	shadowCell := styles.shadow.Render(" ")
 	for row := 1; row < layout.panelHeight && layout.top+row <= layout.rows; row++ {
 		col := layout.left + layout.panelWidth
@@ -1393,8 +1392,7 @@ func writeModalShadow(out *strings.Builder, layout modalLayout) {
 	}
 }
 
-func writeCompactModalPanel(out *strings.Builder, layout modalLayout, frame ModalFrame) {
-	styles := newModalStyles()
+func writeCompactModalPanel(out *strings.Builder, layout modalLayout, frame ModalFrame, styles modalStyles) {
 	width := layout.panelWidth
 	if width < 1 {
 		return
@@ -1423,25 +1421,23 @@ func writeCompactModalPanel(out *strings.Builder, layout modalLayout, frame Moda
 	writeModalLine(out, layout.top+layout.panelHeight-1, layout.left, width, styles.border, "╰"+strings.Repeat("─", width-2)+"╯")
 }
 
-func writeEnterpriseModalPanel(out *strings.Builder, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int) {
-	styles := newModalStyles()
+func writeEnterpriseModalPanel(out *strings.Builder, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int, styles modalStyles) {
 	writeModalLine(out, layout.top, layout.left, layout.panelWidth, styles.border, "╭"+strings.Repeat("─", layout.panelWidth-2)+"╮")
 	for row := 1; row < layout.panelHeight-1; row++ {
 		writeModalLine(out, layout.top+row, layout.left, layout.panelWidth, styles.panel, "│"+strings.Repeat(" ", layout.panelWidth-2)+"│")
 	}
 	writeModalLine(out, layout.top+layout.panelHeight-1, layout.left, layout.panelWidth, styles.border, "╰"+strings.Repeat("─", layout.panelWidth-2)+"╯")
 
-	writeModalHeader(out, layout, frame, bodyLines, scrollOffset, maxScroll)
+	writeModalHeader(out, layout, frame, bodyLines, scrollOffset, maxScroll, styles)
 	separatorRow := layout.top + 1 + layout.headerRows
 	if layout.separatorRows > 0 {
 		writeModalText(out, separatorRow, layout.innerLeft, layout.innerWidth, styles.muted, strings.Repeat("─", layout.innerWidth))
 	}
-	writeModalBody(out, layout, bodyLines, scrollOffset)
-	writeModalFooter(out, layout, frame, maxScroll)
+	writeModalBody(out, layout, bodyLines, scrollOffset, styles)
+	writeModalFooter(out, layout, frame, maxScroll, styles)
 }
 
-func writeModalHeader(out *strings.Builder, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int) {
-	styles := newModalStyles()
+func writeModalHeader(out *strings.Builder, layout modalLayout, frame ModalFrame, bodyLines []string, scrollOffset, maxScroll int, styles modalStyles) {
 	title := printableModalText(firstNonEmpty(frame.Title, "Modal"), false)
 	status := printableModalText(frame.Status, false)
 	if status == "" {
@@ -1466,8 +1462,7 @@ func writeModalHeader(out *strings.Builder, layout modalLayout, frame ModalFrame
 	writeModalText(out, layout.top+2, layout.innerLeft, layout.innerWidth, styles.muted, subtitle)
 }
 
-func writeModalBody(out *strings.Builder, layout modalLayout, bodyLines []string, scrollOffset int) {
-	styles := newModalStyles()
+func writeModalBody(out *strings.Builder, layout modalLayout, bodyLines []string, scrollOffset int, styles modalStyles) {
 	bodyStart := layout.top + 1 + layout.headerRows + layout.separatorRows
 	if layout.bodyRows <= 0 {
 		return
@@ -1495,11 +1490,10 @@ func writeModalBody(out *strings.Builder, layout modalLayout, bodyLines []string
 	}
 }
 
-func writeModalFooter(out *strings.Builder, layout modalLayout, frame ModalFrame, maxScroll int) {
+func writeModalFooter(out *strings.Builder, layout modalLayout, frame ModalFrame, maxScroll int, styles modalStyles) {
 	if layout.footerRows <= 0 {
 		return
 	}
-	styles := newModalStyles()
 	row := layout.footerStartRow
 	if row < layout.top+layout.panelHeight-1 {
 		writeModalText(out, row, layout.innerLeft, layout.innerWidth, styles.muted, strings.Repeat("─", layout.innerWidth))
