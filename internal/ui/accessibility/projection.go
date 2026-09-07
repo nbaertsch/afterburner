@@ -133,7 +133,7 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 	addAriaAliases(node.States, node.Relations, source.Props)
 	addInputStates(node.States, source.Kind, source.Props)
 	if isDialogKind(source.Kind) {
-		node.States["modal"] = fmt.Sprint(boolProp(source.Props, "modal", false))
+		node.States["modal"] = fmt.Sprint(modalProp(source.Props))
 	}
 	if source.Kind == "loading" || source.Kind == "spinner" {
 		node.States["busy"] = "true"
@@ -413,7 +413,7 @@ func keyboardForKind(kind string, props map[string]any) []Shortcut {
 		return []Shortcut{{Key: "Arrow keys", Description: "navigate terminal history"}, {Key: "PageUp/PageDown", Description: "page terminal output"}, {Key: "Tab", Description: "leave terminal"}}
 	case "dialog", "confirmation", "prompt":
 		shortcuts := []Shortcut{{Key: "Esc", Description: "dismiss"}}
-		if boolProp(props, "modal", false) {
+		if modalProp(props) {
 			shortcuts = append(shortcuts, Shortcut{Key: "Tab", Description: "cycle focus"})
 		}
 		return shortcuts
@@ -535,6 +535,7 @@ func addAriaAliases(states map[string]string, relations map[string][]string, pro
 		"busy":       {"ariaBusy", "aria-busy"},
 		"grabbed":    {"ariaGrabbed", "aria-grabbed", "grabbed"},
 		"dropEffect": {"ariaDropEffect", "aria-dropeffect", "dropEffect"},
+		"hasPopup":   {"ariaHasPopup", "aria-haspopup", "hasPopup"},
 	} {
 		if value := stringPropAny(props, keys...); value != "" {
 			states[state] = value
@@ -606,6 +607,10 @@ func addAriaAliases(states map[string]string, relations map[string][]string, pro
 	}
 }
 
+func modalProp(props map[string]any) bool {
+	return boolPropAny(props, false, "ariaModal", "aria-modal", "modal")
+}
+
 func boolProp(props map[string]any, key string, fallback bool) bool {
 	if props == nil {
 		return fallback
@@ -618,6 +623,15 @@ func boolProp(props map[string]any, key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func boolPropAny(props map[string]any, fallback bool, keys ...string) bool {
+	for _, key := range keys {
+		if _, ok := props[key]; ok {
+			return boolProp(props, key, fallback)
+		}
+	}
+	return fallback
 }
 
 func stringProp(props map[string]any, key string) string {
