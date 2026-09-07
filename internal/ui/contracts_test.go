@@ -65,6 +65,33 @@ func TestPublicContractsGolden(t *testing.T) {
 	}
 }
 
+func TestComponentSchemaKindsMatchPublicCatalog(t *testing.T) {
+	schema := readJSON(t, filepath.Join("..", "..", "schemas", "ui-component-v1.schema.json"))
+	defs, ok := schema["$defs"].(map[string]any)
+	if !ok {
+		t.Fatal("schema missing $defs")
+	}
+	kindDef, ok := defs["kind"].(map[string]any)
+	if !ok {
+		t.Fatal("schema missing $defs.kind")
+	}
+	enumValues, ok := kindDef["enum"].([]any)
+	if !ok {
+		t.Fatal("schema $defs.kind.enum is not an array")
+	}
+	var schemaKinds []string
+	for _, value := range enumValues {
+		schemaKinds = append(schemaKinds, value.(string))
+	}
+	var catalogKinds []string
+	for _, entry := range component.PublicCatalog() {
+		catalogKinds = append(catalogKinds, string(entry.Kind))
+	}
+	if !reflect.DeepEqual(schemaKinds, catalogKinds) {
+		t.Fatalf("schema component kinds differ from public catalog\n--- schema\n%v\n--- catalog\n%v", schemaKinds, catalogKinds)
+	}
+}
+
 func TestSchemaFixturesValidateAndUnmarshal(t *testing.T) {
 	cases := []struct {
 		schema  string
