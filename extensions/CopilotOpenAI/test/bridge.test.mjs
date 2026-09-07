@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile, readdir } from "node:fs/promises";
 import { test } from "node:test";
 import { CopilotSessionAdapter, createBridge, loadConfig, normalizeModel } from "../extensions/CopilotOpenAI/bridge.mjs";
 
@@ -21,6 +22,32 @@ test("loadConfig enforces localhost binding and valid ports", () => {
     assert.equal(loadConfig({ port: 0 }).host, "127.0.0.1");
     assert.throws(() => loadConfig({ host: "0.0.0.0" }), /localhost/);
     assert.throws(() => loadConfig({ port: 70000 }), /port/);
+});
+
+test("session extension exposes one management command with menu actions", async () => {
+    const source = await readFile(new URL("../extensions/CopilotOpenAI/extension.mjs", import.meta.url), "utf8");
+    const wrapper = await readFile(new URL("../com.github.copilot/extensions/CopilotOpenAI/extension.mjs", import.meta.url), "utf8");
+    const wrappers = await readdir(new URL("../com.github.copilot/extensions", import.meta.url), { withFileTypes: true });
+    assert.doesNotMatch(source, /createCanvas/);
+    assert.match(source, /canvases:\s*\[\]/);
+    const commandNames = [...source.matchAll(/name:\s*"(copilot-openai[^"]*)"/g)].map(match => match[1]);
+    assert.deepEqual(commandNames, ["copilot-openai"]);
+    for (const removed of ["copilot-openai-start", "copilot-openai-stop", "copilot-openai-doctor"]) {
+        assert.doesNotMatch(source, new RegExp(`name:\\s*"${removed}"`));
+    }
+    assert.match(source, /\/copilot-openai\s+Open this management panel and start\/reuse the bridge/);
+    assert.match(source, /status refreshed/);
+    assert.match(source, /localhost bridge started or reused/);
+    assert.match(source, /sanitized diagnostics displayed below/);
+    assert.match(source, /Diagnostics:/);
+    assert.match(source, /Ready: \/copilot-openai endpoint=/);
+    assert.match(source, /management menu/i);
+    assert.doesNotMatch(source, /\/copilot-openai (?:start|stop|status|doctor)/);
+    assert.deepEqual(wrappers.filter(entry => entry.isDirectory()).map(entry => entry.name), ["CopilotOpenAI"]);
+    assert.equal(wrapper.trim(), "export * from \"../../../extensions/CopilotOpenAI/extension.mjs\";");
+    assert.doesNotMatch(wrapper, /activateExtension\(|export const instance/);
+    assert.match(source, /session\s*=\s*await joinSession/);
+    assert.doesNotMatch(source, /export async function activate/);
 });
 
 test("normalizes Copilot catalog entries into OpenAI model objects", () => {
@@ -53,6 +80,7 @@ test("serves /v1/models from adapter", async () => {
         assert.equal(response.status, 200);
         assert.equal(body.object, "list");
         assert.equal(body.data[0].id, "copilot-test");
+        assert.match(bridge.healthSnapshot().endpoint, /^127\.0\.0\.1:\d+$/);
     });
 });
 

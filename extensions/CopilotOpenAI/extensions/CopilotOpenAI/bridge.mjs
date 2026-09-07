@@ -167,6 +167,7 @@ export function createBridge({ adapter, config = {}, logger = undefined, identit
             active: state.active,
             shared: state.shared,
             url: state.url,
+            endpoint: state.active && state.port ? `${effective.host}:${state.port}` : null,
             requestCount: state.requestCount,
             errorCount: state.errorCount,
             lastError: state.lastError,

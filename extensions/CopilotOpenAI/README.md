@@ -10,16 +10,13 @@ afterburn extension enable copilot-openai
 afterburn
 ```
 
-Inside the Copilot session:
+Inside the Copilot session, use the single management command:
 
 ```text
-/copilot-openai-start
 /copilot-openai
-/copilot-openai-doctor
-/copilot-openai-stop
 ```
 
-The default URL is `http://127.0.0.1:41425`. Set `AFTERBURNER_COPILOT_OPENAI_PORT` or create `~\.afterburner\config\copilot-openai.json` to choose another port.
+That command opens the Copilot OpenAI Bridge management panel, starts or reuses the localhost bridge, refreshes status, and prints sanitized diagnostics. The default URL is `http://127.0.0.1:41425`. Set `AFTERBURNER_COPILOT_OPENAI_PORT` or create `~\.afterburner\config\copilot-openai.json` to choose another port.
 
 ## Config
 
@@ -33,7 +30,7 @@ The default URL is `http://127.0.0.1:41425`. Set `AFTERBURNER_COPILOT_OPENAI_POR
 }
 ```
 
-`enabled: true` starts the bridge automatically when the session extension loads. Without it, use `/copilot-openai-start`. The bridge only binds to localhost. If `requireApiKey` is true, clients must send `Authorization: Bearer <apiKey>`. If the live SDK does not expose a lower-level chat RPC, `/v1/chat/completions` uses the active session's `sendAndWait` API.
+`enabled: true` starts the bridge automatically when the session extension loads. Without it, use `/copilot-openai` to open the management panel and start or reuse the bridge. The bridge only binds to localhost. If `requireApiKey` is true, clients must send an `Authorization: Bearer <token>` header. If the live SDK does not expose a lower-level chat RPC, `/v1/chat/completions` uses the active session's `sendAndWait` API.
 
 ## Endpoints
 
