@@ -54,8 +54,9 @@ test("TypeScript declarations cover public SDK catalogs and builders", async () 
   }
 });
 
-test("surface descriptors reject unknown supported component kinds", () => {
+test("surface descriptors reject unknown supported component kinds and required capabilities", () => {
   assert.throws(() => validateSurfaceDescriptor({ id: "panel", kind: "panel", supportedComponents: ["text", "madeUpWidget"] }), /Unknown supported component kind 'madeUpWidget'/);
+  assert.throws(() => validateSurfaceDescriptor({ id: "panel", kind: "panel", requiredCapabilities: ["ui.surface.pnael"] }), /Unknown required capability 'ui.surface.pnael'/);
 });
 
 test("builders cover the full W0 component catalog and produce stable IDs", () => {

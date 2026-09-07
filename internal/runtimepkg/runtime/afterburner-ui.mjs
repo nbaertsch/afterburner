@@ -158,6 +158,7 @@ export const streamLifecycles = Object.freeze(["opening", "open", "draining", "c
 
 const componentKindSet = new Set(componentKinds);
 const surfaceKindSet = new Set(surfaceKinds);
+const capabilityKindSet = new Set(capabilityKinds);
 const envelopeKindSet = new Set(envelopeKinds);
 const actionEffectSet = new Set(actionEffects);
 const dataSourceKindSet = new Set(dataSourceKinds);
@@ -808,6 +809,9 @@ export function validateSurfaceDescriptor(descriptor) {
   if (!surfaceKindSet.has(descriptor.kind)) fail("ui.invalidEnvelope", `Unknown surface kind '${String(descriptor.kind)}'.`);
   for (const kind of descriptor.supportedComponents ?? []) {
     if (!componentKindSet.has(kind)) fail("ui.unknownComponentKind", `Unknown supported component kind '${String(kind)}'.`);
+  }
+  for (const capability of descriptor.requiredCapabilities ?? []) {
+    if (!capabilityKindSet.has(capability)) fail("ui.invalidEnvelope", `Unknown required capability '${String(capability)}'.`);
   }
   for (const action of descriptor.actions ?? []) validateActionDescriptor(action);
   for (const source of descriptor.dataSources ?? []) validateDataSourceDescriptor(source);

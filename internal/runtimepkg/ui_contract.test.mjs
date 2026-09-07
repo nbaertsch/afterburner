@@ -43,8 +43,9 @@ test("runtime SDK component kinds stay aligned with JSON schema", async () => {
   assert.deepEqual(schema.$defs.kind.enum, publicKinds);
 });
 
-test("runtime SDK rejects unknown supported surface components", () => {
+test("runtime SDK rejects unknown supported surface components and required capabilities", () => {
   assert.throws(() => ui.validateSurfaceDescriptor({ id: "panel", kind: "panel", supportedComponents: ["text", "madeUpWidget"] }), /Unknown supported component kind 'madeUpWidget'/);
+  assert.throws(() => ui.validateSurfaceDescriptor({ id: "panel", kind: "panel", requiredCapabilities: ["ui.surface.pnael"] }), /Unknown required capability 'ui.surface.pnael'/);
 });
 
 test("runtime SDK surface catalog stays aligned with extension UI schema", async () => {
