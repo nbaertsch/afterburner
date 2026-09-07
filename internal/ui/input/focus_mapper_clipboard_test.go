@@ -94,6 +94,29 @@ func TestDialogModalityControlsFocusTrapAndRestore(t *testing.T) {
 	}
 }
 
+func TestFocusOrderCoversInteractiveCatalogComponents(t *testing.T) {
+	children := make([]component.Node, 0, len(InteractiveKinds()))
+	for _, kind := range InteractiveKinds() {
+		children = append(children, node(string(kind)+"-focus", kind, nil))
+	}
+	fm := NewFocusManager()
+	fm.UpdateTree(component.Tree{SurfaceID: "s", Root: component.Node{ID: "root", Kind: component.KindApplication, Children: children}})
+	order := fm.TabOrder()
+	if len(order) != len(children) {
+		t.Fatalf("focus order should include every interactive kind: got %d want %d order=%#v", len(order), len(children), order)
+	}
+	seen := map[string]bool{}
+	for _, id := range order {
+		seen[id] = true
+	}
+	for _, kind := range InteractiveKinds() {
+		id := string(kind) + "-focus"
+		if !seen[id] {
+			t.Fatalf("focus order missing %s (%s): %#v", kind, id, order)
+		}
+	}
+}
+
 func TestEventMapperCoversInteractiveCatalogComponents(t *testing.T) {
 	for _, kind := range InteractiveKinds() {
 		t.Run(string(kind), func(t *testing.T) {

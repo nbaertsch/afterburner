@@ -360,7 +360,7 @@ func isDialogLike(kind component.Kind) bool {
 
 func defaultFocusable(kind component.Kind) bool {
 	switch string(kind) {
-	case "button", "link", "textInput", "passwordInput", "searchInput", "numberInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "dateInput", "fileInput", "table", "list", "tree", "tabs", "commandPalette", "dialog", "confirmation", "prompt", "pagination", "log", "terminal":
+	case "button", "link", "textInput", "passwordInput", "searchInput", "numberInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "dateInput", "fileInput", "form", "table", "list", "tree", "tabs", "split", "commandPalette", "dialog", "confirmation", "prompt", "pagination", "log", "toolbar", "actionBar", "contextMenu", "terminal":
 		return true
 	default:
 		return false
