@@ -26,12 +26,21 @@ func Catalog() PublicCatalog {
 	}
 }
 
+func emptyCatalog(protocol protocol.Revision) PublicCatalog {
+	return PublicCatalog{
+		Protocol:     protocol,
+		Components:   []component.CatalogEntry{},
+		Surfaces:     []surface.CatalogEntry{},
+		Capabilities: []capability.Descriptor{},
+	}
+}
+
 func FilterCatalog(catalog PublicCatalog, section string) (PublicCatalog, error) {
 	section = strings.ToLower(strings.TrimSpace(section))
 	if section == "" || section == "all" {
 		return catalog, nil
 	}
-	filtered := PublicCatalog{Protocol: catalog.Protocol}
+	filtered := emptyCatalog(catalog.Protocol)
 	switch section {
 	case "component", "components":
 		filtered.Components = catalog.Components
@@ -50,7 +59,7 @@ func SearchCatalog(catalog PublicCatalog, query string) PublicCatalog {
 	if query == "" {
 		return catalog
 	}
-	filtered := PublicCatalog{Protocol: catalog.Protocol}
+	filtered := emptyCatalog(catalog.Protocol)
 	for _, entry := range catalog.Components {
 		if catalogTextMatches(query, string(entry.Kind), string(entry.Stability), entry.Description) {
 			filtered.Components = append(filtered.Components, entry)

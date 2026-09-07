@@ -105,7 +105,7 @@ func TestUICatalogCommandCanSearch(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("Run returned code=%d err=%v output=%s", code, err, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "\"kind\": \"markdown\"") || strings.Contains(stdout.String(), "\"surfaces\": [") || strings.Contains(stdout.String(), "\"capabilities\": [") {
+	if !strings.Contains(stdout.String(), "\"kind\": \"markdown\"") || !strings.Contains(stdout.String(), "\"surfaces\": []") || !strings.Contains(stdout.String(), "\"capabilities\": []") {
 		t.Fatalf("searched JSON catalog output is wrong: %q", stdout.String())
 	}
 
