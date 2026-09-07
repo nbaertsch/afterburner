@@ -114,6 +114,7 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 			node.States[key] = valueString(value)
 		}
 	}
+	addAriaAliases(node.States, node.Relations, source.Props)
 	if isDialogKind(source.Kind) {
 		node.States["modal"] = fmt.Sprint(boolProp(source.Props, "modal", false))
 	}
@@ -467,6 +468,23 @@ func addRangeStates(states map[string]string, kind string, props map[string]any)
 	}
 }
 
+func addAriaAliases(states map[string]string, relations map[string][]string, props map[string]any) {
+	if invalid := stringProp(props, "ariaInvalid"); invalid != "" {
+		states["invalid"] = invalid
+	}
+	if current := stringProp(props, "ariaCurrent"); current != "" {
+		states["current"] = current
+	} else if current := stringProp(props, "current"); current != "" {
+		states["current"] = current
+	}
+	if labelledBy := stringListProp(props, "ariaLabelledBy", "aria-labelledby", "labelledBy"); len(labelledBy) > 0 {
+		relations["labelledBy"] = labelledBy
+	}
+	if describedBy := stringListProp(props, "ariaDescribedBy", "aria-describedby", "describedBy"); len(describedBy) > 0 {
+		relations["describedBy"] = describedBy
+	}
+}
+
 func boolProp(props map[string]any, key string, fallback bool) bool {
 	if props == nil {
 		return fallback
@@ -495,6 +513,36 @@ func stringProp(props map[string]any, key string) string {
 	default:
 		return ""
 	}
+}
+
+func stringListProp(props map[string]any, keys ...string) []string {
+	if props == nil {
+		return nil
+	}
+	for _, key := range keys {
+		switch v := props[key].(type) {
+		case string:
+			fields := strings.Fields(v)
+			if len(fields) > 0 {
+				return fields
+			}
+		case []string:
+			if len(v) > 0 {
+				return append([]string(nil), v...)
+			}
+		case []any:
+			out := make([]string, 0, len(v))
+			for _, item := range v {
+				if text := strings.TrimSpace(valueString(item)); text != "" {
+					out = append(out, text)
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+		}
+	}
+	return nil
 }
 
 func valueString(value any) string {
