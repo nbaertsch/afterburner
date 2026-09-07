@@ -70,6 +70,9 @@ func Project(tree SourceTree, opts ProjectionOptions) SemanticTree {
 }
 
 func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
+	if isHiddenNode(source) {
+		return SemanticNode{}
+	}
 	a11y := source.Accessibility
 	node := SemanticNode{ID: source.ID, Role: roleForKind(source.Kind), Name: accessibleName(source), Description: stringProp(source.Props, "description"), States: map[string]string{}, Relations: map[string][]string{}}
 	if a11y != nil {
@@ -327,6 +330,13 @@ func accessibleName(source SourceNode) string {
 
 func isSecretInput(source SourceNode) bool {
 	return strings.Contains(strings.ToLower(source.Kind), "password") || strings.EqualFold(stringProp(source.Props, "type"), "password") || boolProp(source.Props, "secret", false)
+}
+
+func isHiddenNode(source SourceNode) bool {
+	if boolProp(source.Props, "hidden", false) {
+		return true
+	}
+	return source.Accessibility != nil && source.Accessibility.Hidden
 }
 
 func isDialogKind(kind string) bool {

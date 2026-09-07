@@ -99,6 +99,19 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 	}
 }
 
+func TestHiddenNodesAreRemovedFromAccessibilityProjection(t *testing.T) {
+	tree := SourceTree{SurfaceID: "s", Root: SourceNode{ID: "root", Kind: "application", Children: []SourceNode{
+		{ID: "visible", Kind: "text", Props: map[string]any{"text": "Visible"}},
+		{ID: "hidden-prop", Kind: "text", Props: map[string]any{"text": "Hidden prop", "hidden": true}},
+		{ID: "hidden-a11y", Kind: "text", Props: map[string]any{"text": "Hidden a11y"}, Accessibility: &Node{Hidden: true}},
+	}}}
+	projected := Project(tree, ProjectionOptions{KeyboardOnly: true, Now: func() time.Time { return time.Unix(5, 0).UTC() }})
+	lines := strings.Join(Linearize(projected), "\n")
+	if !strings.Contains(lines, "Visible") || strings.Contains(lines, "Hidden prop") || strings.Contains(lines, "Hidden a11y") {
+		t.Fatalf("hidden nodes should be removed from accessibility output: %q", lines)
+	}
+}
+
 func TestSecretInputsDoNotExposeValueAsAccessibleName(t *testing.T) {
 	tree := SourceTree{SurfaceID: "s", Root: SourceNode{ID: "root", Kind: "application", Children: []SourceNode{
 		{ID: "password", Kind: "passwordInput", Props: map[string]any{"value": "super-secret", "placeholder": "Password"}},
