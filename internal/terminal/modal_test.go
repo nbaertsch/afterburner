@@ -280,6 +280,20 @@ func TestTerminalModalRendererProjectsDocumentBody(t *testing.T) {
 	}
 }
 
+func TestTerminalModalRendererDoesNotDuplicateCloseHintWithoutActions(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 80, Rows: 18})
+	renderer.ShowModal(ModalFrame{Title: "Notice", Body: "No actions here."})
+	text := output.String()
+	if count := strings.Count(text, "[Esc] Close"); count != 1 {
+		t.Fatalf("expected one close hint, got %d: %q", count, text)
+	}
+	layout := newModalLayout(renderer.Snapshot())
+	if _, ok := modalActionRow(ModalFrame{}, layout); ok {
+		t.Fatalf("empty action list should not expose a clickable action row")
+	}
+}
+
 func TestTerminalModalRendererProjectsDocumentFormControls(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 120, Rows: 34})

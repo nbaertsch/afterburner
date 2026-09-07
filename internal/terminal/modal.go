@@ -1691,12 +1691,10 @@ func writeModalFooter(out *strings.Builder, layout modalLayout, frame ModalFrame
 		row++
 	}
 	if row < layout.top+layout.panelHeight-1 {
-		actions := modalActionsText(frame, focusedActionIndex)
-		if actions == "" {
-			actions = "[Esc] Close"
+		if actions := modalActionsText(frame, focusedActionIndex); actions != "" {
+			writeModalText(out, row, layout.innerLeft, layout.innerWidth, styles.actions, actions)
+			row++
 		}
-		writeModalText(out, row, layout.innerLeft, layout.innerWidth, styles.actions, actions)
-		row++
 	}
 	if row < layout.top+layout.panelHeight-1 {
 		writeModalText(out, row, layout.innerLeft, layout.innerWidth, styles.footer, modalControlHints(frame, maxScroll))
@@ -1793,7 +1791,7 @@ func modalActionKeyAt(frame ModalFrame, layout modalLayout, focusedActionIndex i
 }
 
 func modalActionRow(frame ModalFrame, layout modalLayout) (int, bool) {
-	if layout.footerRows <= 0 || layout.compact {
+	if layout.footerRows <= 0 || layout.compact || len(frame.Actions) == 0 {
 		return 0, false
 	}
 	row := layout.footerStartRow
