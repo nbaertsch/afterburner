@@ -84,13 +84,13 @@ func TestValidateManifestRejectsUnknownUICapability(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "afterburner.json")
-	manifest := `{"schemaVersion":1,"id":"bad-ui-cap","displayName":"Bad UI Cap","visibility":"private","requires":{"afterburner":"1"},"runtime":{"execution":"in-process","entrypoint":"extension.mjs"},"ui":{"protocol":"afterburner.ui","revision":1,"surfaces":[{"id":"main","kind":"panel","requiredCapabilities":["ui.surface.pnael"]}],"capabilities":["ui.render.componnets"]}}`
+	manifest := `{"schemaVersion":1,"id":"bad-ui-cap","displayName":"Bad UI Cap","visibility":"private","requires":{"afterburner":"1"},"runtime":{"execution":"in-process","entrypoint":"extension.mjs"},"ui":{"protocol":"afterburner.ui","revision":1,"surfaces":[{"id":"main","kind":"panel","requiredCapabilities":["ui.surface.pnael"]}],"capabilities":["ui.render.componnets"],"grantPolicy":{"schemaVersion":1,"protocol":"afterburner.ui","revision":1,"extensionId":"bad-ui-cap","denyByDefault":true,"grants":[{"id":"typo","effect":"allow","capabilities":["ui.action.invkoe"]}]}}}`
 	if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	result := ValidateManifest(path)
 	errors := strings.Join(result.Errors, "\n")
-	if result.Valid || !strings.Contains(errors, "invalid surface capability \"ui.surface.pnael\"") || !strings.Contains(errors, "invalid ui capability \"ui.render.componnets\"") {
+	if result.Valid || !strings.Contains(errors, "invalid surface capability \"ui.surface.pnael\"") || !strings.Contains(errors, "invalid ui capability \"ui.render.componnets\"") || !strings.Contains(errors, "invalid ui grant capability \"ui.action.invkoe\"") {
 		t.Fatalf("expected unknown UI capability errors, got %#v", result)
 	}
 }

@@ -175,6 +175,14 @@ func validateUIDeclaration(raw json.RawMessage) (*UIDeclaration, []string, []str
 			errs = append(errs, fmt.Sprintf("ui.grantPolicy is invalid JSON: %v", err))
 		} else if policy.SchemaVersion != protocol.SchemaVersion || policy.Protocol != protocol.Protocol || policy.Revision != protocol.ProtocolRevision {
 			errs = append(errs, "ui.grantPolicy must use current afterburner.ui protocol")
+		} else {
+			for _, grant := range policy.Grants {
+				for _, capID := range grant.Capabilities {
+					if !validUICapability(string(capID)) {
+						errs = append(errs, fmt.Sprintf("invalid ui grant capability %q", capID))
+					}
+				}
+			}
 		}
 	}
 	return &ui, errs, warnings
