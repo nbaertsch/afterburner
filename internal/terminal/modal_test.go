@@ -158,6 +158,16 @@ func TestModalServerScopedCapabilityRejectsImpersonation(t *testing.T) {
 	}
 }
 
+func TestModalServerDefaultEscapeDelayStaysResponsive(t *testing.T) {
+	server, err := NewModalServer(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.pendingEscapeDelay > 50*time.Millisecond {
+		t.Fatalf("default escape delay should stay responsive, got %s", server.pendingEscapeDelay)
+	}
+}
+
 func TestModalServerRejectsStaleReopenGeneration(t *testing.T) {
 	server, err := NewModalServer(nil, nil)
 	if err != nil {

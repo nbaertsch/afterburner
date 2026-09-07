@@ -229,7 +229,7 @@ func NewModalServer(broker *Broker, renderer ModalRenderer) (*ModalServer, error
 		events:               make(map[modalEventKey][]ModalEvent),
 		renderer:             renderer,
 		pollTimeout:          30 * time.Second,
-		pendingEscapeDelay:   200 * time.Millisecond,
+		pendingEscapeDelay:   50 * time.Millisecond,
 	}
 	return server, nil
 }
