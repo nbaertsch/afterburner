@@ -314,6 +314,14 @@ test("session registration renders the visible panel without canvas support", as
     assert.match(logs[0], /Signals\s*:/);
 });
 
+test("Black Box manifest does not advertise generic canvas capability", async () => {
+    const manifest = JSON.parse(await readFile(new URL("../afterburner.json", import.meta.url), "utf8"));
+    assert.equal(manifest.id, "black-box");
+    assert.ok(manifest.capabilities.includes("modal-canvas"));
+    assert.ok(manifest.capabilities.includes("enterprise-surface"));
+    assert.equal(manifest.capabilities.includes("canvas"), false);
+});
+
 test("session extension wrapper does not open the generic Copilot canvas", async () => {
     const wrapper = await readFile(new URL("../com.github.copilot/extensions/BlackBox/extension.mjs", import.meta.url), "utf8");
     assert.match(wrapper, /extensions\/BlackBox\/extension\.mjs/);
