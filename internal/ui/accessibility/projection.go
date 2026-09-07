@@ -116,6 +116,9 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 		if a11y.SetSize > 0 {
 			node.States["setSize"] = fmt.Sprint(a11y.SetSize)
 		}
+		if a11y.FocusOrder > 0 {
+			node.States["focusOrder"] = fmt.Sprint(a11y.FocusOrder)
+		}
 		addBoolState(node.States, "atomic", a11y.Atomic)
 		if len(a11y.Relevant) > 0 {
 			node.States["relevant"] = strings.Join(a11y.Relevant, " ")
@@ -524,6 +527,9 @@ func addAriaAliases(states map[string]string, relations map[string][]string, pro
 	}
 	if level := stringPropAny(props, "ariaLevel", "aria-level", "level"); level != "" {
 		states["level"] = level
+	}
+	if focusOrder := stringPropAny(props, "focusOrder", "tabIndex"); focusOrder != "" {
+		states["focusOrder"] = focusOrder
 	}
 	if atomic := stringPropAny(props, "ariaAtomic", "aria-atomic", "atomic"); atomic != "" {
 		states["atomic"] = atomic
