@@ -9,6 +9,16 @@ const publicKinds = [
 
 const publicSurfaceKinds = ["terminal", "modal", "panel", "inline", "statusLine", "commandPalette", "overlay"];
 
+const publicCapabilityKinds = [
+  "ui.render.components", "ui.render.terminal", "ui.surface.terminal", "ui.surface.modal", "ui.surface.panel", "ui.surface.inline", "ui.surface.statusLine", "ui.surface.commandPalette", "ui.surface.overlay", "ui.action.invoke", "ui.data.read", "ui.data.write", "ui.stream.read", "ui.stream.write", "ui.theme.read", "ui.theme.write", "ui.localization.read", "ui.accessibility.inspect", "ui.policy.evaluate", "ui.audit.write", "ui.observability.sink", "ui.observability.black-box.sink"
+];
+
+test("runtime SDK bundled copy stays byte-for-byte synced with source", async () => {
+  const bundled = await readFile(new URL("./runtime/afterburner-ui.mjs", import.meta.url), "utf8");
+  const source = await readFile(new URL("../../src/runtime/afterburner-ui.mjs", import.meta.url), "utf8");
+  assert.equal(bundled, source);
+});
+
 test("runtime SDK exposes every public component kind as a composable builder", async () => {
   assert.deepEqual(ui.componentKinds, publicKinds);
   assert.deepEqual(ui.componentCatalog.map(entry => entry.kind), publicKinds);
@@ -44,5 +54,16 @@ test("runtime SDK surface catalog stays aligned with extension UI schema", async
     assert.equal(entry.stability, "stable", `surface stability for ${entry.kind}`);
     assert.equal(typeof entry.description, "string", `surface description for ${entry.kind}`);
     assert.ok(entry.description.length > 0, `surface description for ${entry.kind}`);
+  }
+});
+
+test("runtime SDK exposes public UI capability catalog metadata", async () => {
+  assert.deepEqual(ui.capabilityKinds, publicCapabilityKinds);
+  assert.deepEqual(ui.capabilityCatalog.map(entry => entry.id), publicCapabilityKinds);
+  assert.ok(Object.isFrozen(ui.capabilityCatalog));
+  for (const entry of ui.capabilityCatalog) {
+    assert.equal(entry.stability, "stable", `capability stability for ${entry.id}`);
+    assert.equal(typeof entry.description, "string", `capability description for ${entry.id}`);
+    assert.ok(entry.description.length > 0, `capability description for ${entry.id}`);
   }
 });

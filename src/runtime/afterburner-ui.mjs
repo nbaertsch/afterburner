@@ -112,6 +112,41 @@ export const surfaceCatalog = deepFreeze(surfaceKinds.map((kind) => ({
   stability: "stable",
   description: surfaceDescriptions[kind] ?? "Composable UI surface."
 })));
+
+export const capabilityKinds = Object.freeze([
+  "ui.render.components", "ui.render.terminal", "ui.surface.terminal", "ui.surface.modal", "ui.surface.panel", "ui.surface.inline", "ui.surface.statusLine", "ui.surface.commandPalette", "ui.surface.overlay", "ui.action.invoke", "ui.data.read", "ui.data.write", "ui.stream.read", "ui.stream.write", "ui.theme.read", "ui.theme.write", "ui.localization.read", "ui.accessibility.inspect", "ui.policy.evaluate", "ui.audit.write", "ui.observability.sink", "ui.observability.black-box.sink"
+]);
+
+const capabilityDescriptions = Object.freeze({
+  "ui.render.components": "Render versioned component trees and patches.",
+  "ui.render.terminal": "Render terminal-backed component surfaces.",
+  "ui.surface.terminal": "Create and manage terminal surfaces.",
+  "ui.surface.modal": "Create and manage modal surfaces.",
+  "ui.surface.panel": "Create and manage persistent panel surfaces.",
+  "ui.surface.inline": "Create and manage inline embedded surfaces.",
+  "ui.surface.statusLine": "Create and manage compact status-line surfaces.",
+  "ui.surface.commandPalette": "Create and manage command-palette surfaces.",
+  "ui.surface.overlay": "Create and manage overlay surfaces.",
+  "ui.action.invoke": "Invoke declared UI actions.",
+  "ui.data.read": "Read UI data sources.",
+  "ui.data.write": "Mutate UI data sources.",
+  "ui.stream.read": "Read UI stream frames.",
+  "ui.stream.write": "Write UI stream frames.",
+  "ui.theme.read": "Read semantic theme tokens.",
+  "ui.theme.write": "Provide semantic theme tokens.",
+  "ui.localization.read": "Read localized message bundles.",
+  "ui.accessibility.inspect": "Inspect accessibility metadata.",
+  "ui.policy.evaluate": "Evaluate UI grant policy decisions.",
+  "ui.audit.write": "Write policy and lifecycle audit records.",
+  "ui.observability.sink": "Receive optional UI observability events.",
+  "ui.observability.black-box.sink": "Receive optional Black Box UI observability events."
+});
+
+export const capabilityCatalog = deepFreeze(capabilityKinds.map((id) => ({
+  id,
+  stability: "stable",
+  description: capabilityDescriptions[id] ?? "UI capability."
+})));
 export const envelopeKinds = Object.freeze([
   "hello", "hello.result", "component.snapshot", "component.patch", "ui.event", "grant.policy", "lifecycle",
   "audit.event", "observation", "error", "ack", "backpressure"
@@ -1798,7 +1833,7 @@ export function createTestHost(options = {}) {
 export default {
   PROTOCOL, PROTOCOL_REVISION, COMPATIBILITY_ID, SCHEMA_VERSION,
   componentKinds, componentCatalog, components, createNode, createUIDocument, validateUIDocument, validateNode,
-  surfaceCatalog, defineSurface, registerSurface, open, renderSurface, close, closeSurface, update, patch, patchSurface, invoke, subscribe, fallback,
+  surfaceKinds, surfaceCatalog, capabilityKinds, capabilityCatalog, defineSurface, registerSurface, open, renderSurface, close, closeSurface, update, patch, patchSurface, invoke, subscribe, fallback,
   registerObservabilitySink, subscribeObservability, diagnostics,
   createRuntime, createExtensionBridge, createProtocolClient, ProtocolClient, MemoryTransport, FrameTransport, createFrameTransport, createEnvelope, validateEnvelope,
   createHello, negotiateHello, encodeFrame, decodeFrame, validatePatch, applyPatch, fallbackProjection,

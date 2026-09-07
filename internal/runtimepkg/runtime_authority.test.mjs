@@ -154,6 +154,12 @@ test("runtimeExtensionApi exposes composable UI component catalog", async () => 
     assert.equal(typeof api.ui.components[entry.kind], "function", `components.${entry.kind}`);
     assert.equal(typeof api.ui[entry.kind], "function", `ui.${entry.kind}`);
   }
+  assert.ok(Array.isArray(api.ui.surfaceCatalog));
+  assert.deepEqual(api.ui.surfaceCatalog.map(entry => entry.kind), api.ui.surfaceKinds);
+  assert.ok(api.ui.surfaceCatalog.some(entry => entry.kind === "overlay"));
+  assert.ok(Array.isArray(api.ui.capabilityCatalog));
+  assert.deepEqual(api.ui.capabilityCatalog.map(entry => entry.id), api.ui.capabilityKinds);
+  assert.ok(api.ui.capabilityCatalog.some(entry => entry.id === "ui.observability.black-box.sink"));
   assert.equal(api.ui.section({ title: "Section" }, [], { id: "section-fixture" }).kind, "section");
   assert.equal(api.ui.prompt({ title: "Prompt" }, [], { id: "prompt-fixture" }).kind, "prompt");
 });

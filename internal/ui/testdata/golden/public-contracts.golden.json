@@ -87,6 +87,15 @@
     "keybindingHint",
     "extensionOutlet"
   ],
+  "surfaceKinds": [
+    "terminal",
+    "modal",
+    "panel",
+    "inline",
+    "statusLine",
+    "commandPalette",
+    "overlay"
+  ],
   "capabilities": [
     "ui.render.components",
     "ui.render.terminal",

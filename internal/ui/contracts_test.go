@@ -109,11 +109,29 @@ func TestSurfaceKindsHaveCapabilityDescriptors(t *testing.T) {
 	for _, descriptor := range capability.CoreDescriptors() {
 		capabilities[descriptor.ID] = true
 	}
-	for _, kind := range []surface.Kind{surface.KindTerminal, surface.KindModal, surface.KindPanel, surface.KindInline, surface.KindStatusLine, surface.KindCommandPalette, surface.KindOverlay} {
-		id := capability.ID("ui.surface." + string(kind))
+	for _, entry := range surface.PublicCatalog() {
+		id := capability.ID("ui.surface." + string(entry.Kind))
 		if !capabilities[id] {
-			t.Fatalf("surface kind %q is missing capability descriptor %q", kind, id)
+			t.Fatalf("surface kind %q is missing capability descriptor %q", entry.Kind, id)
 		}
+		if entry.Stability != capability.StabilityStable || entry.Description == "" {
+			t.Fatalf("surface catalog entry %q is missing enterprise metadata: %#v", entry.Kind, entry)
+		}
+	}
+}
+
+func TestRuntimeSDKCapabilityCatalogMatchesCoreDescriptors(t *testing.T) {
+	sdkSource, err := os.ReadFile(filepath.Join("..", "..", "internal", "runtimepkg", "runtime", "afterburner-ui.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdkCapabilities := extractJSStringArray(t, string(sdkSource), "export const capabilityKinds = Object.freeze(")
+	coreCapabilities := make([]string, 0, len(capability.CoreDescriptors()))
+	for _, descriptor := range capability.CoreDescriptors() {
+		coreCapabilities = append(coreCapabilities, string(descriptor.ID))
+	}
+	if !reflect.DeepEqual(sdkCapabilities, coreCapabilities) {
+		t.Fatalf("SDK capability catalog differs from core descriptors\n--- sdk\n%v\n--- core\n%v", sdkCapabilities, coreCapabilities)
 	}
 }
 
@@ -218,6 +236,10 @@ func publicContractSnapshot(t *testing.T) string {
 	for _, entry := range component.PublicCatalog() {
 		componentKinds = append(componentKinds, string(entry.Kind))
 	}
+	surfaceKinds := make([]string, 0, len(surface.PublicCatalog()))
+	for _, entry := range surface.PublicCatalog() {
+		surfaceKinds = append(surfaceKinds, string(entry.Kind))
+	}
 	capabilities := make([]string, 0, len(capability.CoreDescriptors()))
 	for _, descriptor := range capability.CoreDescriptors() {
 		capabilities = append(capabilities, string(descriptor.ID))
@@ -233,6 +255,7 @@ func publicContractSnapshot(t *testing.T) string {
 	snapshot := struct {
 		Protocol       protocol.Revision `json:"protocol"`
 		ComponentKinds []string          `json:"componentKinds"`
+		SurfaceKinds   []string          `json:"surfaceKinds"`
 		Capabilities   []string          `json:"capabilities"`
 		Tokens         []string          `json:"tokens"`
 		ErrorCodes     []string          `json:"errorCodes"`
@@ -246,6 +269,7 @@ func publicContractSnapshot(t *testing.T) string {
 	}{
 		Protocol:       protocol.CurrentRevision(),
 		ComponentKinds: componentKinds,
+		SurfaceKinds:   surfaceKinds,
 		Capabilities:   capabilities,
 		Tokens:         tokens,
 		ErrorCodes:     errorCodes,
@@ -504,6 +528,24 @@ func assertUnique(t *testing.T, values []string) {
 	if len(sorted) == 0 {
 		t.Fatal("empty public contract catalog")
 	}
+}
+
+func extractJSStringArray(t *testing.T, source string, prefix string) []string {
+	t.Helper()
+	start := strings.Index(source, prefix)
+	if start < 0 {
+		t.Fatalf("missing JS array prefix %q", prefix)
+	}
+	start += len(prefix)
+	end := strings.Index(source[start:], ");")
+	if end < 0 {
+		t.Fatalf("unterminated JS array after %q", prefix)
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(source[start:start+end]), &values); err != nil {
+		t.Fatalf("parse JS array after %q: %v", prefix, err)
+	}
+	return values
 }
 
 type stringer string

@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   application,
   button,
   code,
+  capabilityCatalog,
+  capabilityKinds,
+  componentCatalog,
   componentKinds,
   components,
   createNode,
@@ -11,9 +15,33 @@ import {
   markdown,
   modalFrameToUIDocument,
   stack,
+  surfaceCatalog,
+  surfaceKinds,
   text,
   validateUIDocument
 } from "../dist/afterburner-ui.mjs";
+
+test("packaged dist stays synced with source runtime SDK", async () => {
+  const dist = await readFile(new URL("../dist/afterburner-ui.mjs", import.meta.url), "utf8");
+  const source = await readFile(new URL("../../../src/runtime/afterburner-ui.mjs", import.meta.url), "utf8");
+  assert.equal(dist, source);
+});
+
+test("packaged catalogs expose components, surfaces, and capabilities", async () => {
+  const componentSchema = JSON.parse(await readFile(new URL("../../../schemas/ui-component-v1.schema.json", import.meta.url), "utf8"));
+  const extensionUISchema = JSON.parse(await readFile(new URL("../../../schemas/extension-ui-v1.schema.json", import.meta.url), "utf8"));
+  assert.deepEqual(componentKinds, componentSchema.$defs.kind.enum);
+  assert.deepEqual(componentCatalog.map(entry => entry.kind), componentKinds);
+  assert.deepEqual(surfaceCatalog.map(entry => entry.kind), surfaceKinds);
+  assert.deepEqual(surfaceKinds, extensionUISchema.properties.surfaces.items.properties.kind.enum);
+  assert.ok(capabilityKinds.includes("ui.observability.black-box.sink"));
+  assert.deepEqual(capabilityCatalog.map(entry => entry.id), capabilityKinds);
+  for (const entry of [...componentCatalog, ...surfaceCatalog, ...capabilityCatalog]) {
+    assert.equal(entry.stability, "stable");
+    assert.equal(typeof entry.description, "string");
+    assert.ok(entry.description.length > 0);
+  }
+});
 
 test("builders cover the full W0 component catalog and produce stable IDs", () => {
   for (const kind of componentKinds) assert.equal(typeof components[kind], "function", `${kind} builder missing`);

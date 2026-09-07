@@ -10,14 +10,143 @@ export const DEFAULT_MAX_FRAME_BYTES = 1 << 20;
 export const DEFAULT_MAX_JSON_DEPTH = 64;
 
 export const componentKinds = Object.freeze([
-  "application", "window", "surface", "viewport", "stack", "row", "grid", "panel", "card",
-  "separator", "spacer", "text", "markdown", "code", "icon", "badge", "button", "link",
-  "textInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "progress",
-  "spinner", "list", "table", "tree", "form", "toolbar", "tabs", "breadcrumb", "dialog", "toast",
-  "terminal", "canvas", "image", "video", "chart", "commandPalette", "keybindingHint", "extensionOutlet"
+  "application", "window", "surface", "viewport", "stack", "column", "row", "grid", "box", "section", "split", "scroll", "disclosure", "statusGrid", "panel", "card", "separator", "spacer", "empty", "text", "markdown", "code", "icon", "badge", "keyValue", "detail", "alert", "button", "link", "textInput", "passwordInput", "searchInput", "numberInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "dateInput", "fileInput", "progress", "meter", "bar", "sparkline", "spinner", "loading", "list", "table", "tree", "timeline", "log", "form", "toolbar", "actionBar", "contextMenu", "tabs", "breadcrumb", "pagination", "help", "dialog", "toast", "errorBoundary", "confirmation", "prompt", "terminal", "canvas", "image", "video", "chart", "commandPalette", "keybindingHint", "extensionOutlet"
 ]);
 
+const componentDescriptions = Object.freeze({
+  "application": "Top-level application composition root.",
+  "window": "Window-level container for host-managed UI.",
+  "surface": "Mount point bound to a surface descriptor.",
+  "viewport": "Scrollable viewport.",
+  "stack": "One-dimensional vertical layout.",
+  "column": "One-dimensional vertical layout column.",
+  "row": "One-dimensional horizontal layout.",
+  "grid": "Two-dimensional layout.",
+  "box": "Generic boxed layout container.",
+  "section": "Named section container.",
+  "split": "Split-pane layout container.",
+  "scroll": "Explicit scrollable region.",
+  "disclosure": "Expandable/collapsible content region.",
+  "statusGrid": "Dashboard-style status grid for health and metrics.",
+  "panel": "Grouped content panel.",
+  "card": "Elevated content region.",
+  "separator": "Visual or semantic separator.",
+  "spacer": "Intentional empty layout space.",
+  "empty": "Purposeful empty-state message.",
+  "text": "Plain text content.",
+  "markdown": "Sanitized Markdown content.",
+  "code": "Code block or inline code content.",
+  "icon": "Decorative or semantic icon.",
+  "badge": "Compact status label.",
+  "keyValue": "Compact key/value facts and metadata.",
+  "detail": "Detailed record inspection content.",
+  "alert": "Prominent status, warning, or error callout.",
+  "button": "User-invoked action control.",
+  "link": "Navigation or external reference.",
+  "textInput": "Single-line text input.",
+  "passwordInput": "Secret text input.",
+  "searchInput": "Search/filter input.",
+  "numberInput": "Numeric input.",
+  "textArea": "Multi-line text input.",
+  "select": "Single or multi-select input.",
+  "checkbox": "Boolean checkbox input.",
+  "radioGroup": "Exclusive option group.",
+  "toggle": "Binary switch control.",
+  "slider": "Continuous or stepped numeric input.",
+  "dateInput": "Date input.",
+  "fileInput": "File path or file picker input.",
+  "progress": "Progress indicator.",
+  "meter": "Bounded scalar meter.",
+  "bar": "Inline bar visualization.",
+  "sparkline": "Compact inline trend visualization.",
+  "spinner": "Indeterminate progress indicator.",
+  "loading": "Loading state container.",
+  "list": "Linear collection.",
+  "table": "Tabular data collection.",
+  "tree": "Hierarchical data collection.",
+  "timeline": "Chronological event collection.",
+  "log": "Streaming or historical log view.",
+  "form": "Validated input group.",
+  "toolbar": "Action strip.",
+  "actionBar": "Primary command/action strip with keyboard affordances.",
+  "contextMenu": "Contextual command menu.",
+  "tabs": "Tabbed content switcher.",
+  "breadcrumb": "Navigation path.",
+  "pagination": "Paged collection navigation.",
+  "help": "Contextual help content.",
+  "dialog": "Modal or non-modal dialog.",
+  "toast": "Transient notification.",
+  "errorBoundary": "Recoverable render error boundary.",
+  "confirmation": "Confirmation prompt.",
+  "prompt": "User prompt or command prompt UI.",
+  "terminal": "Terminal surface projection.",
+  "canvas": "Extension-owned canvas.",
+  "image": "Image content.",
+  "video": "Video content.",
+  "chart": "Data visualization.",
+  "commandPalette": "Command discovery and invocation UI.",
+  "keybindingHint": "Keyboard shortcut hint.",
+  "extensionOutlet": "Policy-gated extension insertion point."
+});
+
+export const componentCatalog = deepFreeze(componentKinds.map((kind) => ({
+  kind,
+  stability: "stable",
+  description: componentDescriptions[kind] ?? "Composable UI component."
+})));
+
 export const surfaceKinds = Object.freeze(["terminal", "modal", "panel", "inline", "statusLine", "commandPalette", "overlay"]);
+
+const surfaceDescriptions = Object.freeze({
+  "terminal": "Terminal-backed interactive surface.",
+  "modal": "Host-managed modal surface.",
+  "panel": "Persistent side-panel surface.",
+  "inline": "Inline embedded surface.",
+  "statusLine": "Compact status-line surface.",
+  "commandPalette": "Command palette surface.",
+  "overlay": "Overlay surface."
+});
+
+export const surfaceCatalog = deepFreeze(surfaceKinds.map((kind) => ({
+  kind,
+  stability: "stable",
+  description: surfaceDescriptions[kind] ?? "Composable UI surface."
+})));
+
+export const capabilityKinds = Object.freeze([
+  "ui.render.components", "ui.render.terminal", "ui.surface.terminal", "ui.surface.modal", "ui.surface.panel", "ui.surface.inline", "ui.surface.statusLine", "ui.surface.commandPalette", "ui.surface.overlay", "ui.action.invoke", "ui.data.read", "ui.data.write", "ui.stream.read", "ui.stream.write", "ui.theme.read", "ui.theme.write", "ui.localization.read", "ui.accessibility.inspect", "ui.policy.evaluate", "ui.audit.write", "ui.observability.sink", "ui.observability.black-box.sink"
+]);
+
+const capabilityDescriptions = Object.freeze({
+  "ui.render.components": "Render versioned component trees and patches.",
+  "ui.render.terminal": "Render terminal-backed component surfaces.",
+  "ui.surface.terminal": "Create and manage terminal surfaces.",
+  "ui.surface.modal": "Create and manage modal surfaces.",
+  "ui.surface.panel": "Create and manage persistent panel surfaces.",
+  "ui.surface.inline": "Create and manage inline embedded surfaces.",
+  "ui.surface.statusLine": "Create and manage compact status-line surfaces.",
+  "ui.surface.commandPalette": "Create and manage command-palette surfaces.",
+  "ui.surface.overlay": "Create and manage overlay surfaces.",
+  "ui.action.invoke": "Invoke declared UI actions.",
+  "ui.data.read": "Read UI data sources.",
+  "ui.data.write": "Mutate UI data sources.",
+  "ui.stream.read": "Read UI stream frames.",
+  "ui.stream.write": "Write UI stream frames.",
+  "ui.theme.read": "Read semantic theme tokens.",
+  "ui.theme.write": "Provide semantic theme tokens.",
+  "ui.localization.read": "Read localized message bundles.",
+  "ui.accessibility.inspect": "Inspect accessibility metadata.",
+  "ui.policy.evaluate": "Evaluate UI grant policy decisions.",
+  "ui.audit.write": "Write policy and lifecycle audit records.",
+  "ui.observability.sink": "Receive optional UI observability events.",
+  "ui.observability.black-box.sink": "Receive optional Black Box UI observability events."
+});
+
+export const capabilityCatalog = deepFreeze(capabilityKinds.map((id) => ({
+  id,
+  stability: "stable",
+  description: capabilityDescriptions[id] ?? "UI capability."
+})));
 export const envelopeKinds = Object.freeze([
   "hello", "hello.result", "component.snapshot", "component.patch", "ui.event", "grant.policy", "lifecycle",
   "audit.event", "observation", "error", "ack", "backpressure"
@@ -209,7 +338,7 @@ export function validateUIDocument(tree) {
 }
 
 const builderNames = {
-  application: "application", window: "window", surface: "surface", viewport: "viewport", stack: "stack", row: "row", grid: "grid", panel: "panel", card: "card", separator: "separator", spacer: "spacer", text: "text", markdown: "markdown", code: "code", icon: "icon", badge: "badge", button: "button", link: "link", textInput: "textInput", textArea: "textArea", select: "select", checkbox: "checkbox", radioGroup: "radioGroup", toggle: "toggle", slider: "slider", progress: "progress", spinner: "spinner", list: "list", table: "table", tree: "tree", form: "form", toolbar: "toolbar", tabs: "tabs", breadcrumb: "breadcrumb", dialog: "dialog", toast: "toast", terminal: "terminal", canvas: "canvas", image: "image", video: "video", chart: "chart", commandPalette: "commandPalette", keybindingHint: "keybindingHint", extensionOutlet: "extensionOutlet"
+  application: "application", window: "window", surface: "surface", viewport: "viewport", stack: "stack", column: "column", row: "row", grid: "grid", box: "box", section: "section", split: "split", scroll: "scroll", disclosure: "disclosure", statusGrid: "statusGrid", panel: "panel", card: "card", separator: "separator", spacer: "spacer", empty: "empty", text: "text", markdown: "markdown", code: "code", icon: "icon", badge: "badge", keyValue: "keyValue", detail: "detail", alert: "alert", button: "button", link: "link", textInput: "textInput", passwordInput: "passwordInput", searchInput: "searchInput", numberInput: "numberInput", textArea: "textArea", select: "select", checkbox: "checkbox", radioGroup: "radioGroup", toggle: "toggle", slider: "slider", dateInput: "dateInput", fileInput: "fileInput", progress: "progress", meter: "meter", bar: "bar", sparkline: "sparkline", spinner: "spinner", loading: "loading", list: "list", table: "table", tree: "tree", timeline: "timeline", log: "log", form: "form", toolbar: "toolbar", actionBar: "actionBar", contextMenu: "contextMenu", tabs: "tabs", breadcrumb: "breadcrumb", pagination: "pagination", help: "help", dialog: "dialog", toast: "toast", errorBoundary: "errorBoundary", confirmation: "confirmation", prompt: "prompt", terminal: "terminal", canvas: "canvas", image: "image", video: "video", chart: "chart", commandPalette: "commandPalette", keybindingHint: "keybindingHint", extensionOutlet: "extensionOutlet"
 };
 
 export const components = deepFreeze(Object.fromEntries(Object.entries(builderNames).map(([name, kind]) => [name, (...args) => createNode(kind, ...args)])));
@@ -218,37 +347,66 @@ export const window = components.window;
 export const surface = components.surface;
 export const viewport = components.viewport;
 export const stack = components.stack;
+export const column = components.column;
 export const row = components.row;
 export const grid = components.grid;
+export const box = components.box;
+export const section = components.section;
+export const split = components.split;
+export const scroll = components.scroll;
+export const disclosure = components.disclosure;
+export const statusGrid = components.statusGrid;
 export const panel = components.panel;
 export const card = components.card;
 export const separator = components.separator;
 export const spacer = components.spacer;
+export const empty = components.empty;
 export const text = components.text;
 export const markdown = components.markdown;
 export const code = components.code;
 export const icon = components.icon;
 export const badge = components.badge;
+export const keyValue = components.keyValue;
+export const detail = components.detail;
+export const alert = components.alert;
 export const button = components.button;
 export const link = components.link;
 export const textInput = components.textInput;
+export const passwordInput = components.passwordInput;
+export const searchInput = components.searchInput;
+export const numberInput = components.numberInput;
 export const textArea = components.textArea;
 export const select = components.select;
 export const checkbox = components.checkbox;
 export const radioGroup = components.radioGroup;
 export const toggle = components.toggle;
 export const slider = components.slider;
+export const dateInput = components.dateInput;
+export const fileInput = components.fileInput;
 export const progress = components.progress;
+export const meter = components.meter;
+export const bar = components.bar;
+export const sparkline = components.sparkline;
 export const spinner = components.spinner;
+export const loading = components.loading;
 export const list = components.list;
 export const table = components.table;
 export const tree = components.tree;
+export const timeline = components.timeline;
+export const log = components.log;
 export const form = components.form;
 export const toolbar = components.toolbar;
+export const actionBar = components.actionBar;
+export const contextMenu = components.contextMenu;
 export const tabs = components.tabs;
 export const breadcrumb = components.breadcrumb;
+export const pagination = components.pagination;
+export const help = components.help;
 export const dialog = components.dialog;
 export const toast = components.toast;
+export const errorBoundary = components.errorBoundary;
+export const confirmation = components.confirmation;
+export const prompt = components.prompt;
 export const terminal = components.terminal;
 export const canvas = components.canvas;
 export const image = components.image;
@@ -1674,8 +1832,8 @@ export function createTestHost(options = {}) {
 
 export default {
   PROTOCOL, PROTOCOL_REVISION, COMPATIBILITY_ID, SCHEMA_VERSION,
-  componentKinds, components, createNode, createUIDocument, validateUIDocument, validateNode,
-  defineSurface, registerSurface, open, renderSurface, close, closeSurface, update, patch, patchSurface, invoke, subscribe, fallback,
+  componentKinds, componentCatalog, components, createNode, createUIDocument, validateUIDocument, validateNode,
+  surfaceKinds, surfaceCatalog, capabilityKinds, capabilityCatalog, defineSurface, registerSurface, open, renderSurface, close, closeSurface, update, patch, patchSurface, invoke, subscribe, fallback,
   registerObservabilitySink, subscribeObservability, diagnostics,
   createRuntime, createExtensionBridge, createProtocolClient, ProtocolClient, MemoryTransport, FrameTransport, createFrameTransport, createEnvelope, validateEnvelope,
   createHello, negotiateHello, encodeFrame, decodeFrame, validatePatch, applyPatch, fallbackProjection,

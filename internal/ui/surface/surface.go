@@ -10,6 +10,12 @@ import (
 
 type Kind string
 
+type CatalogEntry struct {
+	Kind        Kind                 `json:"kind"`
+	Stability   capability.Stability `json:"stability"`
+	Description string               `json:"description"`
+}
+
 const (
 	KindTerminal       Kind = "terminal"
 	KindModal          Kind = "modal"
@@ -19,6 +25,18 @@ const (
 	KindCommandPalette Kind = "commandPalette"
 	KindOverlay        Kind = "overlay"
 )
+
+func PublicCatalog() []CatalogEntry {
+	return []CatalogEntry{
+		{KindTerminal, capability.StabilityStable, "Terminal-backed interactive surface."},
+		{KindModal, capability.StabilityStable, "Host-managed modal surface."},
+		{KindPanel, capability.StabilityStable, "Persistent side-panel surface."},
+		{KindInline, capability.StabilityStable, "Inline embedded surface."},
+		{KindStatusLine, capability.StabilityStable, "Compact status-line surface."},
+		{KindCommandPalette, capability.StabilityStable, "Command palette surface."},
+		{KindOverlay, capability.StabilityStable, "Overlay surface."},
+	}
+}
 
 type LifecycleState string
 
