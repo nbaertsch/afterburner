@@ -299,6 +299,8 @@ func roleForKind(kind string) Role {
 		return RoleCode
 	case "markdown":
 		return RoleDocument
+	case "keybindingHint":
+		return RoleTooltip
 	case "panel", "card", "box", "section", "split", "scroll", "disclosure", "surface", "viewport", "loading", "empty", "help", "errorBoundary":
 		return RoleRegion
 	default:
@@ -370,7 +372,7 @@ func liveForKind(kind string) LivePoliteness {
 	if kind == "toast" || kind == "alert" {
 		return LivePolite
 	}
-	if kind == "log" {
+	if kind == "log" || kind == "loading" || kind == "spinner" {
 		return LivePolite
 	}
 	return LiveOff

@@ -80,6 +80,12 @@ func TestSDKShapedCatalogProjectionAndDialogModality(t *testing.T) {
 	if !hasShortcut(byID["sdk-terminal"].KeyboardActions, "PageUp/PageDown", "page terminal output") {
 		t.Fatalf("terminal should expose keyboard paging semantics: %#v", byID["sdk-terminal"])
 	}
+	if byID["sdk-keybindinghint"].Role != RoleTooltip {
+		t.Fatalf("keybinding hints should project as tooltips: %#v", byID["sdk-keybindinghint"])
+	}
+	if byID["sdk-loading"].Live != LivePolite || byID["sdk-spinner"].Live != LivePolite {
+		t.Fatalf("loading indicators should be polite live regions: loading=%#v spinner=%#v", byID["sdk-loading"], byID["sdk-spinner"])
+	}
 	modal := byID["sdk-dialog-modal"]
 	if modal.States["modal"] != "true" || !hasShortcut(modal.KeyboardActions, "Tab", "cycle focus") {
 		t.Fatalf("modal dialog semantics mismatch: %#v", modal)
