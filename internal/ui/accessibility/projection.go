@@ -74,7 +74,7 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 		return SemanticNode{}
 	}
 	a11y := source.Accessibility
-	node := SemanticNode{ID: source.ID, Role: roleForKind(source.Kind), Name: accessibleName(source), Description: stringProp(source.Props, "description"), States: map[string]string{}, Relations: map[string][]string{}}
+	node := SemanticNode{ID: source.ID, Role: roleForKind(source.Kind), Name: accessibleName(source), Description: accessibleDescription(source.Props), States: map[string]string{}, Relations: map[string][]string{}}
 	if a11y != nil {
 		if a11y.Role != "" {
 			node.Role = a11y.Role
@@ -130,9 +130,6 @@ func projectNode(source SourceNode, opts ProjectionOptions) SemanticNode {
 	}
 	if node.Live == "" {
 		node.Live = liveForKind(source.Kind)
-	}
-	if node.Description == "" {
-		node.Description = stringProp(source.Props, "help")
 	}
 	for _, child := range source.Children {
 		projected := projectNode(child, opts)
@@ -329,6 +326,15 @@ func accessibleName(source SourceNode) string {
 		}
 	}
 	return source.ID
+}
+
+func accessibleDescription(props map[string]any) string {
+	for _, key := range []string{"ariaDescription", "description", "help"} {
+		if value := stringProp(props, key); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func isSecretInput(source SourceNode) bool {
