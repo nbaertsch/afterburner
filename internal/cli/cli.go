@@ -616,6 +616,9 @@ func runUICommand(ctx context.Context, args []string, opts Options) (int, error)
 			return writeToolingJSON(opts.Stdout, catalog)
 		}
 		fmt.Fprint(opts.Stdout, tooling.FormatCatalog(catalog))
+		if query != "" && tooling.CatalogEmpty(catalog) {
+			fmt.Fprintf(opts.Stdout, "\nNo catalog entries matched %q. Try a component, surface, capability, or description substring.\n", query)
+		}
 		return 0, nil
 	case "inspect":
 		if len(args) != 1 && !(len(args) == 2 && args[0] == "--json") {

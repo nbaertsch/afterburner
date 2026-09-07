@@ -108,6 +108,15 @@ func TestUICatalogCommandCanSearch(t *testing.T) {
 	if !strings.Contains(stdout.String(), "\"kind\": \"markdown\"") || strings.Contains(stdout.String(), "\"surfaces\": [") || strings.Contains(stdout.String(), "\"capabilities\": [") {
 		t.Fatalf("searched JSON catalog output is wrong: %q", stdout.String())
 	}
+
+	stdout.Reset()
+	code, err = Run(context.Background(), []string{"ui", "catalog", "--find", "definitely-not-present"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("Run returned code=%d err=%v output=%s", code, err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "No catalog entries matched \"definitely-not-present\"") {
+		t.Fatalf("missing empty search guidance: %q", stdout.String())
+	}
 }
 
 func TestUIValidateManifestCommand(t *testing.T) {

@@ -78,6 +78,10 @@ func catalogTextMatches(query string, values ...string) bool {
 	return false
 }
 
+func CatalogEmpty(catalog PublicCatalog) bool {
+	return len(catalog.Components) == 0 && len(catalog.Surfaces) == 0 && len(catalog.Capabilities) == 0
+}
+
 func FormatCatalog(catalog PublicCatalog) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "Afterburner UI %s revision %d\n", catalog.Protocol.Protocol, catalog.Protocol.Revision)
