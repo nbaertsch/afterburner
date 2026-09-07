@@ -116,7 +116,7 @@ func sdkSourceTree(t *testing.T) SourceTree {
 }
 
 func sdkCatalogKinds() []string {
-	return []string{"application", "window", "surface", "viewport", "stack", "row", "grid", "panel", "card", "separator", "spacer", "text", "markdown", "code", "icon", "badge", "button", "link", "textInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "progress", "spinner", "list", "table", "tree", "form", "toolbar", "tabs", "breadcrumb", "dialog", "toast", "terminal", "canvas", "image", "video", "chart", "commandPalette", "keybindingHint", "extensionOutlet"}
+	return []string{"application", "window", "surface", "viewport", "stack", "column", "row", "grid", "box", "section", "split", "scroll", "disclosure", "statusGrid", "panel", "card", "separator", "spacer", "empty", "text", "markdown", "code", "icon", "badge", "keyValue", "detail", "alert", "button", "link", "textInput", "passwordInput", "searchInput", "numberInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "dateInput", "fileInput", "progress", "meter", "bar", "sparkline", "spinner", "loading", "list", "table", "tree", "timeline", "log", "form", "toolbar", "actionBar", "contextMenu", "tabs", "breadcrumb", "pagination", "help", "dialog", "toast", "errorBoundary", "confirmation", "prompt", "terminal", "canvas", "image", "video", "chart", "commandPalette", "keybindingHint", "extensionOutlet"}
 }
 
 func sdkProps(kind string) map[string]any {
@@ -127,20 +127,22 @@ func sdkProps(kind string) map[string]any {
 		return map[string]any{"markdown": "**SDK markdown**"}
 	case "code":
 		return map[string]any{"code": "fmt.Println(\"sdk\")", "language": "go"}
-	case "button", "textInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider":
+	case "button", "textInput", "passwordInput", "searchInput", "numberInput", "textArea", "select", "checkbox", "radioGroup", "toggle", "slider", "dateInput", "fileInput":
 		return map[string]any{"label": kind + " control", "value": "sample", "checked": true, "options": []string{"one", "two"}}
-	case "list", "tree", "tabs", "breadcrumb":
+	case "list", "tree", "timeline", "log", "contextMenu", "tabs", "breadcrumb":
 		return map[string]any{"items": []string{"alpha", "beta"}, "selected": "alpha"}
-	case "table":
+	case "table", "grid", "statusGrid":
 		return map[string]any{"columns": []string{"name", "status"}, "rows": [][]string{{"sdk", "ok"}}}
-	case "progress", "chart":
+	case "progress", "meter", "bar", "sparkline", "chart":
 		return map[string]any{"value": 0.5, "label": kind}
 	case "terminal", "canvas", "image", "video":
 		return map[string]any{"title": kind, "alt": kind + " alternative text"}
-	case "toast":
-		return map[string]any{"message": "toast message"}
-	case "dialog":
-		return map[string]any{"title": "Non-modal dialog", "modal": false}
+	case "toast", "alert":
+		return map[string]any{"message": kind + " message"}
+	case "dialog", "confirmation", "prompt":
+		return map[string]any{"title": kind + " dialog", "modal": false}
+	case "empty", "loading", "help", "errorBoundary":
+		return map[string]any{"message": kind + " message"}
 	default:
 		return map[string]any{"title": kind}
 	}

@@ -263,10 +263,12 @@ func roleForKind(kind string) Role {
 		return RoleRadioGroup
 	case "toggle":
 		return RoleSwitch
-	case "slider":
+	case "slider", "progress", "meter", "bar":
 		return RoleProgressBar
 	case "list":
 		return RoleList
+	case "grid", "statusGrid":
+		return RoleGrid
 	case "table":
 		return RoleTable
 	case "tree":
@@ -287,13 +289,13 @@ func roleForKind(kind string) Role {
 		return RoleSearch
 	case "separator":
 		return RoleSeparator
-	case "image":
+	case "image", "video", "chart", "sparkline":
 		return RoleImage
 	case "code":
 		return RoleCode
 	case "markdown":
 		return RoleDocument
-	case "panel", "card", "section", "surface", "viewport":
+	case "panel", "card", "box", "section", "split", "scroll", "disclosure", "surface", "viewport", "loading", "empty", "help", "errorBoundary":
 		return RoleRegion
 	default:
 		return RoleGroup
