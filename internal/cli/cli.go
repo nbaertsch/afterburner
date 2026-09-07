@@ -829,6 +829,13 @@ func parseCatalogArgs(args []string) (string, string, bool, error) {
 			i++
 			query = args[i]
 		default:
+			if value, ok := strings.CutPrefix(arg, "--find="); ok {
+				if strings.TrimSpace(value) == "" {
+					return "", "", false, errors.New(usage)
+				}
+				query = value
+				continue
+			}
 			if section == "all" {
 				section = arg
 			} else {
