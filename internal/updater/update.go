@@ -430,7 +430,7 @@ func ApplyReplacement(parentPID int, source, target, previous string) (resultErr
 		return err
 	}
 	if err := platform.ReplaceFile(incomingPath, target); err != nil {
-		return fmt.Errorf("replace installed executable: %w. Close any other running Afterburner terminals/sessions and retry", err)
+		return fmt.Errorf("replace installed executable: %w. Latest core remains staged at %s; close running Afterburner terminals/sessions, including this one if it launched from %s, then retry `afterburn update --version <tag>`", err, source, target)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
