@@ -83,6 +83,34 @@ func TestCreateArchiveExcludesTransientArtifactsDeterministically(t *testing.T) 
 	}
 }
 
+func TestCreateArchiveNormalizesTextLineEndings(t *testing.T) {
+	temp := t.TempDir()
+	source := filepath.Join(temp, "source")
+	path := filepath.Join(source, "runtime", "extension.mjs")
+	mustWrite(t, path, "export const value = 1;\nexport default value;\n")
+	lfArchive := filepath.Join(temp, "lf.zip")
+	if err := createArchive(source, lfArchive); err != nil {
+		t.Fatal(err)
+	}
+	lfBytes, err := os.ReadFile(lfArchive)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustWrite(t, path, "export const value = 1;\r\nexport default value;\r\n")
+	crlfArchive := filepath.Join(temp, "crlf.zip")
+	if err := createArchive(source, crlfArchive); err != nil {
+		t.Fatal(err)
+	}
+	crlfBytes, err := os.ReadFile(crlfArchive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(lfBytes, crlfBytes) {
+		t.Fatal("archive changed when only source text line endings changed")
+	}
+}
+
 func TestGeneratedBlackBoxArchiveExcludesGenericCanvasFallback(t *testing.T) {
 	archivePath := filepath.Join("..", "generated", "black-box.zip")
 	contents := readZipContents(t, archivePath)

@@ -2,8 +2,8 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -94,17 +94,12 @@ func createArchive(source, target string) error {
 		if err != nil {
 			return err
 		}
-		input, err := os.Open(item.path)
+		content, err := archiveContent(item.path)
 		if err != nil {
 			return err
 		}
-		_, copyErr := io.Copy(entry, input)
-		closeErr := input.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
+		if _, err := entry.Write(content); err != nil {
+			return err
 		}
 	}
 	if err := writer.Close(); err != nil {
@@ -141,6 +136,32 @@ func archiveName(source, path string) (string, error) {
 		return "", fmt.Errorf("refusing unsafe archive path %q", relative)
 	}
 	return name, nil
+}
+
+func archiveContent(path string) ([]byte, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if !archiveTextFile(path) {
+		return content, nil
+	}
+	content = bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
+	content = bytes.ReplaceAll(content, []byte("\r"), []byte("\n"))
+	return content, nil
+}
+
+func archiveTextFile(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".cjs", ".js", ".json", ".md", ".mjs", ".txt", ".yaml", ".yml":
+		return true
+	}
+	switch strings.ToLower(filepath.Base(path)) {
+	case ".editorconfig", ".eslintignore", ".gitignore", ".npmrc", ".nvmrc", ".prettierignore", ".yarnrc":
+		return true
+	default:
+		return false
+	}
 }
 
 func excluded(name string, isDir bool) bool {
