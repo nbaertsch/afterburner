@@ -348,7 +348,7 @@ child.onData(data => {
     const step = actionSteps[actionIndex];
     actionSentAt[step.name] = Date.now();
     activeActionRawLength = raw.length;
-    setTimeout(() => writeInput(step.key, step.name), 300).unref?.();
+    setTimeout(() => writeInput(step.key, step.name), 750).unref?.();
     return;
   }
 
@@ -363,14 +363,14 @@ child.onData(data => {
         actionSentAt[nextStep.name] = Date.now();
         activeActionRawLength = raw.length;
         writeInput(nextStep.key, nextStep.name);
-      }, 300).unref?.();
+      }, 750).unref?.();
       return;
     }
     setTimeout(() => {
       closeSentAt = Date.now();
       activeActionRawLength = raw.length;
       writeInput("q", "close action");
-    }, 300).unref?.();
+    }, 750).unref?.();
     return;
   }
 

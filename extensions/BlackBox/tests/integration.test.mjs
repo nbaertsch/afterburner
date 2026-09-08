@@ -8,13 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { DEFAULT_MAX_BYTES, DEFAULT_SEGMENT_BYTES, loadBlackBoxConfig, resolveNativeEventsPath } from "../lib/config.mjs";
 import { buildSessionRegistration } from "../lib/session-extension.mjs";
 import { startBlackBoxService } from "../lib/service.mjs";
-import {
-    BLACK_BOX_OBSERVABILITY_CAPABILITY,
-    blackBoxObservabilitySinkDescriptor,
-    buildEnterpriseModalFrame,
-    registerEnterpriseSurface,
-    subscribeObservability
-} from "../lib/ui-surface.mjs";
+import { buildModalFrame } from "../lib/modal-surface.mjs";
 import { MODAL_ACTIVATION_POLL_MS, activate } from "../runtime/extension.mjs";
 import { cleanup, completeConfig, workDirectory } from "./helpers.mjs";
 
@@ -242,7 +236,7 @@ function createFakeRuntimeUI() {
     const components = new Proxy({}, { get: (_target, kind) => component(String(kind)) });
     const createUIDocument = (root, options = {}) => ({
         schemaVersion: 1,
-        protocol: "afterburner.ui",
+        protocol: "afterburner.modal",
         revision: options.revision ?? 1,
         surfaceId: options.surfaceId ?? root?.props?.surfaceId,
         root,
@@ -318,8 +312,9 @@ test("Black Box manifest does not advertise generic canvas capability", async ()
     const manifest = JSON.parse(await readFile(new URL("../afterburner.json", import.meta.url), "utf8"));
     assert.equal(manifest.id, "black-box");
     assert.ok(manifest.capabilities.includes("modal-canvas"));
-    assert.ok(manifest.capabilities.includes("enterprise-surface"));
     assert.equal(manifest.capabilities.includes("canvas"), false);
+    assert.equal(manifest.capabilities.includes("enterprise-surface"), false);
+    assert.equal(manifest.ui, undefined);
 });
 
 test("session extension wrapper does not open the generic Copilot canvas", async () => {
@@ -417,252 +412,7 @@ test("runtime activation registers an isolated observer without modal support", 
         "colosseum-prod/gpt-5-5");
 });
 
-function enterpriseTestService(initialRecords = []) {
-    const listeners = new Set();
-    const records = [...initialRecords];
-    return {
-        async status() {
-            return {
-                schemaVersion: 1,
-                enabled: true,
-                mode: "runtime",
-                storage: { maxBytes: 1024 * 1024, segmentBytes: 4096, segmentCount: 1, retentionBlockedBytes: 0 },
-                queue: { records: 0, bytes: 0, droppedRecords: 0, writeErrors: 0 },
-                analytics: { anomalyCount: records.filter(record => record.kind === "anomaly").length, milestoneCount: records.filter(record => record.kind === "milestone").length, totalRecords: records.length },
-                native: { enabled: false, configured: false },
-                recentSignals: records.filter(record => record.kind === "anomaly" || record.kind === "milestone").slice(0, 10)
-            };
-        },
-        async tail() { return [...records].reverse(); },
-        async doctor() { return { healthy: true, checked: "metadata-only" }; },
-        async exportBundle() { return { path: "C:\\private\\black-box-export.zip", manifest: { recordCount: records.length } }; },
-        subscribeRecords(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-        emit(record) {
-            records.push(record);
-            for (const listener of listeners) listener(record);
-        },
-        async observeRuntime(event) {
-            this.observed = event;
-            return true;
-        },
-        observed: null
-    };
-}
-
-function enterpriseRecord(id, overrides = {}) {
-    return {
-        schemaVersion: 1,
-        recordId: id,
-        kind: overrides.kind ?? "event",
-        timestamp: overrides.timestamp ?? "2026-09-02T10:00:00.000Z",
-        observedAt: overrides.observedAt ?? "2026-09-02T10:00:00.000Z",
-        eventType: overrides.eventType ?? "model.request.completed",
-        severity: overrides.severity ?? "info",
-        source: { kind: "runtime-observer", processRef: "ref_process" },
-        correlation: { eventRef: "ref_event" },
-        attributes: { model: "colosseum-prod/gpt-5-5", durationMs: 42, success: true, content: "SECRET BODY", ...overrides.attributes },
-        bodyReferences: [{ field: "data.content", byteLength: 11 }]
-    };
-}
-
-test("enterprise surface defines schema, accessible tree, actions, fallback, patches, and reconnect", async () => {
-    const service = enterpriseTestService([
-        enterpriseRecord("rec_a"),
-        enterpriseRecord("rec_b", { kind: "anomaly", eventType: "ui.host.recovery", severity: "warning", attributes: { recoveryState: "reconnected" } })
-    ]);
-    const registered = [];
-    const rendered = [];
-    const patches = [];
-    const enterprise = await registerEnterpriseSurface({
-        ui: createFakeRuntimeUI(),
-        registerSurface: async descriptor => { registered.push(descriptor); return { ok: true }; },
-        renderSurface: async (id, document) => { rendered.push({ id, document }); return { ok: true }; },
-        patchSurface: async (id, patch) => { patches.push({ id, patch }); return { ok: true }; },
-        closeSurface: async () => ({ ok: true })
-    }, service);
-
-    assert.equal(enterprise.surface.id, "afterburner-black-box-live");
-    assert.equal(registered[0].kind, "panel");
-    assert.deepEqual(registered[0].actions.map(action => action.id), ["refresh", "doctor", "export", "select", "filter", "sort", "close"]);
-    assert.equal(registered[0].metadata.privacy.metadataOnly, true);
-    assert.equal(registered[0].metadata.nativeTerminalModal.input, "keyboard-only");
-    assert.equal(registered[0].metadata.nativeTerminalModal.mouse, false);
-    assert.equal(registered[0].metadata.richPanelMouse.toolbarButtons, true);
-    assert.ok(registered[0].metadata.grants.some(grant => grant.capability === "ui.observability.black-box.sink"));
-
-    const opened = await enterprise.open({ filter: "model", sort: { field: "timestamp", direction: "desc" } });
-    assert.equal(opened.ok, true);
-    const tree = JSON.stringify(opened.document);
-    assert.match(tree, /commandPalette/);
-    assert.match(tree, /Timeline table/);
-    assert.match(tree, /virtualization/);
-    assert.match(tree, /progressbar/);
-    assert.match(tree, /tablist/);
-    assert.match(tree, /Black Box command palette/);
-    assert.doesNotMatch(tree, /SECRET BODY|private\\black-box/);
-    assert.equal(rendered[0].id, "afterburner-black-box-live");
-
-    await enterprise.surface.invoke("select", { recordId: "rec_a" });
-    assert.equal(enterprise.state.selectedRecordId, "rec_a");
-    service.emit(enterpriseRecord("rec_c", { timestamp: "2026-09-02T10:00:01.000Z", attributes: { durationMs: 7, success: false, prompt: "PROMPT SECRET" } }));
-    await waitFor(() => patches.length > 0);
-    assert.equal(patches[0].id, "afterburner-black-box-live");
-    assert.equal(patches[0].patch.operations[0].op, "replace");
-    assert.equal(patches[0].patch.operations[0].path, "/root");
-    assert.doesNotMatch(JSON.stringify(patches), /PROMPT SECRET|SECRET BODY|private\\black-box/);
-
-    const recovered = await enterprise.recover();
-    assert.equal(recovered.ok, true);
-    assert.equal(enterprise.state.lifecycle.reconnectCount, 1);
-    assert.equal(enterprise.state.selectedRecordId, "rec_a");
-    await enterprise.dispose();
-});
-
-test("enterprise surface degrades deterministically when host or capabilities are absent", async () => {
-    const noHost = await registerEnterpriseSurface({}, enterpriseTestService([enterpriseRecord("rec_fallback")]));
-    const opened = await noHost.open();
-    assert.equal(opened.fallback, true);
-    assert.match(opened.text, /Afterburner Black Box Enterprise/);
-    assert.match(opened.text, /deterministic metadata-only fallback/);
-    assert.equal(noHost.surface.fallback().text, opened.text);
-
-    const denied = await registerEnterpriseSurface({ hasCapability: capability => capability !== "ui.surface.panel" }, enterpriseTestService());
-    assert.match(denied.fallbackText, /required UI capability was denied/);
-    const deniedOpen = await denied.open();
-    assert.equal(deniedOpen.fallback, true);
-    assert.match(deniedOpen.text, /deterministic metadata-only fallback/);
-});
-
-test("required UI grant denial blocks the enterprise surface without leaking denial details", async () => {
-    const registered = [];
-    const rendered = [];
-    const enterprise = await registerEnterpriseSurface({
-        requestCapabilities: async declarations => {
-            const denied = declarations
-                .filter(grant => grant.capability === "ui.surface.panel")
-                .map(grant => ({ capability: grant.capability, reason: "enterprise-policy-denied", detail: "PROMPT SECRET" }));
-            return denied.length ? { granted: false, denied } : { granted: true };
-        },
-        registerSurface: async descriptor => { registered.push(descriptor); return { ok: true }; },
-        renderSurface: async (id, document) => { rendered.push({ id, document }); return { ok: true }; }
-    }, enterpriseTestService([enterpriseRecord("rec_required_deny", { attributes: { prompt: "PROMPT SECRET" } })]));
-
-    assert.equal(enterprise.denied, "enterprise-policy-denied");
-    assert.equal(enterprise.descriptorResult.denied, true);
-    assert.equal(registered.length, 0);
-    const opened = await enterprise.open();
-    assert.equal(opened.fallback, true);
-    assert.match(opened.text, /required UI capability was denied/);
-    assert.equal(rendered.length, 0);
-    assert.doesNotMatch(JSON.stringify(opened), /PROMPT SECRET/);
-});
-
-test("optional observability grant denial keeps the enterprise surface usable", async () => {
-    const requested = [];
-    const registered = [];
-    const rendered = [];
-    const service = enterpriseTestService([enterpriseRecord("rec_optional_deny", { attributes: { prompt: "PROMPT SECRET" } })]);
-    const enterprise = await registerEnterpriseSurface({
-        ui: createFakeRuntimeUI(),
-        requestCapabilities: async declarations => {
-            requested.push(declarations.map(grant => grant.capability));
-            const denied = declarations
-                .filter(grant => grant.capability === BLACK_BOX_OBSERVABILITY_CAPABILITY)
-                .map(grant => ({ capability: grant.capability, reason: "optional-policy-denied", detail: "TOOL SECRET" }));
-            return denied.length ? { granted: false, denied } : { granted: true };
-        },
-        registerSurface: async descriptor => { registered.push(descriptor); return { ok: true }; },
-        renderSurface: async (id, document) => { rendered.push({ id, document }); return { ok: true }; },
-        patchSurface: async () => ({ ok: true }),
-        closeSurface: async () => ({ ok: true })
-    }, service);
-
-    assert.equal(enterprise.denied, null);
-    assert.equal(enterprise.state.observability.enabled, false);
-    assert.equal(enterprise.state.observability.denials[0].reason, "optional-policy-denied");
-    assert.ok(requested.some(capabilities => capabilities.includes(BLACK_BOX_OBSERVABILITY_CAPABILITY)));
-    assert.equal(registered.length, 1);
-    const opened = await enterprise.open();
-    assert.equal(opened.ok, true);
-    assert.equal(opened.fallback, false);
-    const tree = JSON.stringify(opened.document);
-    assert.match(tree, /Optional observability subscription disabled/);
-    assert.match(tree, /observability sink disabled/);
-    assert.doesNotMatch(tree, /PROMPT SECRET|TOOL SECRET/);
-    assert.equal(rendered.length, 1);
-    await enterprise.dispose();
-});
-
-test("UI observability sink accepts metadata only and redacts payload-shaped fields", async () => {
-    const service = enterpriseTestService();
-    const requested = [];
-    let registeredSink;
-    const dispose = await subscribeObservability({
-        requestCapabilities: async declarations => { requested.push(declarations.map(grant => grant.capability)); return { granted: true }; },
-        registerObservabilitySink: sink => { registeredSink = sink; return () => { registeredSink = null; }; }
-    }, service);
-    assert.deepEqual(requested, [[BLACK_BOX_OBSERVABILITY_CAPABILITY]]);
-    assert.equal(registeredSink.descriptor.id, blackBoxObservabilitySinkDescriptor().id);
-    await registeredSink.publish({
-        schemaVersion: 1,
-        protocol: "afterburner.ui",
-        revision: 1,
-        type: "ui.host.lifecycle",
-        sinkId: "black-box.ui.events",
-        envelopeId: "env-1",
-        envelopeKind: "component.snapshot",
-        surfaceId: "afterburner-black-box-live",
-        at: "2026-09-02T10:00:00.000Z",
-        attributes: {
-            state: JSON.stringify("rendered"),
-            durationMs: JSON.stringify(42),
-            prompt: JSON.stringify("PROMPT SECRET"),
-            toolArguments: JSON.stringify({ secret: "TOOL SECRET" }),
-            rawPath: JSON.stringify("C:\\private\\workspace")
-        }
-    });
-    assert.equal(service.observed.type, "ui.host.lifecycle");
-    assert.equal(service.observed.data.state, "rendered");
-    assert.equal(service.observed.data.durationMs, 42);
-    assert.equal(service.observed.data.surfaceId, "afterburner-black-box-live");
-    assert.doesNotMatch(JSON.stringify(service.observed), /PROMPT SECRET|TOOL SECRET|private\\workspace/);
-    dispose();
-});
-
-test("UI observability optional grant denial disables only the sink and records metadata diagnostic", async () => {
-    const service = enterpriseTestService();
-    let registerCalled = false;
-    const result = await subscribeObservability({
-        requestCapabilities: async declarations => {
-            assert.deepEqual(declarations.map(grant => grant.capability), [BLACK_BOX_OBSERVABILITY_CAPABILITY]);
-            return {
-                granted: false,
-                denied: [{ capability: BLACK_BOX_OBSERVABILITY_CAPABILITY, reason: "denied C:\\private\\SECRET", detail: "C:\\private\\SECRET" }]
-            };
-        },
-        registerObservabilitySink: () => { registerCalled = true; }
-    }, service);
-
-    assert.equal(registerCalled, false);
-    assert.equal(result.denied, true);
-    assert.equal(result.disabled, true);
-    assert.equal(result.reason, "optional-capability-denied");
-    assert.equal(result.diagnostic, "optional-observability-sink-denied");
-    assert.equal(service.observed.type, "ui.observability.subscription");
-    assert.equal(service.observed.data.state, "disabled");
-    assert.equal(service.observed.data.sinkId, "black-box.ui.events");
-    assert.equal(service.observed.data.securityDecision, "deny");
-    assert.doesNotMatch(JSON.stringify(service.observed), /SECRET|private/);
-});
-
-test("UI observability host absence preserves legacy no-op behavior", async () => {
-    const service = enterpriseTestService();
-    const result = await subscribeObservability({}, service);
-    assert.equal(result, null);
-    assert.equal(service.observed, null);
-});
-
-test("installed-like activation uses runtime api.ui without repository UI imports", async t => {
+test("installed-like activation uses only the native modal runtime API", async t => {
     await configureRuntimeEnvironment(t, "runtime-installed-copy");
     const sourceRoot = fileURLToPath(new URL("..", import.meta.url));
     const installedRoot = await mkdtemp(join(tmpdir(), "black-box-installed-"));
@@ -675,45 +425,31 @@ test("installed-like activation uses runtime api.ui without repository UI import
             return !normalized.includes(`${root}.test-work`) && !normalized.includes(`${root}node_modules`);
         }
     });
-    const copiedSurfaceSource = await readFile(join(installedRoot, "lib", "ui-surface.mjs"), "utf8");
+    const copiedSurfaceSource = await readFile(join(installedRoot, "lib", "modal-surface.mjs"), "utf8");
     assert.doesNotMatch(copiedSurfaceSource, /(?:sdk[\\/]ui|src[\\/]runtime)/, "packaged Black Box must not reference repository UI SDK paths");
 
-    const registered = [];
-    const rendered = [];
     const modalDefinitions = [];
-    const brokerHandle = { id: "afterburner-black-box-live", broker: "mock-runtime" };
     const ui = {
         ...createFakeRuntimeUI(),
-        registerSurface: async descriptor => { registered.push(descriptor); return { ok: true, handle: brokerHandle, descriptor }; },
-        renderSurface: async (id, document) => { rendered.push({ id, document }); return { ok: true, handle: brokerHandle }; },
-        patchSurface: async () => ({ ok: true, handle: brokerHandle }),
-        closeSurface: async () => ({ ok: true, handle: brokerHandle }),
         registerModalCanvas: definition => {
             modalDefinitions.push(definition);
             return { open: async () => definition.open(), close: async () => ({ ok: true }), dispose() {} };
-        },
-        registerObservabilitySink: () => ({ dispose() {} })
+        }
     };
     let observer;
     const moduleUrl = pathToFileURL(join(installedRoot, "runtime", "extension.mjs")).href + `?installed=${Date.now()}`;
     const { activate: activateInstalled } = await import(moduleUrl);
     const instance = await activateInstalled({
         ui,
-        requestCapabilities: async () => ({ granted: true }),
         registerRuntimeObserver: value => { observer = value; return () => {}; }
     });
     t.after(() => instance?.dispose());
 
     assert.equal(observer.id, "black-box");
-    assert.equal(registered[0].id, "afterburner-black-box-live");
-    assert.equal(registered[0].ownerExtensionId, "black-box");
-    assert.equal(instance.enterprise.descriptorResult.handle, brokerHandle);
-    const opened = await instance.enterprise.open({});
-    assert.equal(opened.ok, true);
-    assert.equal(opened.document.surfaceId, "afterburner-black-box-live");
-    assert.equal(rendered[0].id, "afterburner-black-box-live");
-    assert.equal(rendered[0].document.surfaceId, "afterburner-black-box-live");
     assert.equal(modalDefinitions[0].id, "afterburner-black-box-live");
+    assert.equal(instance.enterprise, undefined);
+    assert.equal(instance.observability, undefined);
+    assert.equal((await instance.modal.open()).document.surfaceId, "afterburner-black-box-live");
     await instance.dispose();
 });
 
@@ -924,7 +660,7 @@ test("runtime modal opens, refreshes from accepted metadata events, and handles 
 });
 
 test("runtime modal surfaces actionable health warnings", () => {
-    const frame = buildEnterpriseModalFrame(createFakeRuntimeUI(), {
+    const frame = buildModalFrame(createFakeRuntimeUI(), {
         status: {
             schemaVersion: 1,
             enabled: true,

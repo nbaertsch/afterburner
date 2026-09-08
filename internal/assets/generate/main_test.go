@@ -129,10 +129,11 @@ func TestGeneratedBlackBoxArchiveExcludesGenericCanvasFallback(t *testing.T) {
 			t.Fatal("generated Black Box archive must not advertise generic canvas capability")
 		}
 	}
-	for _, capability := range []string{"modal-canvas", "enterprise-surface"} {
-		if !containsString(manifest.Capabilities, capability) {
-			t.Fatalf("generated Black Box archive missing %q capability", capability)
-		}
+	if !containsString(manifest.Capabilities, "modal-canvas") {
+		t.Fatal("generated Black Box archive missing modal-canvas capability")
+	}
+	if containsString(manifest.Capabilities, "enterprise-surface") {
+		t.Fatal("generated Black Box archive must not advertise enterprise-surface capability")
 	}
 	for _, name := range []string{"lib/session-extension.mjs", "extensions/BlackBox/extension.mjs"} {
 		content, ok := contents[name]
@@ -141,6 +142,19 @@ func TestGeneratedBlackBoxArchiveExcludesGenericCanvasFallback(t *testing.T) {
 		}
 		if strings.Contains(content, "createCanvas") || strings.Contains(content, "openModalCanvas") || strings.Contains(content, "canvasRpc.open") || strings.Contains(content, "canvases: canvas") {
 			t.Fatalf("generated Black Box archive contains generic canvas fallback in %s", name)
+		}
+	}
+}
+
+func TestGeneratedArchivesContainRuntimeFilesOnly(t *testing.T) {
+	for _, archiveName := range []string{"black-box.zip", "byo-models.zip", "openai-server.zip"} {
+		entries := readZipEntries(t, filepath.Join("..", "generated", archiveName))
+		for name := range entries {
+			lower := strings.ToLower(name)
+			if lower == "readme.md" || lower == "package.json" || lower == "package-lock.json" ||
+				strings.HasPrefix(lower, "test/") || strings.HasPrefix(lower, "tests/") {
+				t.Fatalf("%s contains development-only file %s", archiveName, name)
+			}
 		}
 	}
 }

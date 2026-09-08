@@ -136,6 +136,27 @@ test("modal IPC atomically claims action batches without deleting concurrent app
     }
 });
 
+test("modal IPC immediately recovers a lock abandoned by a terminated process", async () => {
+    const originalHome = process.env.AFTERBURNER_HOME;
+    const home = join(tmpdir(), `afterburner-openai-abandoned-lock-${process.pid}-${randomBytes(4).toString("hex")}`);
+    process.env.AFTERBURNER_HOME = home;
+    try {
+        const stateDir = join(home, "state", "openai-server");
+        const actionFile = join(stateDir, "modal-actions.jsonl");
+        const request = { schemaVersion: 1, requestId: "after-abandoned-lock", action: "status", createdAt: new Date().toISOString() };
+        await mkdir(stateDir, { recursive: true });
+        await writeFile(actionFile, `${JSON.stringify(request)}\n`, "utf8");
+        await writeFile(`${actionFile}.lock`, JSON.stringify({ pid: 2_147_483_647, acquiredAt: Date.now() }), "utf8");
+        const startedAt = Date.now();
+        const requests = await consumeBridgeActionRequests();
+        assert.equal(requests[0]?.requestId, request.requestId);
+        assert.ok(Date.now() - startedAt < 1_000);
+    } finally {
+        if (originalHome === undefined) delete process.env.AFTERBURNER_HOME;
+        else process.env.AFTERBURNER_HOME = originalHome;
+    }
+});
+
 test("normalizes Copilot catalog entries into OpenAI model objects", () => {
     assert.deepEqual(normalizeModel({
         id: "gpt-5.5",

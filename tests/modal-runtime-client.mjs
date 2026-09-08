@@ -42,14 +42,14 @@ function createPipeConnection(pipe) {
 
 async function loadModalRuntime(appPath, brokerConfig) {
   const source = await readFile(appPath, "utf8");
-  const afterburnerUI = await import(pathToFileURL(join(dirname(appPath), "runtime", "afterburner-ui.mjs")).href);
+  const modalUI = await import(pathToFileURL(join(dirname(appPath), "runtime", "modal-ui.mjs")).href);
   const start = source.indexOf("function normalizeModalBootstrapSurfaces");
   const end = source.indexOf("function disposeRuntimeObservers");
   assert.ok(start >= 0 && end > start, "modal runtime block not found");
   const events = [];
   const context = createContext({
     console,
-    afterburnerUI,
+    modalUI,
     process: { env: { ...process.env } },
     setTimeout,
     clearTimeout,

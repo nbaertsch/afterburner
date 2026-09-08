@@ -49,10 +49,6 @@
         "entrypoint": { "type": "string" }
       },
       "additionalProperties": false
-    },
-    "ui": {
-      "$ref": "extension-ui-v1.schema.json",
-      "description": "Optional afterburner.ui declaration. Existing schemaVersion 1 manifests remain valid when omitted."
     }
   },
   "additionalProperties": false

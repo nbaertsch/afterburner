@@ -6,8 +6,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const checkOnly = process.argv.includes("--check");
 const copies = [
   ["src/app.js", "internal/runtimepkg/app.js"],
-  ["src/runtime/afterburner-ui.mjs", "internal/runtimepkg/runtime/afterburner-ui.mjs"],
-  ["src/runtime/afterburner-ui.mjs", "sdk/ui/dist/afterburner-ui.mjs"]
+  ["src/runtime/modal-ui.mjs", "internal/runtimepkg/runtime/modal-ui.mjs"]
 ];
 
 let stale = false;

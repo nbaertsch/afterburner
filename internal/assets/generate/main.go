@@ -166,6 +166,12 @@ func archiveTextFile(path string) bool {
 
 func excluded(name string, isDir bool) bool {
 	lower := strings.ToLower(name)
+	if isDir && (lower == "test" || lower == "tests") {
+		return true
+	}
+	if !isDir && (lower == "readme.md" || lower == "package.json" || lower == "package-lock.json") {
+		return true
+	}
 	if isExcludedTransient(lower, isDir) {
 		return true
 	}

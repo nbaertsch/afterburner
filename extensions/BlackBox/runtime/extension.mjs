@@ -1,6 +1,6 @@
 import { watch } from "node:fs";
 import { startBlackBoxService } from "../lib/service.mjs";
-import { buildEnterpriseModalFrame, hashDisplayPath, registerEnterpriseSurface, subscribeObservability } from "../lib/ui-surface.mjs";
+import { buildModalFrame, hashDisplayPath } from "../lib/modal-surface.mjs";
 
 const INSTANCE = Symbol.for("afterburner.black-box.runtime");
 const LIVE_MODAL_ID = "afterburner-black-box-live";
@@ -36,7 +36,7 @@ async function modalState(service, overrides = {}) {
 }
 
 async function renderLiveModal(service, ui, overrides = {}) {
-    return buildEnterpriseModalFrame(ui, await modalState(service, overrides));
+    return buildModalFrame(ui, await modalState(service, overrides));
 }
 
 async function safeRenderLiveModal(service, ui, overrides = {}) {
@@ -254,13 +254,6 @@ export async function activate(api = {}) {
             isolatedWarning("runtime-observer-registration-failed");
             return null;
         }
-        let observability;
-        try { observability = await subscribeObservability(api, service); }
-        catch { isolatedWarning("ui-observability-registration-failed"); }
-        const enterprise = await registerEnterpriseSurface(api, service).catch(() => {
-            isolatedWarning("enterprise-surface-registration-failed");
-            return null;
-        });
         const modal = registerLiveModal(api, service);
         let activationTimer = null;
         let activationWatcher = null;
@@ -311,21 +304,14 @@ export async function activate(api = {}) {
         const instance = {
             service,
             observer,
-            observability,
-            enterprise,
             modal,
             async dispose() {
                 try {
                     if (typeof dispose === "function") await dispose();
                     else if (typeof dispose?.dispose === "function") await dispose.dispose();
                 } catch {}
-                try {
-                    if (typeof observability === "function") await observability();
-                    else if (typeof observability?.dispose === "function") await observability.dispose();
-                } catch {}
                 try { if (activationTimer) clearInterval(activationTimer); } catch {}
                 try { activationWatcher?.close?.(); } catch {}
-                try { await enterprise?.dispose?.(); } catch {}
                 try { await modal?.close?.(); } catch {}
                 try { modal?.dispose?.(); } catch {}
                 await service.close().catch(() => {});

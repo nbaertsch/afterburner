@@ -18,16 +18,16 @@ func TestEmbeddedRuntimeMatchesCanonicalSource(t *testing.T) {
 	if !bytes.Equal(runtimeHost, canonical) {
 		t.Fatal("embedded runtime host is stale; copy src/app.js to internal/runtimepkg/app.js")
 	}
-	canonicalUI, err := os.ReadFile(filepath.Join("..", "..", "src", "runtime", "afterburner-ui.mjs"))
+	canonicalUI, err := os.ReadFile(filepath.Join("..", "..", "src", "runtime", "modal-ui.mjs"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	embeddedUI, err := runtimeAssets.ReadFile("runtime/afterburner-ui.mjs")
+	embeddedUI, err := runtimeAssets.ReadFile("runtime/modal-ui.mjs")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(embeddedUI, canonicalUI) {
-		t.Fatal("embedded UI runtime is stale; copy src/runtime/afterburner-ui.mjs to internal/runtimepkg/runtime/afterburner-ui.mjs")
+		t.Fatal("embedded modal runtime is stale; copy src/runtime/modal-ui.mjs to internal/runtimepkg/runtime/modal-ui.mjs")
 	}
 }
 

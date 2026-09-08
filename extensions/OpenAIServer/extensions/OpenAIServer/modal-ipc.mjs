@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterburnerHome, CANONICAL_ID, LEGACY_ID } from "./names.mjs";
@@ -16,19 +16,74 @@ const stateIds = [CANONICAL_ID, LEGACY_ID];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const now = () => new Date().toISOString();
 
-async function appendJsonLine(path, value) {
+function processIsAlive(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        if (error?.code === "ESRCH") return false;
+        if (error?.code === "EPERM") return true;
+        return null;
+    }
+}
+
+async function withQueueLock(path, operation) {
+    const lockPath = `${path}.lock`;
+    const deadline = Date.now() + 2_000;
     await mkdir(join(path, ".."), { recursive: true });
-    await writeFile(path, `${JSON.stringify(value)}\n`, { flag: "a" });
+    while (true) {
+        let lock;
+        try {
+            lock = await open(lockPath, "wx");
+            try {
+                await lock.writeFile(JSON.stringify({ pid: process.pid, acquiredAt: Date.now() }), "utf8");
+                return await operation();
+            } finally {
+                await lock.close().catch(() => {});
+                await unlink(lockPath).catch(error => {
+                    if (error?.code !== "ENOENT") throw error;
+                });
+            }
+        } catch (error) {
+            if (error?.code !== "EEXIST") throw error;
+            try {
+                const info = await stat(lockPath);
+                let ownerAlive = null;
+                try {
+                    const owner = JSON.parse(await readFile(lockPath, "utf8"));
+                    ownerAlive = processIsAlive(owner?.pid);
+                } catch {}
+                if (ownerAlive === false || Date.now() - info.mtimeMs > 30_000) {
+                    await unlink(lockPath);
+                    continue;
+                }
+            } catch (statError) {
+                if (statError?.code === "ENOENT") continue;
+                throw statError;
+            }
+            if (Date.now() >= deadline) throw new Error(`queue lock timeout: ${path}`);
+            await sleep(5);
+        }
+    }
+}
+
+async function appendJsonLine(path, value) {
+    await withQueueLock(path, () => writeFile(path, `${JSON.stringify(value)}\n`, { flag: "a" }));
 }
 
 async function readAndClearJsonLines(path, stateId, predicate = () => true) {
     const claimedPath = `${path}.${process.pid}-${randomBytes(6).toString("hex")}.claimed`;
-    try {
-        await rename(path, claimedPath);
-    } catch (error) {
-        if (error?.code === "ENOENT") return [];
-        throw error;
-    }
+    const claimed = await withQueueLock(path, async () => {
+        try {
+            await rename(path, claimedPath);
+            return true;
+        } catch (error) {
+            if (error?.code === "ENOENT") return false;
+            throw error;
+        }
+    });
+    if (!claimed) return [];
     let body = "";
     try {
         body = await readFile(claimedPath, "utf8");

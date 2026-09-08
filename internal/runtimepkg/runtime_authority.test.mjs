@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { Script, createContext } from "node:vm";
 import test from "node:test";
-import * as afterburnerUI from "../../src/runtime/afterburner-ui.mjs";
+import * as modalUI from "../../src/runtime/modal-ui.mjs";
 
 async function loadRuntimeAuthority(stubs = {}) {
   const source = await readFile(new URL("../../src/app.js", import.meta.url), "utf8");
@@ -13,7 +13,7 @@ async function loadRuntimeAuthority(stubs = {}) {
   assert.ok(start >= 0 && end > start, "runtime extension API block not found");
   const registrations = { observers: [], modals: [] };
   const context = createContext({
-    afterburnerUI,
+    modalUI,
     createHash,
     resolve,
     modalBlackBoxOwnerExtensionId: "black-box",
@@ -76,20 +76,7 @@ const blackBoxManifest = {
   schemaVersion: 1,
   id: "black-box",
   visibility: "builtin",
-  capabilities: ["runtime-observer", "modal-canvas"],
-  ui: {
-    protocol: "afterburner.ui",
-    revision: 1,
-    capabilities: ["ui.render.components", "ui.surface.panel", "ui.observability.black-box.sink"],
-    grantPolicy: {
-      schemaVersion: 1,
-      protocol: "afterburner.ui",
-      revision: 1,
-      extensionId: "black-box",
-      denyByDefault: true,
-      grants: [{ id: "black-box-observability", effect: "allow", capabilities: ["ui.observability.black-box.sink"], resources: ["afterburner.ui/envelopes/metadata"] }]
-    }
-  }
+  capabilities: ["runtime-observer", "modal-canvas"]
 };
 
 function verifiedBlackBoxOptions(overrides = {}) {
@@ -143,25 +130,14 @@ test("global runtime addon does not expose forgeable privileged authority", asyn
   assert.equal(typeof addon.diagnostics.getRuntimeObserverDiagnostics, "function");
 });
 
-test("runtimeExtensionApi exposes composable UI component catalog", async () => {
+test("runtimeExtensionApi exposes only modal document builders", async () => {
   const context = await loadRuntimeAuthority();
   const api = context.runtimeExtensionApi("C:\\extensions\\sample", { extensionId: "sample", manifest: extensionManifest("sample", ["modal-canvas"]) });
-  assert.ok(Array.isArray(api.ui.componentCatalog));
-  assert.deepEqual(api.ui.componentCatalog.map(entry => entry.kind), api.ui.componentKinds);
-  for (const entry of api.ui.componentCatalog) {
-    assert.equal(entry.stability, "stable", `stability for ${entry.kind}`);
-    assert.equal(typeof entry.description, "string", `description for ${entry.kind}`);
-    assert.equal(typeof api.ui.components[entry.kind], "function", `components.${entry.kind}`);
-    assert.equal(typeof api.ui[entry.kind], "function", `ui.${entry.kind}`);
-  }
-  assert.ok(Array.isArray(api.ui.surfaceCatalog));
-  assert.deepEqual(api.ui.surfaceCatalog.map(entry => entry.kind), api.ui.surfaceKinds);
-  assert.ok(api.ui.surfaceCatalog.some(entry => entry.kind === "overlay"));
-  assert.ok(Array.isArray(api.ui.capabilityCatalog));
-  assert.deepEqual(api.ui.capabilityCatalog.map(entry => entry.id), api.ui.capabilityKinds);
-  assert.ok(api.ui.capabilityCatalog.some(entry => entry.id === "ui.observability.black-box.sink"));
-  assert.equal(api.ui.section({ title: "Section" }, [], { id: "section-fixture" }).kind, "section");
-  assert.equal(api.ui.prompt({ title: "Prompt" }, [], { id: "prompt-fixture" }).kind, "prompt");
+  assert.equal(typeof api.ui.createUIDocument, "function");
+  assert.equal(typeof api.ui.components.dialog, "function");
+  assert.equal(typeof api.ui.registerModalCanvas, "function");
+  assert.equal(api.registerSurface, undefined);
+  assert.equal(api.registerObservabilitySink, undefined);
 });
 
 test("runtimeExtensionApi binds modal ownership and blocks forged black-box owner", async () => {
@@ -189,7 +165,6 @@ test("runtimeExtensionApi denies fake Black Box string identity", async () => {
   const api = context.runtimeExtensionApi("C:\\extensions\\BlackBox", { extensionId: "black-box", manifest: blackBoxManifest });
   assert.throws(() => api.registerModalCanvas({ id: "afterburner-black-box-live", open: () => ({ body: "bad" }) }), /reserved for Black Box|authorization|denied/i);
   assert.equal(api.registerRuntimeObserver, undefined);
-  assert.equal(api.hasCapability("ui.observability.black-box.sink", "afterburner.ui/envelopes/metadata"), false);
 });
 
 test("runtimeExtensionApi allows verified embedded Black Box modal surfaces", async () => {
@@ -213,7 +188,7 @@ test("extensions without runtime-observer capability cannot subscribe", async ()
   assert.equal(api.getRuntimeObserverDiagnostics, undefined);
 });
 
-test("authorized Black Box receives owner-scoped runtime observer and observability APIs", async () => {
+test("authorized Black Box receives owner-scoped runtime observer and modal APIs", async () => {
   const context = await loadRuntimeAuthority();
   const api = context.runtimeExtensionApi("C:\\extensions\\BlackBox", verifiedBlackBoxOptions());
   assert.equal(typeof api.registerRuntimeObserver, "function");
@@ -221,8 +196,8 @@ test("authorized Black Box receives owner-scoped runtime observer and observabil
   assert.equal(typeof dispose, "function");
   assert.equal(context.registrations.observers[0].definition.id, "black-box");
   assert.equal(context.registrations.observers[0].options.ownerExtensionId, "black-box");
-  assert.equal(typeof api.registerObservabilitySink, "function");
-  assert.equal(typeof api.subscribeObservability, "function");
+  assert.equal(typeof api.registerModalCanvas, "function");
+  assert.equal(api.registerObservabilitySink, undefined);
 });
 
 test("host grant denial suppresses runtime observer API despite declaration", async () => {

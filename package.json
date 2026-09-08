@@ -6,8 +6,7 @@
   "scripts": {
     "sync:runtime": "node scripts/sync-runtime.mjs",
     "check:runtime": "node scripts/sync-runtime.mjs --check",
-    "test:sdk-ui": "npm test --prefix sdk/ui",
-    "test": "go test ./... && npm run test:black-box && npm run test:openai-server && npm run test:compatibility",
+    "test": "npm run test:black-box && npm run test:openai-server && npm run test:compatibility",
     "test:native": "go test ./...",
     "test:black-box": "npm test --prefix extensions/BlackBox",
     "test:openai-server": "npm test --prefix extensions/OpenAIServer",

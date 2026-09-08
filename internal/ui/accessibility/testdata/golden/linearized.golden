@@ -1,4 +1,0 @@
-application Afterburner
-  textbox Name [required=true] focusable
-  checkbox Agree [checked=true] focusable
-  status Saved

@@ -42,7 +42,6 @@ jobs:
       # unsafe.Pointer(uintptr) heuristic flags this known-safe pattern with
       # no per-line suppression available (golang/go#50134).
       - run: go vet -unsafeptr=false ./...
-      - run: npm run test:sdk-ui
       - run: npm test
       - name: Validate native ConPTY signal forwarding
         shell: pwsh

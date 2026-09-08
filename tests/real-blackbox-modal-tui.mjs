@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { inflateSync } from "node:zlib";
 import { join, resolve } from "node:path";
 import process from "node:process";
@@ -44,8 +44,10 @@ const latencyBudgets = {
 };
 const scriptStartedAt = Date.now();
 mkdirSync(captureDirectory, { recursive: true });
-const isolatedAfterburnerHome = join(captureDirectory, "afterburner-home");
-mkdirSync(isolatedAfterburnerHome, { recursive: true });
+const isolatedAfterburnerHome = mkdtempSync(join(tmpdir(), "afterburner-blackbox-"));
+process.once("exit", () => {
+  try { rmSync(isolatedAfterburnerHome, { recursive: true, force: true }); } catch {}
+});
 const installResult = spawnSync(afterburn, ["install", "black-box", "byo-models"], {
   cwd: process.cwd(),
   encoding: "utf8",
@@ -97,7 +99,7 @@ if (forbiddenCanvasMatches.length > 0) {
 if (packagePreflight.manifestCapabilities.includes("canvas")) {
   throw new Error("installed Black Box manifest still advertises generic canvas capability");
 }
-for (const capability of ["modal-canvas", "enterprise-surface"]) {
+for (const capability of ["modal-canvas"]) {
   if (!packagePreflight.manifestCapabilities.includes(capability)) {
     throw new Error(`installed Black Box manifest is missing ${capability}`);
   }
@@ -269,6 +271,7 @@ const result = (status, extra = {}) => {
 };
 
 const renderTerminalScreen = (value, columns = terminalColumns, rows = terminalRows) => {
+  value = String(value ?? "");
   const screen = Array.from({ length: rows }, () => Array(columns).fill(" "));
   let row = 0;
   let column = 0;
@@ -355,7 +358,7 @@ const extractOverlayEvidence = (value, titlePattern) => {
   const matches = [...text.matchAll(titlePattern)];
   const titleIndex = matches.at(-1)?.index ?? -1;
   if (titleIndex < 0) return "";
-  const before = text.lastIndexOf("\n", Math.max(0, titleIndex - 1200));
+  const before = text.lastIndexOf("\n", Math.max(0, titleIndex - 6000));
   const after = text.indexOf("\n", titleIndex + 2800);
   return text.slice(before < 0 ? 0 : before + 1, after < 0 ? undefined : after).trimEnd();
 };
@@ -370,7 +373,9 @@ const visualScreen = (value, titlePattern = null) => {
 const capturedScreens = () => [
   ["Modal overlay full screen", extractOverlayEvidence(modalOpenRaw, /Afterburner Black Box Live/gi)],
   ["Modal open screen", visualScreen(modalOpenRaw, /Afterburner Black Box Live/gi)],
-  ...focusSteps.map(step => [step.title, renderTerminalScreen(focusRaw[step.name])]),
+  ...focusSteps.map(step => [step.title, step.name === "spaceRefresh"
+    ? operatorSteps.find(entry => entry.name === step.name)?.viewportText ?? renderTerminalScreen(focusRaw[step.name])
+    : renderTerminalScreen(focusRaw[step.name])]),
   ...scrollSteps.map(step => [step.title, visualScreen(scrollRaw[step.name], /Afterburner Black Box Live/gi)]),
   ["Refresh action screen", visualScreen(refreshRaw, /Afterburner Black Box Live/gi)],
   ["Doctor overlay full screen", extractOverlayEvidence(doctorRaw, /Afterburner Black Box Doctor/gi)],
@@ -394,10 +399,13 @@ const modalGeometry = screen => {
     .map((line, index) => ({ line, index, left: line.search(/[╭│╰]/), right: Math.max(line.lastIndexOf("╮"), line.lastIndexOf("│"), line.lastIndexOf("╯")) }))
     .filter(item => item.left >= 0 && item.right > item.left);
   if (frameLines.length === 0) return { present: false, left: null, right: null, top: null, bottom: null, width: null, height: null };
-  const left = Math.min(...frameLines.map(item => item.left));
-  const right = Math.max(...frameLines.map(item => item.right));
-  const top = Math.min(...frameLines.map(item => item.index));
-  const bottom = Math.max(...frameLines.map(item => item.index));
+  const common = values => [...values.reduce((counts, value) => counts.set(value, (counts.get(value) ?? 0) + 1), new Map()).entries()]
+    .sort((left, right) => right[1] - left[1])[0][0];
+  const left = common(frameLines.map(item => item.left));
+  const right = common(frameLines.map(item => item.right));
+  const modalLines = frameLines.filter(item => Math.abs(item.left - left) <= 1 && Math.abs(item.right - right) <= 1);
+  const top = Math.min(...modalLines.map(item => item.index));
+  const bottom = Math.max(...modalLines.map(item => item.index));
   return { present: true, left, right, top, bottom, width: right - left + 1, height: bottom - top + 1 };
 };
 
@@ -413,8 +421,8 @@ const visualInspectionChecks = () => {
     .filter(([title]) => !/restore screen/i.test(title))
     .map(([, screen]) => screen)
     .join("\n");
-  const modalOverlayGeometry = modalGeometry(modalOverlayScreen);
-  const doctorOverlayGeometry = modalGeometry(doctorOverlayScreen);
+  const modalOverlayGeometry = modalGeometry(modalScreen);
+  const doctorOverlayGeometry = modalGeometry(doctorScreen);
   const focusScreens = Object.fromEntries(focusSteps.map(step => [step.name, screens[step.title] ?? ""]));
   const checks = {
     modalPreservesBackdrop: /Afterburner Black Box Live/i.test(modalOverlayScreen) && /(?:Copilot v|\/ commands|open sidebar)/i.test(modalOverlayScreen),
@@ -840,10 +848,10 @@ const finish = (code, message) => {
       writeCaptures("failed", { message: finalMessage });
     }
   }
-  try { child.kill(); } catch {}
+  try { process.kill(child.pid); } catch {}
   if (exitCode === 0) process.stdout.write(`${finalMessage}\n`);
   else process.stderr.write(`${finalMessage}\n--- tail ---\n${stripAnsi(raw).slice(-6000)}\n`);
-  process.exit(exitCode);
+  setTimeout(() => process.exit(exitCode), 500);
 };
 
 const scheduleWrite = (data, delayMs = 150, label = "input") => setTimeout(() => writeInput(data, label), delayMs).unref?.();

@@ -6,7 +6,7 @@ import test from "node:test";
 
 async function loadModalRuntime(transport, brokerConfig = null) {
   const source = await readFile(new URL("../../src/app.js", import.meta.url), "utf8");
-  const afterburnerUI = await import(new URL("../../src/runtime/afterburner-ui.mjs", import.meta.url));
+  const modalUI = await import(new URL("../../src/runtime/modal-ui.mjs", import.meta.url));
   const start = source.indexOf("function normalizeModalBootstrapSurfaces");
   const end = source.indexOf("function disposeRuntimeObservers");
   assert.ok(start >= 0 && end > start, "modal runtime block not found");
@@ -14,7 +14,7 @@ async function loadModalRuntime(transport, brokerConfig = null) {
   const context = createContext({
     console,
     JSON: { parse: JSON.parse, stringify: JSON.stringify },
-    afterburnerUI,
+    modalUI,
     process: { env: {} },
     setTimeout,
     clearTimeout,
@@ -186,7 +186,7 @@ test("broker wire messages preserve rich modal document", async () => {
   }, modalBrokerConfigFor("test-owner", "wire-document-test"));
   const richDocument = {
     schemaVersion: 1,
-    protocol: "afterburner.ui",
+    protocol: "afterburner.modal",
     revision: 7,
     surfaceId: "wire-document-test",
     root: {

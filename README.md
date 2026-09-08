@@ -136,22 +136,11 @@ arguments/results, or summaries. See [`extensions/BlackBox/README.md`](extension
 
 OpenAI Server exposes the active Copilot session through a localhost OpenAI-compatible `/v1` API when enabled. Use `/openai-server` in a session to start and manage it. Legacy `/copilot-openai`, `copilot-openai.json`, and `AFTERBURNER_COPILOT_OPENAI_*` names remain compatibility aliases. See [`extensions/OpenAIServer/README.md`](extensions/OpenAIServer/README.md).
 
-## Enterprise UI architecture contract
+## Native terminal UI
 
-The supported UI foundation is the versioned `afterburner.ui` contract under `internal\ui` with
-JSON schemas in `schemas\ui-*-v1.schema.json`. These files define protocol revision constants,
-component/catalog types, semantic style tokens, accessibility/localization metadata,
-surface/action/data/stream lifecycles, capability and quota descriptors, error codes, SLO and
-compatibility identifiers, and implementation interfaces for renderers, terminal surfaces,
-reconcilers, policy/audit, SDK bridges, schema registries, and event sinks. Black Box is an optional
-`afterburner.ui` observability event sink extension; hosts and renderers must function when it is
-not installed or enabled.
-
-Enterprise UI tooling is available under `afterburn ui ...` for public catalog discovery and search,
-manifest validation, fixture rendering, surface simulation, metadata-only trace inspection, runtime
-grants, policy installation, and certification reports. See
-[`docs\extension-ui-authoring.md`](docs/extension-ui-authoring.md)
-and [`docs\enterprise-ui-admin.md`](docs/enterprise-ui-admin.md).
+Interactive extension views use Afterburner's authenticated native terminal modal broker. Modal
+registration and actions remain scoped to the verified extension identity; no parallel browser,
+panel, or generic canvas host is required.
 
 ## Compatibility and recovery
 

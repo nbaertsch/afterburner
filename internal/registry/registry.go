@@ -23,7 +23,6 @@ type Manifest struct {
 	Runtime          RuntimeManifest   `json:"runtime"`
 	Capabilities     []string          `json:"capabilities,omitempty"`
 	SessionExtension *SessionExtension `json:"sessionExtension,omitempty"`
-	UI               json.RawMessage   `json:"ui,omitempty"`
 }
 
 type Requirements struct {

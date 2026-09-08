@@ -4,7 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createConnection } from "node:net";
-import * as afterburnerUI from "./runtime/afterburner-ui.mjs";
+import * as modalUI from "./runtime/modal-ui.mjs";
 
 const require = createRequire(import.meta.url);
 const { createHash } = require("node:crypto");
@@ -488,14 +488,11 @@ function modalTextFromValue(value) {
 
 function normalizeModalDocument(canvas, frame, normalized, previous = {}) {
     const revision = previous.document?.revision ? previous.document.revision + 1 : 1;
-    if (frame.document && typeof afterburnerUI !== "undefined" && typeof afterburnerUI.validateUIDocument === "function") {
-        try { return afterburnerUI.validateUIDocument({ ...frame.document, surfaceId: canvas.id, revision }); }
+    if (frame.document && typeof modalUI.validateModalDocument === "function") {
+        try { return modalUI.validateModalDocument({ ...frame.document, surfaceId: canvas.id, revision }); }
         catch {}
     }
-    if (typeof afterburnerUI !== "undefined" && typeof afterburnerUI.modalFrameToUIDocument === "function") {
-        return afterburnerUI.modalFrameToUIDocument(canvas, normalized, { revision });
-    }
-    return undefined;
+    return modalUI.modalFrameToDocument(canvas, normalized, { revision });
 }
 
 function normalizeModalFrame(canvas, value, previous = {}) {
@@ -2054,13 +2051,6 @@ function runtimeManifestWithoutBuiltinPrivileges(manifest) {
     if (Array.isArray(manifest.capabilities)) {
         sanitized.capabilities = manifest.capabilities.filter((capability) => !["modal-canvas", "runtime-observer"].includes(capability));
     }
-    if (manifest.ui && typeof manifest.ui === "object") {
-        sanitized.ui = { ...manifest.ui };
-        if (Array.isArray(manifest.ui.capabilities)) {
-            sanitized.ui.capabilities = manifest.ui.capabilities.filter((capability) => !String(capability).startsWith("ui.observability.black-box"));
-        }
-        delete sanitized.ui.grantPolicy;
-    }
     return sanitized;
 }
 
@@ -2097,8 +2087,7 @@ function normalizeRuntimeAuthorizationDecision(decision) {
 }
 
 function manifestDeclaresRuntimeCapability(manifest, capability) {
-    return (Array.isArray(manifest?.capabilities) && manifest.capabilities.includes(capability)) ||
-        (Array.isArray(manifest?.ui?.capabilities) && manifest.ui.capabilities.includes(capability));
+    return Array.isArray(manifest?.capabilities) && manifest.capabilities.includes(capability);
 }
 
 function nativeIdentityAssertionFor(extensionId, activePath) {
@@ -2174,9 +2163,6 @@ function ensureLegacyModalGrant(context, id) {
 function runtimeExtensionApi(pluginRoot, options = {}) {
     const context = runtimeExtensionContext(pluginRoot, options);
     const grantResolver = runtimeHostGrantResolver(context);
-    const uiRuntime = afterburnerUI.createRuntime({ ownerExtensionId: context.extensionId, manifest: context.manifest, grantResolver });
-    const uiCompatibility = afterburnerUI.createModalCanvasCompatibility({ runtime: uiRuntime, ownerExtensionId: context.extensionId, manifest: context.manifest, grantResolver });
-    const bridge = afterburnerUI.createExtensionBridge({ ownerExtensionId: context.extensionId, manifest: context.manifest, grantResolver });
     const ownerOptions = Object.freeze({ ownerExtensionId: context.extensionId });
     const runtimeObserverAllowed = runtimeObserverGrantDecision(context, grantResolver).allowed === true;
     const scopedRegisterRuntimeObserver = (definition) => {
@@ -2197,24 +2183,8 @@ function runtimeExtensionApi(pluginRoot, options = {}) {
         pluginRoot,
         extensionId: context.extensionId,
         ui: Object.freeze({
-            ...afterburnerUI,
-            runtime: uiRuntime,
-            defineSurface: uiRuntime.defineSurface.bind(uiRuntime),
-            open: (id, input, callOptions = {}) => uiRuntime.open(id, input, { ...callOptions, ...ownerOptions }),
-            close: (id, callOptions = {}) => uiRuntime.close(id, { ...callOptions, ...ownerOptions }),
-            update: (id, next, callOptions = {}) => uiRuntime.update(id, next, { ...callOptions, ...ownerOptions }),
-            patch: (id, patchDoc, callOptions = {}) => uiRuntime.patch(id, patchDoc, { ...callOptions, ...ownerOptions }),
-            invoke: (id, actionId, parameters, callOptions = {}) => uiRuntime.invoke(id, actionId, parameters, { ...callOptions, ...ownerOptions }),
-            subscribe: (id, listener, callOptions = {}) => uiRuntime.subscribe(id, listener, { ...callOptions, ...ownerOptions }),
-            fallback: (id, callOptions = {}) => uiRuntime.fallback(id, { ...callOptions, ...ownerOptions }),
-            diagnostics: () => uiRuntime.diagnostics(ownerOptions),
-            registerModalCanvas: uiCompatibility.registerModalCanvas,
-            registerSurface: bridge.registerSurface,
-            renderSurface: bridge.renderSurface,
-            patchSurface: bridge.patchSurface,
-            closeSurface: bridge.closeSurface,
-            registerObservabilitySink: bridge.registerObservabilitySink,
-            subscribeObservability: bridge.subscribeObservability
+            ...modalUI,
+            registerModalCanvas: scopedRegisterModalCanvas
         }),
         registerModelPickerAdapter,
         registerAppSourceTransform,
@@ -2231,15 +2201,6 @@ function runtimeExtensionApi(pluginRoot, options = {}) {
         subscribeModalCanvas: (id, listener) => subscribeModalCanvas(id, listener, ownerOptions),
         getModalDiagnostics: () => getModalDiagnostics(ownerOptions),
         getModalFallback: (id) => getModalFallback(id, ownerOptions),
-        registerSurface: bridge.registerSurface,
-        renderSurface: bridge.renderSurface,
-        patchSurface: bridge.patchSurface,
-        closeSurface: bridge.closeSurface,
-        registerObservabilitySink: bridge.registerObservabilitySink,
-        subscribeObservability: bridge.subscribeObservability,
-        diagnostics: bridge.diagnostics,
-        requestCapabilities: bridge.requestCapabilities,
-        hasCapability: bridge.hasCapability,
         externalTaskSnapshot,
         invokeExternalTask,
         getContextCapabilityOverride: (selectionId) => contextCapabilityOverride(null, selectionId)
