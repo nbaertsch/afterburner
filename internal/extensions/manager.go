@@ -483,6 +483,12 @@ func (m Manager) materialize(source string, sourceMetadata registry.Source, prev
 			os.RemoveAll(staging)
 			return registry.Entry{}, err
 		}
+		if manifest.SessionExtension != nil {
+			if err := installCopilotSDKShim(m.Layout, staging); err != nil {
+				os.RemoveAll(staging)
+				return registry.Entry{}, err
+			}
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			os.RemoveAll(staging)
 			return registry.Entry{}, err
@@ -495,6 +501,10 @@ func (m Manager) materialize(source string, sourceMetadata registry.Source, prev
 		}
 	} else if err != nil {
 		return registry.Entry{}, err
+	} else if manifest.SessionExtension != nil {
+		if err := installCopilotSDKShim(m.Layout, target); err != nil {
+			return registry.Entry{}, err
+		}
 	}
 	var previousPath *string
 	if previous.ActivePath != "" && previous.ActivePath != target {
@@ -800,6 +810,44 @@ func hashTree(root string) (string, error) {
 		return nil
 	})
 	return hex.EncodeToString(hash.Sum(nil)), err
+}
+
+func installCopilotSDKShim(layout home.Layout, activePath string) error {
+	source, err := findCopilotSDK(layout)
+	if err != nil {
+		return nil
+	}
+	target := filepath.Join(activePath, "node_modules", "@github", "copilot-sdk")
+	if err := os.RemoveAll(target); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	if err := copyTree(source, target); err != nil {
+		return err
+	}
+	packageJSON := []byte(`{"name":"@github/copilot-sdk","type":"module","exports":{".":"./index.js","./extension":"./extension.js"}}` + "\n")
+	return os.WriteFile(filepath.Join(target, "package.json"), packageJSON, 0o600)
+}
+
+func findCopilotSDK(layout home.Layout) (string, error) {
+	root := filepath.Join(layout.NormalCopilotHome, "pkg", "win32-x64")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return "", fmt.Errorf("locate Copilot SDK package root: %w", err)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() > entries[j].Name() })
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(root, entry.Name(), "copilot-sdk")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("locate Copilot SDK package in %s", root)
 }
 
 func copyTree(source, destination string) error {

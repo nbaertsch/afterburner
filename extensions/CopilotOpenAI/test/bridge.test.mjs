@@ -33,6 +33,8 @@ test("session extension exposes one management command with menu actions", async
     assert.doesNotMatch(source, /createCanvas/);
     assert.match(source, /requestModalOpen/);
     assert.match(source, /canvases:\s*\[\]/);
+    assert.match(source, /setInterval\(\(\) => \{ void pollBridgeActions\(\); \}, 100\)/);
+    assert.doesNotMatch(source, /actionPump\.unref/);
     const commandNames = [...source.matchAll(/name:\s*"(copilot-openai[^"]*)"/g)].map(match => match[1]);
     assert.deepEqual(commandNames, ["copilot-openai"]);
     for (const removed of ["copilot-openai-start", "copilot-openai-stop", "copilot-openai-doctor"]) {

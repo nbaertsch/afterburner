@@ -91,7 +91,6 @@ async function pollBridgeActions() {
 function startActionPump() {
     if (actionPump) return;
     actionPump = setInterval(() => { void pollBridgeActions(); }, 100);
-    actionPump.unref?.();
 }
 
 async function handleMenuCommand() {
