@@ -113,6 +113,36 @@ func TestLocalUpdateAndRollbackPreserveEnablement(t *testing.T) {
 	}
 }
 
+func TestReinstallRejectsTamperedManagedPackage(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	layout := home.Layout{
+		Root:       filepath.Join(root, "home"),
+		Config:     filepath.Join(root, "home", "config"),
+		Extensions: filepath.Join(root, "home", "extensions"),
+	}
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExtensionFixture(t, source, "original")
+	manager := Manager{Layout: layout, Stdout: io.Discard}
+	if err := manager.Install(source); err != nil {
+		t.Fatal(err)
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := value.Extensions["fixture"].ActivePath
+	if err := os.WriteFile(filepath.Join(active, "runtime.mjs"), []byte("tampered\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = manager.Install(source)
+	if err == nil || !strings.Contains(err.Error(), "changed after installation") {
+		t.Fatalf("tampered reinstall error = %v", err)
+	}
+}
+
 func writeExtensionFixture(t *testing.T, root, marker string) {
 	t.Helper()
 	manifest := `{
@@ -186,6 +216,49 @@ func TestReadManifestRequiresValidVisibility(t *testing.T) {
 	}
 	if _, err := readManifest(root); err == nil {
 		t.Fatal("expected invalid visibility to be rejected")
+	}
+}
+
+func TestReadManifestValidatesNativeUISurfaces(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "runtime.mjs"), []byte("export default {}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write := func(ui string) {
+		t.Helper()
+		manifest := fmt.Sprintf(`{
+		  "schemaVersion": 1,
+		  "id": "fixture",
+		  "displayName": "Fixture",
+		  "visibility": "private",
+		  "requires": {"afterburner": ">=0.1.0 <1.0.0"},
+		  "runtime": {"execution": "in-process", "entrypoint": "runtime.mjs"},
+		  "capabilities": ["modal-canvas"],
+		  "ui": %s
+		}`, ui)
+		if err := os.WriteFile(filepath.Join(root, "afterburner.json"), []byte(manifest), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"protocol":"afterburner.ui","revision":1,"surfaces":[{"id":"settings","kind":"modal"},{"id":"details","kind":"modal"}]}`)
+	manifest, err := readManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.UI == nil || len(manifest.UI.Surfaces) != 2 {
+		t.Fatalf("parsed UI declaration = %#v", manifest.UI)
+	}
+	for name, declaration := range map[string]string{
+		"duplicate":       `{"protocol":"afterburner.ui","revision":1,"surfaces":[{"id":"settings","kind":"modal"},{"id":"settings","kind":"modal"}]}`,
+		"unknown-kind":    `{"protocol":"afterburner.ui","revision":1,"surfaces":[{"id":"settings","kind":"panel"}]}`,
+		"future-revision": `{"protocol":"afterburner.ui","revision":2,"surfaces":[{"id":"settings","kind":"modal"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			write(declaration)
+			if _, err := readManifest(root); err == nil {
+				t.Fatal("expected invalid UI declaration to be rejected")
+			}
+		})
 	}
 }
 

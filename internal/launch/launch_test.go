@@ -41,7 +41,7 @@ func TestBrokerRequiresFileStreams(t *testing.T) {
 	}
 }
 
-func TestPreissuedModalRegistrationsPreserveLegacyOpenAIServerOwner(t *testing.T) {
+func TestPreissuedModalRegistrationsRequireDeclaredSurfaces(t *testing.T) {
 	value := &registry.Registry{Extensions: map[string]registry.Entry{
 		registry.LegacyOpenAIServerID: {
 			Enabled:  true,
@@ -53,13 +53,8 @@ func TestPreissuedModalRegistrationsPreserveLegacyOpenAIServerOwner(t *testing.T
 		},
 	}}
 	got := preissuedModalRegistrations(value)
-	want := []terminal.ModalRegistration{{
-		OwnerExtensionID: registry.LegacyOpenAIServerID,
-		CanvasID:         registry.LegacyOpenAIServerID,
-		SurfaceID:        registry.LegacyOpenAIServerID,
-	}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("registrations = %#v, want %#v", got, want)
+	if len(got) != 0 {
+		t.Fatalf("undeclared registrations = %#v", got)
 	}
 }
 
@@ -263,6 +258,30 @@ func TestWriteNativeBootstrapContainsOnlyPreissuedSurfaces(t *testing.T) {
 	}
 }
 
+func TestNativeIdentityAssertionsRetainSealedContentHashes(t *testing.T) {
+	value := registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{
+		"example": {
+			Enabled:    true,
+			Verified:   true,
+			ActivePath: filepath.Join(t.TempDir(), "example"),
+			Manifest:   registry.Manifest{ID: "example"},
+			Source:     registry.Source{Type: "path", Value: "source"},
+			Identity: registry.IdentityBinding{
+				ExtensionID:  "example",
+				ManifestHash: "sha256:sealed-manifest",
+				TreeHash:     "sha256:sealed-tree",
+			},
+		},
+	}}
+	assertions := nativeIdentityAssertions(&value)
+	if len(assertions) != 1 {
+		t.Fatalf("assertions = %#v", assertions)
+	}
+	if assertions[0].ManifestHash != "sha256:sealed-manifest" || assertions[0].TreeHash != "sha256:sealed-tree" {
+		t.Fatalf("bootstrap replaced sealed hashes: %#v", assertions[0])
+	}
+}
+
 func TestPreissueModalCapabilitiesRequiresVerifiedModalCapability(t *testing.T) {
 	server, err := terminal.NewModalServer(nil, nil)
 	if err != nil {
@@ -276,7 +295,7 @@ func TestPreissueModalCapabilitiesRequiresVerifiedModalCapability(t *testing.T) 
 			Identity: registry.IdentityBinding{ExtensionID: "black-box", ManifestHash: "sha256:m", TreeHash: "sha256:t", SourceType: "path", SourceValue: `C:\\tmp\\black-box`, GrantEpoch: 1},
 		},
 	}}
-	if got := preissueModalCapabilities(server, &generic); len(got) != 0 {
+	if got, err := preissueModalCapabilities(server, &generic); err != nil || len(got) != 0 {
 		t.Fatalf("unverified black-box received capabilities: %#v", got)
 	}
 
@@ -285,7 +304,12 @@ func TestPreissueModalCapabilitiesRequiresVerifiedModalCapability(t *testing.T) 
 		"openai-server": verifiedEntry("openai-server", "builtin", "embedded", "openai-server", true, []string{"modal-canvas"}),
 		"no-modal":      verifiedEntry("no-modal", "private", "path", `C:\\repo\\extensions\\NoModal`, false, []string{"session-command"}),
 	}}
-	got := preissueModalCapabilities(server, &verified)
+	verified.Extensions["black-box"] = withUISurfaces(verified.Extensions["black-box"], "afterburner-black-box-live", "black-box")
+	verified.Extensions["openai-server"] = withUISurfaces(verified.Extensions["openai-server"], "openai-server", "copilot-openai")
+	got, err := preissueModalCapabilities(server, &verified)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) != 4 {
 		t.Fatalf("verified modal surfaces = %#v", got)
 	}
@@ -298,6 +322,32 @@ func TestPreissueModalCapabilitiesRequiresVerifiedModalCapability(t *testing.T) 
 	if got[3].OwnerExtensionID != "openai-server" || got[3].CanvasID != "copilot-openai" || got[3].SurfaceID != "copilot-openai" {
 		t.Fatalf("legacy openai-server modal surface = %#v", got[3])
 	}
+}
+
+func TestPreissuedModalRegistrationsUseDeclaredExtensionLocalSurfaces(t *testing.T) {
+	value := &registry.Registry{Extensions: map[string]registry.Entry{
+		"alpha": verifiedEntry("alpha", "private", "path", `C:\extensions\alpha`, false, []string{"modal-canvas"}),
+		"beta":  verifiedEntry("beta", "private", "path", `C:\extensions\beta`, false, []string{"modal-canvas"}),
+	}}
+	value.Extensions["alpha"] = withUISurfaces(value.Extensions["alpha"], "settings", "details")
+	value.Extensions["beta"] = withUISurfaces(value.Extensions["beta"], "settings")
+	got := preissuedModalRegistrations(value)
+	want := []terminal.ModalRegistration{
+		{OwnerExtensionID: "alpha", CanvasID: "settings", SurfaceID: "settings"},
+		{OwnerExtensionID: "alpha", CanvasID: "details", SurfaceID: "details"},
+		{OwnerExtensionID: "beta", CanvasID: "settings", SurfaceID: "settings"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("registrations = %#v, want %#v", got, want)
+	}
+}
+
+func withUISurfaces(entry registry.Entry, ids ...string) registry.Entry {
+	entry.Manifest.UI = &registry.UIManifest{Protocol: registry.UIProtocol, Revision: registry.UIRevision}
+	for _, id := range ids {
+		entry.Manifest.UI.Surfaces = append(entry.Manifest.UI.Surfaces, registry.UISurface{ID: id, Kind: "modal"})
+	}
+	return entry
 }
 
 func verifiedEntry(id, visibility, sourceType, sourceValue string, builtinSigned bool, capabilities []string) registry.Entry {

@@ -23,6 +23,7 @@ import (
 	"github.com/nbaertsch/afterburner/internal/runtimepkg"
 	"github.com/nbaertsch/afterburner/internal/sessions"
 	"github.com/nbaertsch/afterburner/internal/telemetry"
+	"github.com/nbaertsch/afterburner/internal/terminal"
 	"github.com/nbaertsch/afterburner/internal/updater"
 )
 
@@ -330,6 +331,50 @@ func runExtensionCommand(route Route, opts Options) (int, error) {
 				return 2, fmt.Errorf("usage: afterburn extension rollback <id>")
 			}
 			err = manager.Rollback(route.Args[1])
+		case "validate":
+			if len(route.Args) != 2 {
+				return 2, fmt.Errorf("usage: afterburn extension validate <path>")
+			}
+			manifest, validateErr := extensions.ValidatePackage(route.Args[1])
+			if validateErr != nil {
+				err = validateErr
+				break
+			}
+			surfaceCount := 0
+			if manifest.UI != nil {
+				surfaceCount = len(manifest.UI.Surfaces)
+			}
+			fmt.Fprintf(opts.Stdout, "Valid extension %s with %d native UI surface(s).\n", manifest.ID, surfaceCount)
+		case "preview":
+			if len(route.Args) < 2 || len(route.Args) > 3 {
+				return 2, fmt.Errorf("usage: afterburn extension preview <document.json> [width]")
+			}
+			width := 100
+			if len(route.Args) == 3 {
+				width, err = strconv.Atoi(route.Args[2])
+				if err != nil || width < 20 || width > 500 {
+					return 2, fmt.Errorf("preview width must be between 20 and 500")
+				}
+			}
+			document, readErr := os.ReadFile(route.Args[1])
+			if readErr != nil {
+				err = readErr
+				break
+			}
+			lines, previewErr := terminal.RenderUIDocumentPreview(document, width)
+			if previewErr != nil {
+				err = previewErr
+				break
+			}
+			fmt.Fprintln(opts.Stdout, strings.Join(lines, "\n"))
+		case "pack":
+			if len(route.Args) != 3 {
+				return 2, fmt.Errorf("usage: afterburn extension pack <path> <archive.zip>")
+			}
+			err = extensions.PackPackage(route.Args[1], route.Args[2])
+			if err == nil {
+				fmt.Fprintf(opts.Stdout, "Packed extension to %s\n", route.Args[2])
+			}
 		default:
 			return 2, fmt.Errorf("native extension subcommand %q is not implemented yet", route.Args[0])
 		}
@@ -663,6 +708,9 @@ Usage:
   afterburn disable <id...>
   afterburn uninstall <id...>
   afterburn extension <command>
+  afterburn extension validate <path>
+  afterburn extension preview <document.json> [width]
+  afterburn extension pack <path> <archive.zip>
   afterburn core install
   afterburn doctor
   afterburn repair

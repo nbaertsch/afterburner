@@ -167,6 +167,8 @@ function subscribeLiveModal(service, controls, ui, viewState = {}) {
 }
 
 function modalCanvasRegistrar(api = {}) {
+    if (typeof api.ui?.registerSurface === "function") return { target: api.ui, fn: api.ui.registerSurface };
+    if (typeof api.registerSurface === "function") return { target: api, fn: api.registerSurface };
     if (typeof api.registerModalCanvas === "function") return { target: api, fn: api.registerModalCanvas };
     if (typeof api.ui?.registerModalCanvas === "function") return { target: api.ui, fn: api.ui.registerModalCanvas };
     return null;

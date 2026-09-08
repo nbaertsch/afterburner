@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
@@ -41,24 +42,26 @@ type ModalFrame struct {
 // ModalEvent is sent back to the extension runtime when a human key maps to
 // a modal action or close request.
 type ModalEvent struct {
-	Type       string `json:"type"`
-	ID         string `json:"id"`
-	Generation int64  `json:"generation"`
-	ActionName string `json:"actionName,omitempty"`
-	Key        string `json:"key,omitempty"`
+	Type             string `json:"type"`
+	ID               string `json:"id"`
+	Generation       int64  `json:"generation"`
+	Sequence         int64  `json:"sequence"`
+	TargetID         string `json:"targetId,omitempty"`
+	DocumentRevision int64  `json:"documentRevision,omitempty"`
+	ActionName       string `json:"actionName,omitempty"`
+	Key              string `json:"key,omitempty"`
+	Value            any    `json:"value,omitempty"`
 }
 
 const (
-	modalMaxMessageBytes = 256 * 1024
-	modalMaxFieldBytes   = 64 * 1024
-	modalMaxActions      = 16
-	modalMaxGeneration   = 1<<53 - 1
-
-	// ModalBlackBox* identifies the enterprise Black Box live canvas registered
-	// natively before any runtime extension can request a modal capability.
-	ModalBlackBoxOwnerExtensionID = "black-box"
-	ModalBlackBoxCanvasID         = "afterburner-black-box-live"
-	ModalBlackBoxSurfaceID        = "afterburner-black-box-live"
+	modalMaxMessageBytes     = 256 * 1024
+	modalMaxFieldBytes       = 64 * 1024
+	modalMaxActions          = 16
+	modalMaxGeneration       = 1<<53 - 1
+	modalMaxDocumentNodes    = 512
+	modalMaxDocumentDepth    = 16
+	modalMaxDocumentChildren = 64
+	modalMaxQueuedEvents     = 64
 
 	// ModalLegacy* identifies the explicitly registered compatibility surface used
 	// by older Black Box modal clients. It is not inferred from missing identity.
@@ -73,6 +76,30 @@ var (
 	validModalActionName = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
 )
 
+var modalDocumentKinds = map[string]struct{}{
+	"dialog": {}, "application": {}, "surface": {}, "window": {}, "viewport": {},
+	"stack": {}, "row": {}, "column": {}, "group": {}, "grid": {}, "statusGrid": {},
+	"split": {}, "section": {}, "box": {}, "disclosure": {}, "panel": {}, "card": {},
+	"scroll": {}, "toolbar": {}, "separator": {}, "spacer": {}, "breadcrumb": {},
+	"contextMenu": {}, "icon": {}, "text": {}, "markdown": {}, "code": {},
+	"keyValue": {}, "detail": {}, "badge": {}, "alert": {}, "toast": {},
+	"progress": {}, "meter": {}, "bar": {}, "sparkline": {}, "spinner": {},
+	"loading": {}, "errorBoundary": {}, "empty": {}, "list": {}, "table": {},
+	"tree": {}, "timeline": {}, "tabs": {}, "log": {}, "commandPalette": {},
+	"form": {}, "button": {}, "link": {}, "textInput": {}, "searchInput": {},
+	"numberInput": {}, "dateInput": {}, "fileInput": {}, "passwordInput": {},
+	"textArea": {}, "select": {}, "checkbox": {}, "radioGroup": {}, "toggle": {},
+	"slider": {}, "actionBar": {}, "keybindingHint": {}, "pagination": {},
+	"help": {}, "confirmation": {}, "prompt": {},
+}
+
+var modalInteractiveDocumentKinds = map[string]struct{}{
+	"button": {}, "link": {}, "textInput": {}, "searchInput": {}, "numberInput": {},
+	"dateInput": {}, "fileInput": {}, "passwordInput": {}, "textArea": {},
+	"select": {}, "checkbox": {}, "radioGroup": {}, "toggle": {}, "slider": {},
+	"tabs": {},
+}
+
 // ModalServer accepts structured open/update/close requests from the
 // Copilot-side extension runtime over a private, connection-authenticated
 // transport and drives a Broker's modal presentation. Copilot's own process,
@@ -86,11 +113,12 @@ type ModalServer struct {
 	registrations        map[modalIdentity]*modalRegistrationState
 	authorizedClientPIDs map[uint32]struct{}
 	requireClientAuth    bool
-	surfaces             map[string]modalIdentity
 	active               map[modalIdentity]modalSession
 	order                []modalIdentity
 	waiters              map[modalEventKey][]chan ModalEvent
 	events               map[modalEventKey][]ModalEvent
+	eventSequences       map[modalEventKey]int64
+	pendingControlValues map[modalEventKey]map[string]modalPendingControlValue
 	renderer             ModalRenderer
 	pollTimeout          time.Duration
 	pendingInput         []byte
@@ -136,6 +164,11 @@ type modalSession struct {
 type modalEventKey struct {
 	identity   modalIdentity
 	generation int64
+}
+
+type modalPendingControlValue struct {
+	sequence int64
+	value    any
 }
 
 func printableModalText(value string, multiline bool) string {
@@ -227,15 +260,36 @@ type modalActionFocusRenderer interface {
 	ActivateFocusedModalAction(trigger string) (string, string, bool)
 }
 
+type modalControlEvent struct {
+	Type       string
+	TargetID   string
+	ActionName string
+	Key        string
+	Value      any
+}
+
+type modalControlInputRenderer interface {
+	HandleModalControlInput(key string) (*modalControlEvent, bool)
+}
+
+type modalControlValueRenderer interface {
+	ApplyModalControlValue(id string, value any)
+}
+
+type modalControlClickRenderer interface {
+	ClickModalControl(row, col int) (*modalControlEvent, bool)
+}
+
 func NewModalServer(broker *Broker, renderer ModalRenderer) (*ModalServer, error) {
 	server := &ModalServer{
 		broker:               broker,
 		registrations:        make(map[modalIdentity]*modalRegistrationState),
 		authorizedClientPIDs: make(map[uint32]struct{}),
-		surfaces:             make(map[string]modalIdentity),
 		active:               make(map[modalIdentity]modalSession),
 		waiters:              make(map[modalEventKey][]chan ModalEvent),
 		events:               make(map[modalEventKey][]ModalEvent),
+		eventSequences:       make(map[modalEventKey]int64),
+		pendingControlValues: make(map[modalEventKey]map[string]modalPendingControlValue),
 		renderer:             renderer,
 		pollTimeout:          30 * time.Second,
 		pendingEscapeDelay:   50 * time.Millisecond,
@@ -285,12 +339,8 @@ func (s *ModalServer) RegisterModalCanvas(reg ModalRegistration) (ModalCapabilit
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if existing, exists := s.surfaces[identity.surfaceID]; exists && existing != identity {
-		return ModalCapability{}, fmt.Errorf("modal surface %q is already registered", identity.surfaceID)
-	}
 	if _, exists := s.registrations[identity]; !exists {
 		s.registrations[identity] = &modalRegistrationState{}
-		s.surfaces[identity.surfaceID] = identity
 	}
 	return ModalCapability{
 		OwnerExtensionID: identity.ownerExtensionID,
@@ -346,6 +396,7 @@ type modalRequest struct {
 	Footer           string          `json:"footer"`
 	Actions          []ModalAction   `json:"actions"`
 	Document         json.RawMessage `json:"document,omitempty"`
+	AckEventSequence *int64          `json:"ackEventSequence,omitempty"`
 }
 
 type modalResponse struct {
@@ -450,11 +501,19 @@ func (s *ModalServer) handleOne(conn io.Reader, connectionAuthorized bool, allow
 	if req.Generation == nil || *req.Generation < 0 || *req.Generation > modalMaxGeneration {
 		return modalResponse{Error: "modal-invalid-generation"}
 	}
+	if req.AckEventSequence != nil && (*req.AckEventSequence < 0 || *req.AckEventSequence > modalMaxGeneration) {
+		return modalResponse{Error: "modal-invalid-event-sequence"}
+	}
 	if oversized(req.Title) || oversized(req.Status) || oversized(req.Body) || oversized(req.Footer) || len(req.Document) > modalMaxFieldBytes {
 		return modalResponse{Error: "modal-field-too-large"}
 	}
 	if len(req.Actions) > modalMaxActions {
 		return modalResponse{Error: "modal-too-many-actions"}
+	}
+	if len(req.Document) > 0 {
+		if err := validateModalDocument(req.Document, req.SurfaceID); err != nil {
+			return modalResponse{Error: "modal-invalid-document"}
+		}
 	}
 	seenActions := map[string]struct{}{}
 	for _, action := range req.Actions {
@@ -566,6 +625,7 @@ func (s *ModalServer) open(req modalRequest, identity modalIdentity) modalRespon
 
 func (s *ModalServer) update(req modalRequest, identity modalIdentity) modalResponse {
 	generation := *req.Generation
+	key := modalEventKey{identity: identity, generation: generation}
 	s.mu.Lock()
 	previous, exists := s.active[identity]
 	if !exists {
@@ -576,7 +636,23 @@ func (s *ModalServer) update(req modalRequest, identity modalIdentity) modalResp
 		s.mu.Unlock()
 		return modalResponse{Error: "modal-stale-generation"}
 	}
+	if nextRevision, previousRevision := modalDocumentRevision(req.Document), modalDocumentRevision(previous.frame.Document); nextRevision > 0 && previousRevision > 0 && nextRevision <= previousRevision {
+		s.mu.Unlock()
+		return modalResponse{Error: "modal-stale-document"}
+	}
 	frame := mergeModalFrame(previous.frame, req)
+	if req.AckEventSequence != nil {
+		pending := s.pendingControlValues[key]
+		for id, value := range pending {
+			if value.sequence <= *req.AckEventSequence {
+				delete(pending, id)
+			}
+		}
+		if len(pending) == 0 {
+			delete(s.pendingControlValues, key)
+		}
+	}
+	frame.Document = modalDocumentWithPendingControlValues(frame.Document, s.pendingControlValues[key])
 	s.active[identity] = modalSession{identity: identity, frame: frame, generation: generation}
 	renderer := s.renderer
 	s.mu.Unlock()
@@ -653,6 +729,16 @@ func (s *ModalServer) enqueueEvent(event ModalEvent, identity modalIdentity) {
 
 func (s *ModalServer) enqueueEventLocked(event ModalEvent, identity modalIdentity) {
 	key := modalEventKey{identity: identity, generation: event.Generation}
+	s.eventSequences[key]++
+	event.Sequence = s.eventSequences[key]
+	if event.Type == "change" && event.TargetID != "" {
+		pending := s.pendingControlValues[key]
+		if pending == nil {
+			pending = make(map[string]modalPendingControlValue)
+			s.pendingControlValues[key] = pending
+		}
+		pending[event.TargetID] = modalPendingControlValue{sequence: event.Sequence, value: event.Value}
+	}
 	waiters := s.waiters[key]
 	if len(waiters) > 0 {
 		waiter := waiters[0]
@@ -664,7 +750,12 @@ func (s *ModalServer) enqueueEventLocked(event ModalEvent, identity modalIdentit
 		waiter <- event
 		return
 	}
-	s.events[key] = append(s.events[key], event)
+	queue := s.events[key]
+	if len(queue) >= modalMaxQueuedEvents {
+		copy(queue, queue[len(queue)-modalMaxQueuedEvents+1:])
+		queue = queue[:modalMaxQueuedEvents-1]
+	}
+	s.events[key] = append(queue, event)
 }
 
 func (s *ModalServer) removeWaiter(key modalEventKey, target chan ModalEvent) {
@@ -727,6 +818,12 @@ func (s *ModalServer) closeWithEvents(identity modalIdentity, generation int64, 
 
 func (s *ModalServer) closeLocked(identity modalIdentity) {
 	delete(s.active, identity)
+	for key := range s.pendingControlValues {
+		if key.identity == identity {
+			delete(s.pendingControlValues, key)
+			delete(s.eventSequences, key)
+		}
+	}
 	for index, existing := range s.order {
 		if existing == identity {
 			s.order = append(s.order[:index], s.order[index+1:]...)
@@ -810,6 +907,29 @@ func (s *ModalServer) handleInputKey(key string) {
 		s.requestClose(identity, generation, key)
 		return
 	}
+	if controls, ok := s.renderer.(modalControlInputRenderer); ok {
+		if event, consumed := controls.HandleModalControlInput(key); consumed {
+			if event != nil {
+				modalEvent := ModalEvent{
+					Type:             event.Type,
+					ID:               identity.surfaceID,
+					Generation:       generation,
+					TargetID:         event.TargetID,
+					DocumentRevision: modalDocumentRevision(frame.Document),
+					ActionName:       event.ActionName,
+					Key:              event.Key,
+					Value:            event.Value,
+				}
+				s.enqueueEvent(modalEvent, identity)
+				if event.Type == "change" {
+					if values, ok := s.renderer.(modalControlValueRenderer); ok {
+						values.ApplyModalControlValue(event.TargetID, event.Value)
+					}
+				}
+			}
+			return
+		}
+	}
 	if key == "tab" || key == "shift+tab" {
 		if focuser, ok := s.renderer.(modalActionFocusRenderer); ok {
 			delta := 1
@@ -823,12 +943,37 @@ func (s *ModalServer) handleInputKey(key string) {
 	if (key == "enter" || key == "space") && len(frame.Actions) > 0 {
 		if focuser, ok := s.renderer.(modalActionFocusRenderer); ok {
 			if actionName, eventKey, ok := focuser.ActivateFocusedModalAction(key); ok {
-				s.enqueueEvent(ModalEvent{Type: "action", ID: identity.surfaceID, Generation: generation, ActionName: actionName, Key: eventKey}, identity)
+				s.enqueueEvent(ModalEvent{
+					Type:             "action",
+					ID:               identity.surfaceID,
+					Generation:       generation,
+					TargetID:         actionName,
+					DocumentRevision: modalDocumentRevision(frame.Document),
+					ActionName:       actionName,
+					Key:              eventKey,
+				}, identity)
 				return
 			}
 		}
 	}
 	if row, col, ok := modalMouseClick(key); ok {
+		if clicker, ok := s.renderer.(modalControlClickRenderer); ok {
+			if event, hit := clicker.ClickModalControl(row, col); hit {
+				if event != nil {
+					s.enqueueEvent(ModalEvent{
+						Type:             event.Type,
+						ID:               identity.surfaceID,
+						Generation:       generation,
+						TargetID:         event.TargetID,
+						DocumentRevision: modalDocumentRevision(frame.Document),
+						ActionName:       event.ActionName,
+						Key:              event.Key,
+						Value:            event.Value,
+					}, identity)
+				}
+				return
+			}
+		}
 		clickKey, hit := "", false
 		if clicker, ok := s.renderer.(modalClickRenderer); ok {
 			clickKey, hit = clicker.ClickModal(row, col)
@@ -848,7 +993,15 @@ func (s *ModalServer) handleInputKey(key string) {
 		}
 	}
 	if actionName := modalActionForKey(frame, key); actionName != "" {
-		s.enqueueEvent(ModalEvent{Type: "action", ID: identity.surfaceID, Generation: generation, ActionName: actionName, Key: key}, identity)
+		s.enqueueEvent(ModalEvent{
+			Type:             "action",
+			ID:               identity.surfaceID,
+			Generation:       generation,
+			TargetID:         actionName,
+			DocumentRevision: modalDocumentRevision(frame.Document),
+			ActionName:       actionName,
+			Key:              key,
+		}, identity)
 		return
 	}
 	if key == "q" {
@@ -880,14 +1033,19 @@ func nextModalInputKeyState(data []byte) (int, string, bool) {
 		return 1, "enter", false
 	case '\t':
 		return 1, "tab", false
+	case '\b', '\x7f':
+		return 1, "backspace", false
 	case ' ':
 		return 1, "space", false
 	default:
 		if data[0] >= 0x20 && data[0] <= 0x7e {
-			return 1, strings.ToLower(string(data[0])), false
+			return 1, string(data[0]), false
+		}
+		if !utf8.FullRune(data) {
+			return 0, "", true
 		}
 		if r, size := utf8.DecodeRune(data); r != utf8.RuneError || size > 1 {
-			return size, "", false
+			return size, string(r), false
 		}
 		return 1, "", false
 	}
@@ -957,6 +1115,10 @@ func modalCSIInputKey(seq []byte) string {
 		return "up"
 	case "B":
 		return "down"
+	case "C":
+		return "right"
+	case "D":
+		return "left"
 	case "H", "1~", "7~":
 		return "home"
 	case "F", "4~", "8~":
@@ -975,6 +1137,10 @@ func modalCSIInputKey(seq []byte) string {
 				return "up"
 			case 'B':
 				return "down"
+			case 'C':
+				return "right"
+			case 'D':
+				return "left"
 			case 'H':
 				return "home"
 			case 'F':
@@ -1066,9 +1232,13 @@ func modalWindowsVTInputKey(body []byte) string {
 		return "up"
 	case 40:
 		return "down"
+	case 37:
+		return "left"
+	case 39:
+		return "right"
 	}
 	if code >= 0x20 && code <= 0x7e {
-		return strings.ToLower(string(rune(code)))
+		return string(rune(code))
 	}
 	return ""
 }
@@ -1173,6 +1343,9 @@ type TerminalModalRenderer struct {
 	activeFrame        ModalFrame
 	scrollOffset       int
 	focusedActionIndex int
+	documentControls   []modalDocumentControl
+	focusedControlID   string
+	controlValues      map[string]any
 }
 
 func NewTerminalModalRenderer(writer io.Writer) *TerminalModalRenderer {
@@ -1184,7 +1357,12 @@ func NewTerminalModalRenderer(writer io.Writer) *TerminalModalRenderer {
 }
 
 func NewTerminalModalRendererWithSize(writer io.Writer, size Size) *TerminalModalRenderer {
-	return &TerminalModalRenderer{writer: writer, screen: newVTScreen(size), queryRequests: newTerminalQueryRequestSplitter()}
+	return &TerminalModalRenderer{
+		writer:        writer,
+		screen:        newVTScreen(size),
+		queryRequests: newTerminalQueryRequestSplitter(),
+		controlValues: make(map[string]any),
+	}
 }
 
 func (r *TerminalModalRenderer) HandleOutput(output Output) {
@@ -1245,14 +1423,23 @@ func (r *TerminalModalRenderer) ShowModal(frame ModalFrame) {
 	if !r.active || r.activeFrame.ID != frame.ID {
 		r.scrollOffset = 0
 		r.focusedActionIndex = -1
+		r.focusedControlID = ""
+		r.controlValues = make(map[string]any)
 	}
-	r.focusedActionIndex = normalizeModalFocusedActionIndex(frame, r.focusedActionIndex)
+	r.reconcileDocumentControls(frame)
+	if len(r.documentControls) == 0 {
+		r.focusedActionIndex = normalizeModalFocusedActionIndex(frame, r.focusedActionIndex)
+	} else {
+		// Document controls own keyboard focus; keep the legacy footer actions
+		// visible as shortcut hints without rendering a second focus marker.
+		r.focusedActionIndex = -2
+	}
 	r.active = true
-	r.activeFrame = frame
+	r.activeFrame = r.frameWithControlState(frame)
 	if r.writer == nil {
 		return
 	}
-	body, scrollOffset := renderModalFrameFocused(r.screen.Snapshot(), frame, r.scrollOffset, r.focusedActionIndex)
+	body, scrollOffset := renderModalFrameFocused(r.screen.Snapshot(), r.activeFrame, r.scrollOffset, r.focusedActionIndex)
 	r.scrollOffset = scrollOffset
 	_, _ = io.WriteString(r.writer, body)
 }
@@ -1264,6 +1451,65 @@ func (r *TerminalModalRenderer) ClickModal(row, col int) (string, bool) {
 		return "", false
 	}
 	return modalActionKeyAt(r.activeFrame, newModalLayout(r.screen.Snapshot()), r.focusedActionIndex, row, col)
+}
+
+func (r *TerminalModalRenderer) ClickModalControl(row, col int) (*modalControlEvent, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active || r.writer == nil || len(r.documentControls) == 0 {
+		return nil, false
+	}
+	layout := newModalLayout(r.screen.Snapshot())
+	if layout.compact || col < layout.innerLeft || col >= layout.innerLeft+layout.innerWidth {
+		return nil, false
+	}
+	bodyStart := layout.top + 1 + layout.headerRows + layout.separatorRows
+	bodyIndex := r.scrollOffset + row - bodyStart
+	bodyLines := modalFrameBodyLines(r.activeFrame, layout.innerWidth)
+	if bodyIndex < 0 || bodyIndex >= len(bodyLines) {
+		return nil, false
+	}
+	controlIndex := modalDocumentControlIndexForLine(r.documentControls, bodyLines, bodyIndex)
+	if controlIndex < 0 {
+		return nil, false
+	}
+	control := r.documentControls[controlIndex]
+	r.focusedControlID = control.ID
+	var event *modalControlEvent
+	switch control.Kind {
+	case "textInput", "searchInput", "numberInput", "dateInput", "fileInput", "passwordInput", "textArea":
+		event = &modalControlEvent{
+			Type:     "focus",
+			TargetID: control.ID,
+			Key:      "mouse",
+			Value:    r.controlValues[control.ID],
+		}
+	default:
+		event, _ = r.applyDocumentControlInput(control, "enter")
+	}
+	r.activeFrame = r.frameWithControlState(r.activeFrame)
+	r.repaintModalLocked()
+	return event, true
+}
+
+func modalDocumentControlIndexForLine(controls []modalDocumentControl, lines []string, target int) int {
+	searchFrom := 0
+	for index, control := range controls {
+		label := printableModalText(control.Label, false)
+		if label == "" {
+			continue
+		}
+		for lineIndex := searchFrom; lineIndex < len(lines); lineIndex++ {
+			if strings.Contains(lines[lineIndex], label) {
+				if lineIndex == target {
+					return index
+				}
+				searchFrom = lineIndex + 1
+				break
+			}
+		}
+	}
+	return -1
 }
 
 func (r *TerminalModalRenderer) FocusModalAction(delta int) bool {
@@ -1284,6 +1530,144 @@ func (r *TerminalModalRenderer) FocusModalAction(delta int) bool {
 	maxScroll := maxInt(0, len(bodyLines)-layout.bodyRows)
 	_, _ = io.WriteString(r.writer, renderModalFooterFrame(layout, r.activeFrame, maxScroll, r.focusedActionIndex))
 	return true
+}
+
+func (r *TerminalModalRenderer) HandleModalControlInput(key string) (*modalControlEvent, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active || len(r.documentControls) == 0 {
+		return nil, false
+	}
+	if key == "tab" || key == "shift+tab" {
+		delta := 1
+		if key == "shift+tab" {
+			delta = -1
+		}
+		r.focusDocumentControl(delta)
+		r.repaintModalLocked()
+		return nil, true
+	}
+	index := r.focusedDocumentControlIndex()
+	if index < 0 {
+		return nil, false
+	}
+	control := r.documentControls[index]
+	event, consumed := r.applyDocumentControlInput(control, key)
+	if consumed {
+		r.activeFrame = r.frameWithControlState(r.activeFrame)
+		r.repaintModalLocked()
+	}
+	return event, consumed
+}
+
+func (r *TerminalModalRenderer) ApplyModalControlValue(id string, value any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active {
+		return
+	}
+	for _, control := range r.documentControls {
+		if control.ID == id {
+			r.controlValues[id] = value
+			r.activeFrame = r.frameWithControlState(r.activeFrame)
+			r.repaintModalLocked()
+			return
+		}
+	}
+}
+
+func (r *TerminalModalRenderer) focusDocumentControl(delta int) {
+	index := r.focusedDocumentControlIndex()
+	if index < 0 {
+		if delta < 0 {
+			index = len(r.documentControls) - 1
+		} else {
+			index = 0
+		}
+	} else {
+		index = (index + delta + len(r.documentControls)) % len(r.documentControls)
+	}
+	r.focusedControlID = r.documentControls[index].ID
+}
+
+func (r *TerminalModalRenderer) focusedDocumentControlIndex() int {
+	for index, control := range r.documentControls {
+		if control.ID == r.focusedControlID {
+			return index
+		}
+	}
+	return -1
+}
+
+func (r *TerminalModalRenderer) applyDocumentControlInput(control modalDocumentControl, key string) (*modalControlEvent, bool) {
+	event := &modalControlEvent{TargetID: control.ID, Key: key}
+	switch control.Kind {
+	case "button", "link":
+		if key != "enter" && key != "space" {
+			return nil, false
+		}
+		event.Type = "activate"
+		event.ActionName = control.ActionName
+		return event, true
+	case "checkbox", "toggle":
+		if key != "enter" && key != "space" {
+			return nil, false
+		}
+		value, _ := r.controlValues[control.ID].(bool)
+		value = !value
+		r.controlValues[control.ID] = value
+		event.Type, event.Value = "change", value
+		return event, true
+	case "select", "radioGroup", "tabs":
+		if key != "left" && key != "right" && key != "up" && key != "down" && key != "enter" && key != "space" {
+			return nil, false
+		}
+		value := modalNextControlOption(control, r.controlValues[control.ID], key == "left" || key == "up")
+		r.controlValues[control.ID] = value
+		event.Type, event.Value = "change", value
+		return event, true
+	case "slider":
+		if key != "left" && key != "right" && key != "up" && key != "down" {
+			return nil, false
+		}
+		value := modalNextSliderValue(control, r.controlValues[control.ID], key == "left" || key == "down")
+		r.controlValues[control.ID] = value
+		event.Type, event.Value = "change", value
+		return event, true
+	case "textInput", "searchInput", "numberInput", "dateInput", "fileInput", "passwordInput", "textArea":
+		value := fmt.Sprint(r.controlValues[control.ID])
+		switch key {
+		case "enter":
+			event.Type, event.Value = "submit", value
+			return event, true
+		case "space":
+			value += " "
+		case "backspace":
+			runes := []rune(value)
+			if len(runes) > 0 {
+				value = string(runes[:len(runes)-1])
+			}
+		default:
+			if !modalPrintableInputKey(key) {
+				return nil, false
+			}
+			value += key
+		}
+		r.controlValues[control.ID] = value
+		event.Type, event.Value = "change", value
+		return event, true
+	default:
+		return nil, false
+	}
+}
+
+func (r *TerminalModalRenderer) repaintModalLocked() {
+	if r.writer == nil {
+		return
+	}
+	body, scrollOffset := renderModalFrameFocused(r.screen.Snapshot(), r.activeFrame, r.scrollOffset, r.focusedActionIndex)
+	r.scrollOffset = scrollOffset
+	_, _ = io.WriteString(r.writer, body)
 }
 
 func (r *TerminalModalRenderer) ActivateFocusedModalAction(trigger string) (string, string, bool) {
@@ -1759,6 +2143,9 @@ func normalizeModalFocusedActionIndex(frame ModalFrame, focusedActionIndex int) 
 	if len(frame.Actions) == 0 {
 		return -1
 	}
+	if focusedActionIndex == -2 {
+		return -1
+	}
 	if focusedActionIndex < 0 {
 		return 0
 	}
@@ -1814,6 +2201,18 @@ func modalFrameBodyLines(frame ModalFrame, width int) []string {
 	return modalBodyLines(frame.Body, width)
 }
 
+// RenderUIDocumentPreview validates and projects a native UI document without
+// opening a terminal session.
+func RenderUIDocumentPreview(document []byte, width int) ([]string, error) {
+	if err := validateModalDocument(document, ""); err != nil {
+		return nil, err
+	}
+	if width < 20 {
+		width = 20
+	}
+	return modalDocumentBodyLines(ModalFrame{Document: json.RawMessage(document)}, width), nil
+}
+
 func modalBodyLines(text string, width int) []string {
 	lines := wrapModalText(printableModalText(text, true), width)
 	if len(lines) == 0 {
@@ -1823,14 +2222,359 @@ func modalBodyLines(text string, width int) []string {
 }
 
 type modalDocumentTree struct {
-	Root modalDocumentNode `json:"root"`
+	SchemaVersion int               `json:"schemaVersion,omitempty"`
+	Protocol      string            `json:"protocol,omitempty"`
+	Revision      int64             `json:"revision,omitempty"`
+	SurfaceID     string            `json:"surfaceId,omitempty"`
+	Locale        string            `json:"locale,omitempty"`
+	Root          modalDocumentNode `json:"root"`
 }
 
 type modalDocumentNode struct {
-	ID       string              `json:"id"`
-	Kind     string              `json:"kind"`
-	Props    map[string]any      `json:"props,omitempty"`
-	Children []modalDocumentNode `json:"children,omitempty"`
+	ID             string              `json:"id"`
+	Kind           string              `json:"kind"`
+	Props          map[string]any      `json:"props,omitempty"`
+	Accessibility  map[string]any      `json:"accessibility,omitempty"`
+	ActionBindings map[string]any      `json:"actionBindings,omitempty"`
+	Metadata       map[string]any      `json:"metadata,omitempty"`
+	Children       []modalDocumentNode `json:"children,omitempty"`
+}
+
+type modalDocumentControl struct {
+	ID         string
+	Kind       string
+	Label      string
+	ActionName string
+	Options    []any
+	Min        float64
+	Max        float64
+	Step       float64
+}
+
+func (r *TerminalModalRenderer) reconcileDocumentControls(frame ModalFrame) {
+	controls, initialValues := modalControlsFromDocument(frame.Document)
+	r.documentControls = controls
+	nextValues := make(map[string]any, len(controls))
+	for _, control := range controls {
+		nextValues[control.ID] = initialValues[control.ID]
+	}
+	r.controlValues = nextValues
+	if r.focusedDocumentControlIndex() < 0 {
+		r.focusedControlID = ""
+	}
+}
+
+func modalControlsFromDocument(document json.RawMessage) ([]modalDocumentControl, map[string]any) {
+	var tree modalDocumentTree
+	if len(document) == 0 || json.Unmarshal(document, &tree) != nil {
+		return nil, map[string]any{}
+	}
+	controls := []modalDocumentControl{}
+	values := make(map[string]any)
+	var walk func(modalDocumentNode)
+	walk = func(node modalDocumentNode) {
+		if _, interactive := modalInteractiveDocumentKinds[node.Kind]; interactive && node.ID != "" {
+			control := modalDocumentControl{
+				ID:         node.ID,
+				Kind:       node.Kind,
+				Label:      modalDocumentControlLabel(node),
+				ActionName: firstNonEmpty(modalStringProp(node.ActionBindings, "activate"), modalStringProp(node.Props, "actionId")),
+				Options:    modalControlOptions(node),
+				Min:        modalNumberProp(node.Props, "min", 0),
+				Max:        modalNumberProp(node.Props, "max", 100),
+				Step:       modalNumberProp(node.Props, "step", 1),
+			}
+			controls = append(controls, control)
+			values[node.ID] = modalInitialControlValue(node)
+		}
+		for _, child := range node.Children {
+			walk(child)
+		}
+	}
+	walk(tree.Root)
+	return controls, values
+}
+
+func modalDocumentControlLabel(node modalDocumentNode) string {
+	return firstNonEmpty(
+		modalStringProp(node.Props, "label"),
+		modalStringProp(node.Props, "title"),
+		modalStringProp(node.Props, "name"),
+		modalStringProp(node.Props, "text"),
+		node.ID,
+	)
+}
+
+func modalInitialControlValue(node modalDocumentNode) any {
+	switch node.Kind {
+	case "checkbox", "toggle":
+		return modalBoolProp(node.Props, "checked") || modalBoolProp(node.Props, "selected") || modalBoolProp(node.Props, "value")
+	case "select", "radioGroup":
+		return firstNonEmpty(modalStringProp(node.Props, "value"), modalStringProp(node.Props, "selected"), modalStringProp(node.Props, "selectedValue"))
+	case "tabs":
+		return firstNonEmpty(modalStringProp(node.Props, "active"), modalStringProp(node.Props, "activeId"), modalStringProp(node.Props, "value"))
+	case "slider":
+		return modalNumberProp(node.Props, "value", modalNumberProp(node.Props, "min", 0))
+	default:
+		return modalStringProp(node.Props, "value")
+	}
+}
+
+func modalControlOptions(node modalDocumentNode) []any {
+	key := "options"
+	if node.Kind == "tabs" {
+		key = "items"
+		if _, exists := node.Props[key]; !exists {
+			key = "tabs"
+		}
+	}
+	options, _ := node.Props[key].([]any)
+	return options
+}
+
+func modalControlOptionValue(option any) any {
+	if entry, ok := option.(map[string]any); ok {
+		for _, key := range []string{"value", "id", "label", "title"} {
+			if value, exists := entry[key]; exists {
+				return value
+			}
+		}
+	}
+	return option
+}
+
+func modalNextControlOption(control modalDocumentControl, current any, reverse bool) any {
+	if len(control.Options) == 0 {
+		return current
+	}
+	index := -1
+	for candidate, option := range control.Options {
+		if fmt.Sprint(modalControlOptionValue(option)) == fmt.Sprint(current) {
+			index = candidate
+			break
+		}
+	}
+	if reverse {
+		if index < 0 {
+			index = 0
+		}
+		index = (index - 1 + len(control.Options)) % len(control.Options)
+	} else {
+		index = (index + 1) % len(control.Options)
+	}
+	return modalControlOptionValue(control.Options[index])
+}
+
+func modalNextSliderValue(control modalDocumentControl, current any, reverse bool) float64 {
+	value, ok := modalNumber(current)
+	if !ok {
+		value = control.Min
+	}
+	step := control.Step
+	if step <= 0 {
+		step = 1
+	}
+	if reverse {
+		value -= step
+	} else {
+		value += step
+	}
+	if value < control.Min {
+		value = control.Min
+	}
+	if control.Max >= control.Min && value > control.Max {
+		value = control.Max
+	}
+	return value
+}
+
+func modalPrintableInputKey(key string) bool {
+	if utf8.RuneCountInString(key) != 1 {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(key)
+	return !unicode.IsControl(r)
+}
+
+func (r *TerminalModalRenderer) frameWithControlState(frame ModalFrame) ModalFrame {
+	if len(frame.Document) == 0 || len(r.documentControls) == 0 {
+		return frame
+	}
+	var tree modalDocumentTree
+	if json.Unmarshal(frame.Document, &tree) != nil {
+		return frame
+	}
+	applyModalControlState(&tree.Root, r.controlValues, r.focusedControlID)
+	document, err := json.Marshal(tree)
+	if err == nil {
+		frame.Document = document
+	}
+	return frame
+}
+
+func applyModalControlState(node *modalDocumentNode, values map[string]any, focusedID string) {
+	if node.Props == nil {
+		node.Props = make(map[string]any)
+	}
+	delete(node.Props, "_focused")
+	if node.ID == focusedID {
+		node.Props["_focused"] = true
+	}
+	if value, exists := values[node.ID]; exists {
+		switch node.Kind {
+		case "checkbox", "toggle":
+			node.Props["checked"] = value
+			node.Props["value"] = value
+		case "tabs":
+			node.Props["active"] = value
+		case "select", "radioGroup":
+			node.Props["value"] = value
+		default:
+			node.Props["value"] = value
+		}
+	}
+	for index := range node.Children {
+		applyModalControlState(&node.Children[index], values, focusedID)
+	}
+}
+
+func modalDocumentWithPendingControlValues(document json.RawMessage, pending map[string]modalPendingControlValue) json.RawMessage {
+	if len(document) == 0 || len(pending) == 0 {
+		return document
+	}
+	var tree modalDocumentTree
+	if json.Unmarshal(document, &tree) != nil {
+		return document
+	}
+	values := make(map[string]any, len(pending))
+	for id, value := range pending {
+		values[id] = value.value
+	}
+	applyModalControlValues(&tree.Root, values)
+	updated, err := json.Marshal(tree)
+	if err != nil {
+		return document
+	}
+	return updated
+}
+
+func applyModalControlValues(node *modalDocumentNode, values map[string]any) {
+	if value, exists := values[node.ID]; exists {
+		if node.Props == nil {
+			node.Props = make(map[string]any)
+		}
+		switch node.Kind {
+		case "checkbox", "toggle":
+			node.Props["checked"] = value
+			node.Props["value"] = value
+		case "tabs":
+			node.Props["active"] = value
+		default:
+			node.Props["value"] = value
+		}
+	}
+	for index := range node.Children {
+		applyModalControlValues(&node.Children[index], values)
+	}
+}
+
+func validateModalDocument(document json.RawMessage, expectedSurfaceID string) error {
+	var tree modalDocumentTree
+	decoder := json.NewDecoder(strings.NewReader(string(document)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&tree); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("trailing document data")
+	}
+	versioned := tree.SchemaVersion != 0 || tree.Protocol != "" || tree.Revision != 0 || tree.SurfaceID != "" || tree.Locale != ""
+	if versioned {
+		if tree.SchemaVersion != 1 || tree.Protocol != "afterburner.ui" || tree.Revision < 1 || !validModalID.MatchString(tree.SurfaceID) || len(tree.Locale) > 64 || strings.ContainsRune(tree.Locale, '\x1b') {
+			return errors.New("invalid document envelope")
+		}
+		if expectedSurfaceID != "" && tree.SurfaceID != expectedSurfaceID {
+			return errors.New("document surface mismatch")
+		}
+	}
+	if tree.Root.Kind != "dialog" {
+		return errors.New("document root must be dialog")
+	}
+	state := modalDocumentValidationState{ids: make(map[string]struct{}), requireInteractiveIDs: versioned}
+	return validateModalDocumentNode(tree.Root, &state, 1)
+}
+
+func modalDocumentRevision(document json.RawMessage) int64 {
+	if len(document) == 0 {
+		return 0
+	}
+	var envelope struct {
+		Revision int64 `json:"revision"`
+	}
+	if err := json.Unmarshal(document, &envelope); err != nil || envelope.Revision < 1 {
+		return 0
+	}
+	return envelope.Revision
+}
+
+type modalDocumentValidationState struct {
+	nodes                 int
+	ids                   map[string]struct{}
+	requireInteractiveIDs bool
+}
+
+func validateModalDocumentNode(node modalDocumentNode, state *modalDocumentValidationState, depth int) error {
+	state.nodes++
+	if state.nodes > modalMaxDocumentNodes || depth > modalMaxDocumentDepth || len(node.Children) > modalMaxDocumentChildren {
+		return errors.New("document structural limit exceeded")
+	}
+	if _, ok := modalDocumentKinds[node.Kind]; !ok {
+		return errors.New("unsupported document component")
+	}
+	if node.ID != "" {
+		if !validModalID.MatchString(node.ID) {
+			return errors.New("invalid document component id")
+		}
+		if _, exists := state.ids[node.ID]; exists {
+			return errors.New("duplicate document component id")
+		}
+		state.ids[node.ID] = struct{}{}
+	} else if state.requireInteractiveIDs {
+		if _, interactive := modalInteractiveDocumentKinds[node.Kind]; interactive {
+			return errors.New("interactive document component requires id")
+		}
+	}
+	for _, values := range []map[string]any{node.Props, node.Accessibility, node.ActionBindings, node.Metadata} {
+		if modalJSONContainsEscape(values) {
+			return errors.New("document contains terminal escape")
+		}
+	}
+	for _, child := range node.Children {
+		if err := validateModalDocumentNode(child, state, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func modalJSONContainsEscape(value any) bool {
+	switch typed := value.(type) {
+	case string:
+		return strings.ContainsRune(typed, '\x1b')
+	case []any:
+		for _, entry := range typed {
+			if modalJSONContainsEscape(entry) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, entry := range typed {
+			if modalJSONContainsEscape(entry) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func modalDocumentBodyLines(frame ModalFrame, width int) []string {
@@ -1946,7 +2690,7 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 	case "timeline", "log":
 		appendModalTimelineLines(lines, node)
 	case "tabs":
-		appendModalLine(lines, modalTabsLine(node))
+		appendModalLine(lines, modalControlFocusPrefix(node)+modalTabsLine(node))
 	case "commandPalette":
 		appendModalLine(lines, modalCommandPaletteLine(node))
 	case "keybindingHint":
@@ -1966,7 +2710,7 @@ func appendModalDocumentNodeLines(lines *[]string, node modalDocumentNode, conte
 	case "textArea":
 		appendModalTextAreaLines(lines, node)
 	case "select", "radioGroup":
-		appendModalFieldLine(lines, firstNonEmpty(modalStringProp(node.Props, "label"), "Selection"), modalChoiceText(node.Props))
+		appendModalFieldLine(lines, modalControlFocusPrefix(node)+firstNonEmpty(modalStringProp(node.Props, "label"), "Selection"), modalChoiceText(node.Props))
 	case "checkbox":
 		appendModalLine(lines, modalCheckboxLine(node, "☐", "☑"))
 	case "toggle":
@@ -2102,10 +2846,11 @@ func modalEmbeddedSurfaceLine(node modalDocumentNode) string {
 func modalActionControlLine(node modalDocumentNode, fallback string) string {
 	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "title"), modalStringProp(node.Props, "text"), node.ID, fallback)
 	key := firstNonEmpty(modalStringProp(node.Props, "key"), modalStringProp(node.Props, "keybinding"), modalStringProp(node.Props, "shortcut"))
+	prefix := modalControlFocusPrefix(node)
 	if key != "" {
-		return "[" + printableModalText(key, false) + "] " + printableModalText(label, false)
+		return prefix + "[" + printableModalText(key, false) + "] " + printableModalText(label, false)
 	}
-	return "[" + printableModalText(label, false) + "]"
+	return prefix + "[" + printableModalText(label, false) + "]"
 }
 
 func modalPaginationLine(node modalDocumentNode) string {
@@ -2138,11 +2883,11 @@ func appendModalInputLine(lines *[]string, node modalDocumentNode) {
 		value = firstNonEmpty(modalStringProp(node.Props, "placeholder"), "empty")
 		value = "‹" + value + "›"
 	}
-	appendModalFieldLine(lines, label, value)
+	appendModalFieldLine(lines, modalControlFocusPrefix(node)+label, value)
 }
 
 func appendModalTextAreaLines(lines *[]string, node modalDocumentNode) {
-	label := firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "name"), "Text")
+	label := modalControlFocusPrefix(node) + firstNonEmpty(modalStringProp(node.Props, "label"), modalStringProp(node.Props, "name"), "Text")
 	appendModalLine(lines, label+":")
 	for _, line := range wrapModalText(modalStringProp(node.Props, "value"), 72) {
 		appendModalLine(lines, "  "+line)
@@ -2171,7 +2916,14 @@ func modalCheckboxLine(node modalDocumentNode, off, on string) string {
 	if modalBoolProp(node.Props, "checked") || modalBoolProp(node.Props, "selected") || modalBoolProp(node.Props, "value") {
 		state = on
 	}
-	return state + " " + label
+	return modalControlFocusPrefix(node) + state + " " + label
+}
+
+func modalControlFocusPrefix(node modalDocumentNode) string {
+	if modalBoolProp(node.Props, "_focused") {
+		return "▶ "
+	}
+	return ""
 }
 
 func modalChoiceText(props map[string]any) string {
@@ -2568,6 +3320,32 @@ func modalStringProp(props map[string]any, key string) string {
 	return fmt.Sprint(value)
 }
 
+func modalNumberProp(props map[string]any, key string, fallback float64) float64 {
+	if value, ok := modalNumber(props[key]); ok {
+		return value
+	}
+	return fallback
+}
+
+func modalNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		number, err := typed.Float64()
+		return number, err == nil
+	default:
+		number, err := strconv.ParseFloat(fmt.Sprint(value), 64)
+		return number, err == nil
+	}
+}
+
 func modalBoolProp(props map[string]any, key string) bool {
 	if props == nil {
 		return false
@@ -2744,6 +3522,9 @@ func (r *TerminalModalRenderer) HideModal() {
 	r.active = false
 	r.activeFrame = ModalFrame{}
 	r.scrollOffset = 0
+	r.documentControls = nil
+	r.focusedControlID = ""
+	r.controlValues = make(map[string]any)
 	if r.writer != nil {
 		if r.hostAlt && !r.screen.useAlt {
 			_, _ = io.WriteString(r.writer, "\x1b[?1049l")

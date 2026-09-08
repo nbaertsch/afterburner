@@ -6,7 +6,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const checkOnly = process.argv.includes("--check");
 const copies = [
   ["src/app.js", "internal/runtimepkg/app.js"],
-  ["src/runtime/modal-ui.mjs", "internal/runtimepkg/runtime/modal-ui.mjs"]
+  ["src/runtime/modal-ui.mjs", "internal/runtimepkg/runtime/modal-ui.mjs"],
+  ["src/runtime/extension-identity.mjs", "internal/runtimepkg/runtime/extension-identity.mjs"],
+  ["src/runtime/modal-ui.mjs", "sdk/ui.mjs"]
 ];
 
 let stale = false;

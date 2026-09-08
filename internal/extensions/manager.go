@@ -521,50 +521,55 @@ func (m Manager) materialize(source string, sourceMetadata registry.Source, prev
 	} else if trustedBuiltin || registry.IsTrustedBuiltinSourceType(sourceMetadata.Type) {
 		return registry.Entry{}, fmt.Errorf("verified built-in source %q must declare built-in visibility", manifest.ID)
 	}
-	treeHash, err := registry.HashTree(source)
+	extensionRoot := filepath.Join(m.Layout.Extensions, manifest.ID)
+	if !registry.Within(extensionRoot, m.Layout.Extensions) {
+		return registry.Entry{}, fmt.Errorf("extension target escapes managed root")
+	}
+	if err := os.MkdirAll(extensionRoot, 0o700); err != nil {
+		return registry.Entry{}, err
+	}
+	staging, err := os.MkdirTemp(extensionRoot, ".staging-")
 	if err != nil {
 		return registry.Entry{}, err
 	}
-	manifestHash, err := registry.HashFile(filepath.Join(source, "afterburner.json"))
+	defer os.RemoveAll(staging)
+	if err := copyTree(source, staging); err != nil {
+		return registry.Entry{}, err
+	}
+	if manifest.SessionExtension != nil {
+		if err := installCopilotSDKShim(m.Layout, staging); err != nil {
+			return registry.Entry{}, err
+		}
+	}
+	treeHash, err := registry.HashTree(staging)
+	if err != nil {
+		return registry.Entry{}, err
+	}
+	manifestHash, err := registry.HashFile(filepath.Join(staging, "afterburner.json"))
 	if err != nil {
 		return registry.Entry{}, err
 	}
 	version := "local-" + treeHash[:16]
-	target := filepath.Join(m.Layout.Extensions, manifest.ID, version)
-	if !registry.Within(target, m.Layout.Extensions) {
-		return registry.Entry{}, fmt.Errorf("extension target escapes managed root")
-	}
+	target := filepath.Join(extensionRoot, version)
 	if _, err := os.Stat(target); os.IsNotExist(err) {
-		staging := target + fmt.Sprintf(".staging-%d", os.Getpid())
-		if err := os.RemoveAll(staging); err != nil {
-			return registry.Entry{}, err
-		}
-		if err := copyTree(source, staging); err != nil {
-			os.RemoveAll(staging)
-			return registry.Entry{}, err
-		}
-		if manifest.SessionExtension != nil {
-			if err := installCopilotSDKShim(m.Layout, staging); err != nil {
-				os.RemoveAll(staging)
-				return registry.Entry{}, err
-			}
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			os.RemoveAll(staging)
-			return registry.Entry{}, err
-		}
 		if err := os.Rename(staging, target); err != nil {
-			os.RemoveAll(staging)
 			if _, statErr := os.Stat(target); statErr != nil {
 				return registry.Entry{}, err
 			}
 		}
 	} else if err != nil {
 		return registry.Entry{}, err
-	} else if manifest.SessionExtension != nil {
-		if err := installCopilotSDKShim(m.Layout, target); err != nil {
-			return registry.Entry{}, err
-		}
+	}
+	existingTreeHash, err := registry.HashTree(target)
+	if err != nil {
+		return registry.Entry{}, err
+	}
+	existingManifestHash, err := registry.HashFile(filepath.Join(target, "afterburner.json"))
+	if err != nil {
+		return registry.Entry{}, err
+	}
+	if existingTreeHash != treeHash || existingManifestHash != manifestHash {
+		return registry.Entry{}, fmt.Errorf("installed extension package %q changed after installation", manifest.ID)
 	}
 	var previousPath *string
 	var previousSource *registry.Source
@@ -681,6 +686,112 @@ func readManifest(source string) (registry.Manifest, error) {
 	return readManifestWithCanonicalID(source, true)
 }
 
+// ValidatePackage validates an extension directory without installing or
+// executing it.
+func ValidatePackage(source string) (registry.Manifest, error) {
+	absolute, err := filepath.Abs(source)
+	if err != nil {
+		return registry.Manifest{}, fmt.Errorf("resolve extension path: %w", err)
+	}
+	return readManifestWithCanonicalID(absolute, false)
+}
+
+// PackPackage writes a deterministic extension archive after validating the
+// source package.
+func PackPackage(source, destination string) error {
+	source, err := filepath.Abs(source)
+	if err != nil {
+		return fmt.Errorf("resolve extension path: %w", err)
+	}
+	if _, err := ValidatePackage(source); err != nil {
+		return err
+	}
+	destination, err = filepath.Abs(destination)
+	if err != nil {
+		return fmt.Errorf("resolve archive path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return fmt.Errorf("create archive directory: %w", err)
+	}
+	temp, err := os.CreateTemp(filepath.Dir(destination), ".afterburn-extension-*.zip")
+	if err != nil {
+		return fmt.Errorf("create extension archive: %w", err)
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	writer := zip.NewWriter(temp)
+	walkErr := filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == source {
+			return nil
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && relative == ".git" {
+			return filepath.SkipDir
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if samePath(path, destination) || samePath(path, tempPath) {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("extension packages may not contain symbolic links: %s", relative)
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			file.Close()
+			return err
+		}
+		header.Name = filepath.ToSlash(relative)
+		header.Method = zip.Deflate
+		header.Modified = time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC)
+		target, err := writer.CreateHeader(header)
+		if err != nil {
+			file.Close()
+			return err
+		}
+		_, copyErr := io.Copy(target, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	})
+	closeErr := writer.Close()
+	fileErr := temp.Close()
+	if walkErr != nil {
+		return fmt.Errorf("pack extension: %w", walkErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("finalize extension archive: %w", closeErr)
+	}
+	if fileErr != nil {
+		return fmt.Errorf("close extension archive: %w", fileErr)
+	}
+	if err := os.Rename(tempPath, destination); err != nil {
+		return fmt.Errorf("publish extension archive: %w", err)
+	}
+	return nil
+}
+
+func samePath(left, right string) bool {
+	return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+}
+
 func readManifestWithCanonicalID(source string, canonicalize bool) (registry.Manifest, error) {
 	data, err := os.ReadFile(filepath.Join(source, "afterburner.json"))
 	if err != nil {
@@ -708,6 +819,9 @@ func readManifestWithCanonicalID(source string, canonicalize bool) (registry.Man
 			return registry.Manifest{}, fmt.Errorf("duplicate afterburner.json capability %q", capability)
 		}
 		seenCapabilities[capability] = struct{}{}
+	}
+	if err := registry.ValidateManifestUI(manifest); err != nil {
+		return registry.Manifest{}, fmt.Errorf("invalid afterburner.json UI declaration: %w", err)
 	}
 	if manifest.SessionExtension != nil {
 		if err := validateEntrypoint(source, manifest.SessionExtension.Entrypoint); err != nil {
@@ -865,7 +979,7 @@ func hashTree(root string) (string, error) {
 			return fmt.Errorf("extension packages may not contain symbolic links: %s", relative)
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || entry.Name() == "node_modules" || entry.Name() == "bin" || entry.Name() == "obj" {
+			if entry.Name() == ".git" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -937,7 +1051,7 @@ func copyTree(source, destination string) error {
 			return fmt.Errorf("extension packages may not contain symbolic links: %s", relative)
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || entry.Name() == "node_modules" || entry.Name() == "bin" || entry.Name() == "obj" {
+			if entry.Name() == ".git" {
 				return filepath.SkipDir
 			}
 			return os.MkdirAll(filepath.Join(destination, relative), 0o700)

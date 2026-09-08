@@ -5,6 +5,8 @@ import { CANONICAL_TITLE, displayConfigPath } from "../extensions/OpenAIServer/n
 const POLL_MS = 100;
 
 function modalRegistrar(api = {}) {
+    if (typeof api.ui?.registerSurface === "function") return { target: api.ui, fn: api.ui.registerSurface };
+    if (typeof api.registerSurface === "function") return { target: api, fn: api.registerSurface };
     if (typeof api.registerModalCanvas === "function") return { target: api, fn: api.registerModalCanvas };
     if (typeof api.ui?.registerModalCanvas === "function") return { target: api.ui, fn: api.ui.registerModalCanvas };
     return null;

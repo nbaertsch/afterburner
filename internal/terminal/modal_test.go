@@ -69,22 +69,22 @@ func TestModalServerAuthenticatesAndDrivesBrokerOwnership(t *testing.T) {
 	}
 }
 
-func TestModalServerBlackBoxLiveIDIsRegistered(t *testing.T) {
+func TestModalServerDeclaredSurfaceIsRegistered(t *testing.T) {
 	server, err := NewModalServer(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	capability, err := server.RegisterModalCanvas(ModalRegistration{
-		OwnerExtensionID: ModalBlackBoxOwnerExtensionID,
-		CanvasID:         ModalBlackBoxCanvasID,
-		SurfaceID:        ModalBlackBoxSurfaceID,
+		OwnerExtensionID: "sample-extension",
+		CanvasID:         "settings",
+		SurfaceID:        "settings",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	response := callModalServer(t, server, modalRequestMap(capability, "open", int64(1)))
 	if !response.OK || server.ActiveCount() != 1 {
-		t.Fatalf("Black Box live open response=%#v active=%d", response, server.ActiveCount())
+		t.Fatalf("declared surface open response=%#v active=%d", response, server.ActiveCount())
 	}
 }
 
@@ -104,15 +104,15 @@ func TestModalServerScopedCapabilityRejectsImpersonation(t *testing.T) {
 	}
 	impersonation := callModalServer(t, server, map[string]any{
 		"operation":        "register",
-		"id":               ModalBlackBoxSurfaceID,
+		"id":               "settings",
 		"ownerExtensionId": "attacker",
-		"canvasId":         ModalBlackBoxCanvasID,
-		"surfaceId":        ModalBlackBoxSurfaceID,
+		"canvasId":         "settings",
+		"surfaceId":        "settings",
 	})
 	if impersonation.OK || impersonation.Error != "modal-registration-disabled" {
-		t.Fatalf("Black Box registration response = %#v", impersonation)
+		t.Fatalf("dynamic registration response = %#v", impersonation)
 	}
-	withOldRegistrationToken := callModalServerRaw(t, server, fmt.Sprintf(`{"operation":"register","id":"%s","ownerExtensionId":"attacker","canvasId":"%s","surfaceId":"%s","registrationToken":"old"}`+"\n", ModalBlackBoxSurfaceID, ModalBlackBoxCanvasID, ModalBlackBoxSurfaceID))
+	withOldRegistrationToken := callModalServerRaw(t, server, `{"operation":"register","id":"settings","ownerExtensionId":"attacker","canvasId":"settings","surfaceId":"settings","registrationToken":"old"}`+"\n")
 	if withOldRegistrationToken.OK || withOldRegistrationToken.Error != "modal-invalid-request" {
 		t.Fatalf("legacy registration token response = %#v", withOldRegistrationToken)
 	}
@@ -155,6 +155,30 @@ func TestModalServerScopedCapabilityRejectsImpersonation(t *testing.T) {
 	open := callModalServer(t, server, modalRequestMap(ownerACap, "open", int64(1)))
 	if !open.OK || server.ActiveCount() != 1 {
 		t.Fatalf("scoped open response = %#v active=%d", open, server.ActiveCount())
+	}
+}
+
+func TestModalServerAllowsSameLocalSurfaceIDForDifferentOwners(t *testing.T) {
+	server, err := NewModalServer(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha, err := server.RegisterModalCanvas(ModalRegistration{OwnerExtensionID: "owner.alpha", CanvasID: "settings", SurfaceID: "settings"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beta, err := server.RegisterModalCanvas(ModalRegistration{OwnerExtensionID: "owner.beta", CanvasID: "settings", SurfaceID: "settings"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := callModalServer(t, server, modalRequestMap(alpha, "open", 1)); !response.OK {
+		t.Fatalf("alpha open response = %#v", response)
+	}
+	if response := callModalServer(t, server, modalRequestMap(alpha, "close", 1)); !response.OK {
+		t.Fatalf("alpha close response = %#v", response)
+	}
+	if response := callModalServer(t, server, modalRequestMap(beta, "open", 1)); !response.OK {
+		t.Fatalf("beta open response = %#v", response)
 	}
 }
 
@@ -277,6 +301,204 @@ func TestTerminalModalRendererProjectsDocumentBody(t *testing.T) {
 	}
 	if strings.Contains(text, "legacy body should not render") {
 		t.Fatalf("document projection should take precedence over legacy body: %q", text)
+	}
+}
+
+func TestValidateModalDocumentRejectsInvalidNativeDocuments(t *testing.T) {
+	valid := json.RawMessage(`{"schemaVersion":1,"protocol":"afterburner.ui","revision":1,"surfaceId":"settings","root":{"id":"root","kind":"dialog","children":[{"id":"save","kind":"button","props":{"label":"Save"}}]}}`)
+	if err := validateModalDocument(valid, "settings"); err != nil {
+		t.Fatalf("valid native document rejected: %v", err)
+	}
+	for name, document := range map[string]json.RawMessage{
+		"unknown kind":  json.RawMessage(`{"schemaVersion":1,"protocol":"afterburner.ui","revision":1,"surfaceId":"settings","root":{"id":"root","kind":"dialog","children":[{"id":"browser","kind":"browser"}]}}`),
+		"duplicate id":  json.RawMessage(`{"schemaVersion":1,"protocol":"afterburner.ui","revision":1,"surfaceId":"settings","root":{"id":"root","kind":"dialog","children":[{"id":"same","kind":"text"},{"id":"same","kind":"text"}]}}`),
+		"missing id":    json.RawMessage(`{"schemaVersion":1,"protocol":"afterburner.ui","revision":1,"surfaceId":"settings","root":{"id":"root","kind":"dialog","children":[{"kind":"button"}]}}`),
+		"terminal ansi": json.RawMessage("{\"schemaVersion\":1,\"protocol\":\"afterburner.ui\",\"revision\":1,\"surfaceId\":\"settings\",\"root\":{\"id\":\"root\",\"kind\":\"dialog\",\"props\":{\"title\":\"\\u001b[31munsafe\"}}}"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateModalDocument(document, "settings"); err == nil {
+				t.Fatal("invalid native document was accepted")
+			}
+		})
+	}
+	if err := validateModalDocument(valid, "other"); err == nil {
+		t.Fatal("document bound to another surface was accepted")
+	}
+}
+
+func TestModalServerRoutesNativeDocumentControlEvents(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 100, Rows: 30})
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pollTimeout = 20 * time.Millisecond
+	document := json.RawMessage(`{
+		"schemaVersion":1,
+		"protocol":"afterburner.ui",
+		"revision":3,
+		"surfaceId":"black-box",
+		"root":{
+			"id":"root",
+			"kind":"dialog",
+			"children":[
+				{"id":"name","kind":"textInput","props":{"label":"Name","value":""}},
+				{"id":"enabled","kind":"checkbox","props":{"label":"Enabled","checked":false}},
+				{"id":"save","kind":"button","props":{"label":"Save"},"actionBindings":{"activate":"save"}}
+			]
+		}
+	}`)
+	response := callModalServer(t, server, map[string]any{
+		"type": "open", "id": "black-box", "title": "Controls", "document": document,
+		"actions": []map[string]any{{"name": "save", "label": "Save"}},
+	})
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+
+	_, _ = server.HandleInput([]byte{'\t', 'q'})
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "change" || response.Event.TargetID != "name" || response.Event.Value != "q" || response.Event.DocumentRevision != 3 {
+		t.Fatalf("text input event = %#v", response.Event)
+	}
+	if server.ActiveCount() != 1 {
+		t.Fatal("q typed into a focused text input must not close the modal")
+	}
+	_, _ = server.HandleInput([]byte("é"))
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "change" || response.Event.Value != "qé" {
+		t.Fatalf("Unicode text input event = %#v", response.Event)
+	}
+
+	_, _ = server.HandleInput([]byte{'\t', ' '})
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "change" || response.Event.TargetID != "enabled" || response.Event.Value != true {
+		t.Fatalf("checkbox event = %#v", response.Event)
+	}
+
+	_, _ = server.HandleInput([]byte{'\t', '\r'})
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "activate" || response.Event.TargetID != "save" || response.Event.ActionName != "save" {
+		t.Fatalf("button event = %#v", response.Event)
+	}
+	if !strings.Contains(output.String(), "▶") {
+		t.Fatalf("focused control was not rendered: %q", output.String())
+	}
+}
+
+func TestModalServerPreservesInputNewerThanAcknowledgedEvent(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 100, Rows: 30})
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pollTimeout = 20 * time.Millisecond
+	document := json.RawMessage(`{
+		"schemaVersion":1,
+		"protocol":"afterburner.ui",
+		"revision":1,
+		"surfaceId":"black-box",
+		"root":{"id":"root","kind":"dialog","children":[
+			{"id":"name","kind":"textInput","props":{"label":"Name","value":""}}
+		]}
+	}`)
+	if response := callModalServer(t, server, map[string]any{"type": "open", "id": "black-box", "document": document}); !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	_, _ = server.HandleInput([]byte{'\t', 'a', 'b'})
+	first := callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if first.Event == nil || first.Event.Sequence != 1 || first.Event.Value != "a" {
+		t.Fatalf("first input event = %#v", first.Event)
+	}
+	update := json.RawMessage(`{
+		"schemaVersion":1,
+		"protocol":"afterburner.ui",
+		"revision":2,
+		"surfaceId":"black-box",
+		"root":{"id":"root","kind":"dialog","children":[
+			{"id":"name","kind":"textInput","props":{"label":"Name","value":"a"}}
+		]}
+	}`)
+	if response := callModalServer(t, server, map[string]any{
+		"type": "update", "id": "black-box", "document": update, "ackEventSequence": first.Event.Sequence,
+	}); !response.OK {
+		t.Fatalf("update response = %#v", response)
+	}
+	if got := renderer.controlValues["name"]; got != "ab" {
+		t.Fatalf("newer unacknowledged input was lost: value=%#v", got)
+	}
+	second := callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if second.Event == nil || second.Event.Sequence != 2 || second.Event.Value != "ab" {
+		t.Fatalf("second input event = %#v", second.Event)
+	}
+}
+
+func TestModalServerRoutesNativeDocumentMouseClick(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 100, Rows: 30})
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pollTimeout = 20 * time.Millisecond
+	document := json.RawMessage(`{"schemaVersion":1,"protocol":"afterburner.ui","revision":1,"surfaceId":"black-box","root":{"id":"root","kind":"dialog","children":[{"id":"enabled","kind":"checkbox","props":{"label":"Enabled","checked":false}}]}}`)
+	if response := callModalServer(t, server, map[string]any{"type": "open", "id": "black-box", "document": document}); !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	layout := newModalLayout(renderer.Snapshot())
+	lines := modalFrameBodyLines(renderer.activeFrame, layout.innerWidth)
+	lineIndex := -1
+	for index, line := range lines {
+		if strings.Contains(line, "Enabled") {
+			lineIndex = index
+			break
+		}
+	}
+	if lineIndex < 0 {
+		t.Fatalf("checkbox line missing: %#v", lines)
+	}
+	row := layout.top + 1 + layout.headerRows + layout.separatorRows + lineIndex
+	_, _ = server.HandleInput([]byte(fmt.Sprintf("\x1b[<0;%d;%dM", layout.innerLeft+1, row)))
+	response := callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "change" || response.Event.TargetID != "enabled" || response.Event.Value != true {
+		t.Fatalf("checkbox mouse event = %#v", response.Event)
+	}
+}
+
+func TestModalServerBoundsQueuedEvents(t *testing.T) {
+	server, err := NewModalServer(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := modalIdentity{
+		ownerExtensionID: "sample-extension",
+		canvasID:         "settings",
+		surfaceID:        "settings",
+	}
+	for index := 0; index < modalMaxQueuedEvents+8; index++ {
+		server.enqueueEvent(ModalEvent{
+			Type:       "change",
+			ID:         identity.surfaceID,
+			Generation: 1,
+			TargetID:   "name",
+			Value:      index,
+		}, identity)
+	}
+
+	key := modalEventKey{identity: identity, generation: 1}
+	server.mu.Lock()
+	queued := append([]ModalEvent(nil), server.events[key]...)
+	server.mu.Unlock()
+	if len(queued) != modalMaxQueuedEvents {
+		t.Fatalf("queued events = %d, want %d", len(queued), modalMaxQueuedEvents)
+	}
+	if queued[0].Value != 8 || queued[len(queued)-1].Value != modalMaxQueuedEvents+7 {
+		t.Fatalf("bounded queue retained wrong range: first=%v last=%v", queued[0].Value, queued[len(queued)-1].Value)
 	}
 }
 
@@ -501,6 +723,9 @@ func TestModalServerRoutesMouseWheelAndActionClicks(t *testing.T) {
 	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
 	if response.Event == nil || response.Event.Type != "action" || response.Event.ActionName != "refresh" || response.Event.Key != "r" {
 		t.Fatalf("mouse click should invoke action: %#v", response)
+	}
+	if response.Event.TargetID != "refresh" {
+		t.Fatalf("mouse click target = %q, want refresh", response.Event.TargetID)
 	}
 }
 

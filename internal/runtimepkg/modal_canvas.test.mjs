@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { Script, createContext } from "node:vm";
 import test from "node:test";
 
@@ -19,6 +20,7 @@ async function loadModalRuntime(transport, brokerConfig = null) {
     setTimeout,
     clearTimeout,
     queueMicrotask,
+    resolve,
     events,
     __testModalBrokerConfig: brokerConfig,
     createConnection: () => {
@@ -44,6 +46,7 @@ async function loadModalRuntime(transport, brokerConfig = null) {
 const safeJSONParse = JSON.parse.bind(JSON);
 const safeJSONStringify = JSON.stringify.bind(JSON);
 const modalCanvasLimit = 16;
+const modalHostCanvasLimit = 256;
 const modalActionLimit = 16;
 const modalSubscriptionLimit = 32;
 const modalTextLimit = 64 * 1024;
@@ -53,6 +56,7 @@ const modalReservedBlackBoxSurfaceIds = new Set(["black-box", modalBlackBoxLiveS
 const trustedBuiltinSourceTypes = new Set(["embedded", "signed-release"]);
 const modalCanvases = new Map();
 const modalInstances = new Map();
+const modalUpdateQueues = new Map();
 const modalSubscribers = new Map();
 const modalFallbacks = new Map();
 const modalNativeSurfaces = new Map();
@@ -71,7 +75,7 @@ const modalDiagnostics = {
   quotaFailures: 0,
   lastFailureKind: null
 };`;
-  const body = `${prelude}\n${source.slice(start, end)}\nObject.assign(globalThis, { registerModalCanvas, openModalCanvas, updateModalCanvas, closeModalCanvas, invokeModalAction, subscribeModalCanvas, getModalDiagnostics, getModalFallback, __events: events });`;
+  const body = `${prelude}\n${source.slice(start, end)}\nObject.assign(globalThis, { registerModalCanvas, openModalCanvas, updateModalCanvas, closeModalCanvas, invokeModalAction, subscribeModalCanvas, getModalDiagnostics, getModalFallback, __normalizeNativeIdentityAssertions: normalizeNativeIdentityAssertions, __events: events });`;
   new Script(body, { filename: "modal-runtime.js" }).runInContext(context);
   return context;
 }
@@ -89,6 +93,19 @@ function deferred() {
   const promise = new Promise((innerResolve) => { resolve = innerResolve; });
   return { promise, resolve };
 }
+
+test("native identity assertions reject coerced or malformed identities", async () => {
+  const runtime = await loadModalRuntime(async () => ({ ok: true }));
+  const validHash = `sha256:${"a".repeat(64)}`;
+  const assertions = runtime.__normalizeNativeIdentityAssertions([
+    { extensionId: 123, activePath: "C:\\extensions\\123", manifestHash: validHash, treeHash: validHash },
+    { activePath: "C:\\extensions\\missing", manifestHash: validHash, treeHash: validHash },
+    { extensionId: "valid", activePath: "C:\\extensions\\valid", manifestHash: "sha256:short", treeHash: validHash },
+    { extensionId: "valid", activePath: "C:\\extensions\\valid", manifestHash: validHash, treeHash: validHash }
+  ]);
+  assert.equal(assertions.length, 1);
+  assert.equal(assertions[0].extensionId, "valid");
+});
 
 function modalSurface(ownerExtensionId, canvasId, surfaceId = canvasId) {
   return { ownerExtensionId, canvasId, surfaceId };
@@ -305,6 +322,130 @@ test("action event updates current generation and Escape close does not send hos
   await handle.dispose();
 });
 
+test("semantic control events reach the owning extension", async () => {
+  const received = [];
+  const messages = [];
+  let pollCount = 0;
+  const runtime = await loadModalRuntime(async (message) => {
+    messages.push(message);
+    if (message.operation === "poll") {
+      pollCount++;
+      if (pollCount === 1) {
+        return {
+          ok: true,
+          event: {
+            type: "change",
+            id: message.id,
+            generation: message.generation,
+            sequence: 7,
+            targetId: "display-name",
+            documentRevision: 1,
+            value: "Afterburner"
+          }
+        };
+      }
+      return new Promise(() => {});
+    }
+    return { ok: true };
+  }, modalBrokerConfigFor("test-owner", "semantic-events"));
+  const handle = runtime.registerModalCanvas({
+    id: "semantic-events",
+    onEvent: async (event, controls) => {
+      received.push(event);
+      await controls.update({ body: "acknowledged" });
+    },
+    open: () => ({
+      document: {
+        schemaVersion: 1,
+        protocol: "afterburner.ui",
+        revision: 1,
+        surfaceId: "semantic-events",
+        root: {
+          id: "root",
+          kind: "dialog",
+          children: [{ id: "display-name", kind: "textInput", props: { label: "Display name" } }]
+        }
+      }
+    })
+  }, { ownerExtensionId: "test-owner" });
+
+  await handle.open();
+  await waitFor(() => received.length === 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(received[0])), {
+    type: "change",
+    targetId: "display-name",
+    documentRevision: 1,
+    generation: 1,
+    sequence: 7,
+    value: "Afterburner"
+  });
+  await waitFor(() => messages.some((message) => message.operation === "update"));
+  assert.equal(messages.find((message) => message.operation === "update").ackEventSequence, 7);
+  await handle.dispose();
+});
+
+test("concurrent updates serialize document revisions", async () => {
+  const messages = [];
+  const runtime = await loadModalRuntime(async (message) => {
+    messages.push(message);
+    return { ok: true };
+  }, modalBrokerConfigFor("test-owner", "serialized-updates"));
+  const handle = runtime.registerModalCanvas({
+    id: "serialized-updates",
+    open: () => ({ body: "initial" })
+  }, { ownerExtensionId: "test-owner" });
+
+  await handle.open();
+  await Promise.all([
+    handle.update({ body: "first" }),
+    handle.update({ body: "second" })
+  ]);
+  const updates = messages.filter((message) => message.operation === "update");
+  assert.equal(updates.length, 2);
+  assert.deepEqual(updates.map((message) => message.document.revision), [2, 3]);
+  assert.deepEqual(updates.map((message) => message.body), ["first", "second"]);
+  await handle.dispose();
+});
+
+test("duplicate open is rejected without orphaning the active host generation", async () => {
+  const messages = [];
+  const runtime = await loadModalRuntime(async (message) => {
+    messages.push(message);
+    if (message.operation === "poll") return new Promise(() => {});
+    return { ok: true };
+  }, modalBrokerConfigFor("test-owner", "single-open"));
+  const handle = runtime.registerModalCanvas({
+    id: "single-open",
+    open: () => ({ body: "open" })
+  }, { ownerExtensionId: "test-owner" });
+
+  await handle.open();
+  await assert.rejects(() => handle.open(), error => error?.code === "ui.surfaceAlreadyOpen");
+  await handle.dispose();
+  assert.equal(messages.filter(message => message.operation === "open").length, 1);
+  assert.equal(messages.filter(message => message.operation === "close").length, 1);
+});
+
+test("failed update still closes a possibly active native generation", async () => {
+  const messages = [];
+  const runtime = await loadModalRuntime(async (message) => {
+    messages.push(message);
+    if (message.operation === "poll") return new Promise(() => {});
+    if (message.operation === "update") return { ok: false, error: "modal-pipe-timeout" };
+    return { ok: true };
+  }, modalBrokerConfigFor("test-owner", "close-after-update-failure"));
+  const handle = runtime.registerModalCanvas({
+    id: "close-after-update-failure",
+    open: () => ({ body: "open" })
+  }, { ownerExtensionId: "test-owner" });
+
+  await handle.open();
+  const update = await handle.update({ body: "changed" });
+  assert.equal(update.fallback, true);
+  await handle.dispose();
+  assert.equal(messages.filter(message => message.operation === "close").length, 1);
+});
+
 test("Escape close can immediately reopen without stale close poisoning", async () => {
   const messages = [];
   const pollResolvers = [];
@@ -417,24 +558,31 @@ test("delayed stale closed event is ignored after reopen", async () => {
   assert.equal(runtime.getModalDiagnostics().active, 0);
 });
 
-test("owner-scoped modal APIs deny cross-extension operations", async () => {
+test("owner-scoped modal APIs isolate identical local surface IDs", async () => {
   const runtime = await loadModalRuntime(async () => ({ ok: false, fallback: true, error: "no-broker" }));
-  const handle = runtime.registerModalCanvas({
+  const ownerA = runtime.registerModalCanvas({
     id: "owned-modal",
     displayName: "Owned Modal",
     actions: [{ name: "refresh", label: "Refresh", handler: async () => ({ ok: true }) }],
     open: () => ({ body: "owned" })
   }, { ownerExtensionId: "owner-a" });
+  const ownerB = runtime.registerModalCanvas({
+    id: "owned-modal",
+    displayName: "Other Modal",
+    open: () => ({ body: "other" })
+  }, { ownerExtensionId: "owner-b" });
 
-  await handle.open();
-  assert.throws(() => runtime.registerModalCanvas({ id: "owned-modal", displayName: "Other" }, { ownerExtensionId: "owner-b" }), /owned by another extension|authorization/i);
-  await assert.rejects(() => runtime.updateModalCanvas("owned-modal", { body: "bad" }, { ownerExtensionId: "owner-b" }), /owned by another extension|authorization/i);
-  await assert.rejects(() => runtime.closeModalCanvas("owned-modal", { ownerExtensionId: "owner-b" }), /owned by another extension|authorization/i);
-  await assert.rejects(() => runtime.invokeModalAction("owned-modal", "refresh", {}, { ownerExtensionId: "owner-b" }), /owned by another extension|authorization/i);
-  assert.throws(() => runtime.subscribeModalCanvas("owned-modal", () => {}, { ownerExtensionId: "owner-b" }), /owned by another extension|authorization/i);
-  await assert.rejects(() => runtime.updateModalCanvas("owned-modal", { body: "unscoped" }), /owned by another extension|authorization/i);
+  await ownerA.open();
+  await ownerB.open();
+  await ownerB.update({ body: "other-updated" });
+  assert.equal(ownerA.fallback().frame.body, "owned");
+  assert.equal(ownerB.fallback().frame.body, "other-updated");
+  assert.equal(ownerA.diagnostics().canvases.length, 1);
+  assert.equal(ownerB.diagnostics().canvases.length, 1);
+  await assert.rejects(() => runtime.updateModalCanvas("owned-modal", { body: "unscoped" }), /Unknown modal canvas/);
 
-  await handle.dispose();
+  await ownerA.dispose();
+  await ownerB.dispose();
 });
 
 test("programmatic close sends one generated host close and dispose is idempotent", async () => {
@@ -484,7 +632,7 @@ test("programmatic close sends one generated host close and dispose is idempoten
   assert.equal(runtime.getModalDiagnostics().registered, 0);
 });
 
-test("generation cancels stale polls and dispose closes active host modal", async () => {
+test("close then reopen advances generation and dispose closes active host modal", async () => {
   const messages = [];
   const pollResolvers = [];
   let closeGeneration = null;
@@ -521,6 +669,7 @@ test("generation cancels stale polls and dispose closes active host modal", asyn
   await handle.open();
   await waitFor(() => pollResolvers.length === 1);
   const firstGeneration = runtime.getModalDiagnostics().canvases[0].generation;
+  await handle.close();
   await handle.open();
   await waitFor(() => pollResolvers.length === 2);
   const secondGeneration = runtime.getModalDiagnostics().canvases[0].generation;
@@ -528,15 +677,14 @@ test("generation cancels stale polls and dispose closes active host modal", asyn
   assert.equal(pollResolvers[0].message.generation, firstGeneration);
   assert.equal(pollResolvers[1].message.generation, secondGeneration);
 
-  pollResolvers[0].resolve({ ok: true, event: { type: "action", id: "generation-test", generation: firstGeneration, actionName: "refresh" } });
-  await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(actionCount, 0);
 
   const closePromise = handle.dispose();
-  await waitFor(() => messages.some((message) => message.operation === "close"));
+  await waitFor(() => messages.filter((message) => message.operation === "close").length === 2);
   const closeMessages = messages.filter((message) => message.operation === "close");
-  assert.equal(closeMessages.length, 1);
-  assert.equal(closeMessages[0].generation, secondGeneration);
+  assert.equal(closeMessages.length, 2);
+  assert.equal(closeMessages[0].generation, firstGeneration);
+  assert.equal(closeMessages[1].generation, secondGeneration);
   await closePromise;
   assert.equal(runtime.getModalDiagnostics().registered, 0);
   assert.equal(runtime.getModalDiagnostics().active, 0);

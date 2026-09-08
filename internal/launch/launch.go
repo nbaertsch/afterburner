@@ -121,7 +121,10 @@ func runWithBroker(ctx context.Context, opts Options) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	modalSurfaces := preissueModalCapabilities(modalServer, opts.ExtensionRegistry)
+	modalSurfaces, err := preissueModalCapabilities(modalServer, opts.ExtensionRegistry)
+	if err != nil {
+		return 1, fmt.Errorf("register native UI surfaces: %w", err)
+	}
 	startModalPipeServers, modalPipeClose, err := prepareModalPipes(modalServer, modalSurfaces)
 	if err != nil {
 		return 1, fmt.Errorf("start modal pipes: %w", err)
@@ -275,15 +278,7 @@ func resizeBrokerAndRenderer(broker *terminal.Broker, renderer *terminal.Termina
 }
 
 func handleModalInput(modalServer *terminal.ModalServer, data []byte) (int, error) {
-	if len(data) <= 1 || data[0] == '\x1b' {
-		return modalServer.HandleInput(data)
-	}
-	for _, b := range data {
-		if _, err := modalServer.HandleInput([]byte{b}); err != nil {
-			return 0, err
-		}
-	}
-	return len(data), nil
+	return modalServer.HandleInput(data)
 }
 
 func withNativeEnv(env []string, bootstrapPath string) []string {
@@ -314,19 +309,20 @@ func withModalEnv(env []string, bootstrapPath string) []string {
 	return withEnv(childEnv, "AFTERBURNER_MODAL_BOOTSTRAP", bootstrapPath)
 }
 
-func preissueModalCapabilities(server *terminal.ModalServer, value *registry.Registry) []terminal.ModalCapability {
+func preissueModalCapabilities(server *terminal.ModalServer, value *registry.Registry) ([]terminal.ModalCapability, error) {
 	if server == nil || value == nil {
-		return nil
+		return nil, nil
 	}
 	registrations := preissuedModalRegistrations(value)
 	capabilities := make([]terminal.ModalCapability, 0, len(registrations))
 	for _, registration := range registrations {
 		capability, err := server.RegisterModalCanvas(registration)
-		if err == nil {
-			capabilities = append(capabilities, capability)
+		if err != nil {
+			return nil, fmt.Errorf("register %s/%s: %w", registration.OwnerExtensionID, registration.SurfaceID, err)
 		}
+		capabilities = append(capabilities, capability)
 	}
-	return capabilities
+	return capabilities, nil
 }
 
 func preissuedModalRegistrations(value *registry.Registry) []terminal.ModalRegistration {
@@ -344,27 +340,19 @@ func preissuedModalRegistrations(value *registry.Registry) []terminal.ModalRegis
 		if !entry.Enabled || !entry.Verified || !manifestHasCapability(entry.Manifest, "modal-canvas") {
 			continue
 		}
-		if id == terminal.ModalBlackBoxOwnerExtensionID && registry.IsTrustedBuiltinEntry(entry) {
-			registrations = append(registrations,
-				terminal.ModalRegistration{OwnerExtensionID: terminal.ModalBlackBoxOwnerExtensionID, CanvasID: terminal.ModalBlackBoxCanvasID, SurfaceID: terminal.ModalBlackBoxSurfaceID},
-				terminal.ModalRegistration{OwnerExtensionID: terminal.ModalLegacyOwnerExtensionID, CanvasID: terminal.ModalLegacyCanvasID, SurfaceID: terminal.ModalLegacySurfaceID},
-			)
+		if entry.Manifest.UI != nil {
+			for _, surface := range entry.Manifest.UI.Surfaces {
+				if surface.Kind != "modal" {
+					continue
+				}
+				registrations = append(registrations, terminal.ModalRegistration{
+					OwnerExtensionID: id,
+					CanvasID:         surface.ID,
+					SurfaceID:        surface.ID,
+				})
+			}
 			continue
 		}
-		if id == registry.OpenAIServerID {
-			registrations = append(registrations,
-				terminal.ModalRegistration{OwnerExtensionID: registry.OpenAIServerID, CanvasID: registry.OpenAIServerID, SurfaceID: registry.OpenAIServerID},
-				terminal.ModalRegistration{OwnerExtensionID: registry.OpenAIServerID, CanvasID: registry.LegacyOpenAIServerID, SurfaceID: registry.LegacyOpenAIServerID},
-			)
-			continue
-		}
-		if id == registry.LegacyOpenAIServerID {
-			registrations = append(registrations,
-				terminal.ModalRegistration{OwnerExtensionID: registry.LegacyOpenAIServerID, CanvasID: registry.LegacyOpenAIServerID, SurfaceID: registry.LegacyOpenAIServerID},
-			)
-			continue
-		}
-		registrations = append(registrations, terminal.ModalRegistration{OwnerExtensionID: id, CanvasID: id, SurfaceID: id})
 	}
 	return registrations
 }
@@ -457,15 +445,14 @@ func nativeIdentityAssertions(value *registry.Registry) []nativeIdentityAssertio
 		if !entry.Enabled || !entry.Verified {
 			continue
 		}
-		manifestHash, treeHash, err := registry.VerifyActivePackage(entry)
-		if err != nil {
+		if entry.Identity.ManifestHash == "" || entry.Identity.TreeHash == "" {
 			continue
 		}
 		assertions = append(assertions, nativeIdentityAssertion{
 			ExtensionID:    id,
 			ActivePath:     entry.ActivePath,
-			ManifestHash:   "sha256:" + manifestHash,
-			TreeHash:       "sha256:" + treeHash,
+			ManifestHash:   entry.Identity.ManifestHash,
+			TreeHash:       entry.Identity.TreeHash,
 			SourceType:     entry.Source.Type,
 			SourceValue:    entry.Source.Value,
 			TrustedBuiltin: registry.IsTrustedBuiltinEntry(entry),

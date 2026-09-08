@@ -41,6 +41,30 @@ const createVerifiedBlackBoxRegistry = root => {
   }
 };
 
+const createVerifiedGenericRegistry = root => {
+  const home = join(root, "afterburner");
+  const normal = join(root, "normal");
+  mkdirSync(normal, { recursive: true });
+  const environment = {
+    ...process.env,
+    AFTERBURNER_HOME: home,
+    AFTERBURNER_NORMAL_COPILOT_HOME: normal
+  };
+  for (const args of [
+    ["extension", "install", resolve("examples/native-ui-extension")],
+    ["extension", "enable", "native-ui-example"]
+  ]) {
+    const result = spawnSync(afterburn, args, {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: environment
+    });
+    if (result.status !== 0) {
+      throw new Error(`failed to create verified generic extension registry: args=${JSON.stringify(args)} status=${result.status} stdout=${result.stdout} stderr=${result.stderr}`);
+    }
+  }
+};
+
 const lastRestoredScreen = raw => {
   const repaintPrefix = "\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
   const index = raw.lastIndexOf(repaintPrefix);
@@ -100,7 +124,7 @@ const baseEnvironment = (root, capturePath, packageRoot, extra = {}) => {
   return environment;
 };
 
-const assertCapture = (capture, { expectQuery = false, expectReopenIsolation = false, expectResize = false, expectNoChildInterrupt = false, expectRuntimeClient = false, expectActions = false, expectFocusedActions = false } = {}) => {
+const assertCapture = (capture, { expectQuery = false, expectReopenIsolation = false, expectResize = false, expectNoChildInterrupt = false, expectRuntimeClient = false, expectActions = false, expectFocusedActions = false, expectControls = false, modalId = "black-box" } = {}) => {
   if (!capture.env?.AFTERBURNER_MODAL_BOOTSTRAP) {
     throw new Error(`modal broker bootstrap env was not forwarded\n${JSON.stringify(capture)}`);
   }
@@ -123,8 +147,16 @@ const assertCapture = (capture, { expectQuery = false, expectReopenIsolation = f
   }
   if (expectQuery) {
     const event = capture.modal?.event;
-    if (event?.type !== "closed" || event?.id !== "black-box" || event?.generation !== 1) {
+    if (event?.type !== "closed" || event?.id !== modalId || event?.generation !== 1) {
       throw new Error(`modal query did not receive generation-1 close reply\n${JSON.stringify(capture.modal)}`);
+    }
+    if (expectControls) {
+      const events = capture.modal?.actionEvents ?? [];
+      const observed = events.map(event => `${event.type}:${event.targetId}:${String(event.value ?? "")}`);
+      const want = ["change:name:q", "change:enabled:true", "activate:save:"];
+      if (JSON.stringify(observed) !== JSON.stringify(want)) {
+        throw new Error(`native control events were not routed\n${JSON.stringify(capture.modal)}`);
+      }
     }
   }
   if (expectActions || expectFocusedActions) {
@@ -200,6 +232,10 @@ const runScenario = ({
   expectRuntimeClient = false,
   expectActions = false,
   expectFocusedActions = false,
+  expectControls = false,
+  genericExtension = false,
+  modalId = "black-box",
+  modalTitle = "Afterburner Black Box Live",
   expectRepaint = false,
   expectCleanup = false,
   sendCtrlC = false
@@ -207,7 +243,8 @@ const runScenario = ({
   const root = join(tmpdir(), `afterburn-modal-${name}-${process.pid}-${Date.now()}`);
   const capturePath = join(root, "capture.json");
   const packageRoot = createPackage(root);
-  createVerifiedBlackBoxRegistry(root);
+  if (genericExtension) createVerifiedGenericRegistry(root);
+  else createVerifiedBlackBoxRegistry(root);
   const child = pty.spawn(afterburn, ["--version"], {
     name: "xterm-256color",
     cols: 140,
@@ -216,6 +253,10 @@ const runScenario = ({
     env: baseEnvironment(root, capturePath, packageRoot, {
       AFTERBURNER_MODAL_PIPE: "stale-pipe",
       AFTERBURNER_MODAL_SECRET: "stale-secret",
+      AFTERBURNER_TEST_MODAL_OWNER: genericExtension ? "native-ui-example" : "black-box",
+      AFTERBURNER_TEST_MODAL_CANVAS: modalId,
+      AFTERBURNER_TEST_MODAL_SURFACE: modalId,
+      AFTERBURNER_TEST_MODAL_TITLE: modalTitle,
       ...extraEnv
     })
   });
@@ -300,6 +341,10 @@ const runScenario = ({
         child.write("\x1b[27;1;0;1;0;1_");
       }
     }
+    if (expectControls && actionStep === 0 && text.includes("test modal live update")) {
+      actionStep = 1;
+      child.write("\tq\t \t\r");
+    }
   });
 
   child.onExit(({ exitCode }) => {
@@ -309,11 +354,13 @@ const runScenario = ({
         throw new Error(`afterburn exited ${exitCode}, want ${expectedExit}`);
       }
       const capture = JSON.parse(readFileSync(capturePath, "utf8"));
-      assertCapture(capture, { expectQuery, expectReopenIsolation, expectResize, expectNoChildInterrupt, expectRuntimeClient, expectActions, expectFocusedActions });
+      assertCapture(capture, { expectQuery, expectReopenIsolation, expectResize, expectNoChildInterrupt, expectRuntimeClient, expectActions, expectFocusedActions, expectControls, modalId });
       const semantic = semanticModalState(raw);
       const text = stripAnsi(raw);
-      if (!text.includes("Afterburner Black Box Live") ||
-          (!text.includes("live metadata frame") && !text.includes("live activity update frame"))) {
+      const renderedContent = expectControls
+        ? text.includes("Display name") && text.includes("Enabled") && text.includes("[Save]")
+        : text.includes("live metadata frame") || text.includes("live activity update frame");
+      if (!text.includes(modalTitle) || !renderedContent) {
         throw new Error("modal frame was not rendered semantically");
       }
       if (expectReopenIsolation && !text.includes("Afterburner Black Box Reopened")) {
@@ -340,6 +387,9 @@ const runScenario = ({
       if (expectFocusedActions && actionStep !== 6) {
         throw new Error(`focused modal action test did not send every key, stopped at step ${actionStep}`);
       }
+      if (expectControls && actionStep !== 1) {
+        throw new Error("native control test did not send its keyboard sequence");
+      }
       if (expectFocusedActions && (!text.includes("[Tab/Shift+Tab] Focus") || !text.includes("[Enter/Space] Activate"))) {
         throw new Error("focused modal action controls were not advertised in the terminal");
       }
@@ -356,6 +406,18 @@ const runScenario = ({
 });
 
 const scenarios = [
+  {
+    name: "generic-extension-controls",
+    genericExtension: true,
+    modalId: "settings",
+    modalTitle: "Generic Extension Settings",
+    extraEnv: {
+      AFTERBURNER_TEST_MODAL_CONTROLS: "1",
+      AFTERBURNER_TEST_MODAL_FORCE_EXIT: "1"
+    },
+    expectControls: true,
+    expectQuery: true
+  },
   {
     name: "live-poll",
     expectQuery: true

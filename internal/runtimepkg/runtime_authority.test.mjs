@@ -45,6 +45,10 @@ async function loadRuntimeAuthority(stubs = {}) {
     subscribeModalCanvas() {},
     getModalDiagnostics() { return {}; },
     getModalFallback() { return null; },
+    validateModalId(value) {
+      if (typeof value !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(value)) throw new Error("invalid modal id");
+      return value;
+    },
     externalTaskSnapshot() { return []; },
     invokeExternalTask() {},
     contextCapabilityOverride() { return null; },
@@ -68,15 +72,58 @@ async function installRuntimeGlobal() {
   return context.__copilotRuntimeAddon__;
 }
 
-function extensionManifest(id, capabilities = []) {
-  return { schemaVersion: 1, id, capabilities };
+function extensionManifest(id, capabilities = [], surfaces = []) {
+  return {
+    schemaVersion: 1,
+    id,
+    capabilities,
+    ...(surfaces.length > 0 ? {
+      ui: {
+        protocol: "afterburner.ui",
+        revision: 1,
+        surfaces: surfaces.map(surfaceId => ({ id: surfaceId, kind: "modal" }))
+      }
+    } : {})
+  };
+}
+
+function verifiedExtensionOptions(id, surfaces = [id], overrides = {}) {
+  const pluginRoot = `C:\\extensions\\${id}`;
+  const manifestHash = `sha256:${id}-manifest`;
+  const treeHash = `sha256:${id}-tree`;
+  return {
+    pluginRoot,
+    options: {
+      extensionId: id,
+      manifest: extensionManifest(id, ["modal-canvas"], surfaces),
+      manifestHash,
+      packageTreeHash: treeHash,
+      nativeIdentityAssertion: {
+        extensionId: id,
+        activePath: pluginRoot,
+        manifestHash,
+        treeHash,
+        sourceType: "path",
+        sourceValue: pluginRoot
+      },
+      ...overrides
+    }
+  };
 }
 
 const blackBoxManifest = {
   schemaVersion: 1,
   id: "black-box",
   visibility: "builtin",
-  capabilities: ["runtime-observer", "modal-canvas"]
+  capabilities: ["runtime-observer", "modal-canvas"],
+  ui: {
+    protocol: "afterburner.ui",
+    revision: 1,
+    surfaces: [
+      { id: "afterburner-black-box-live", kind: "modal" },
+      { id: "black-box", kind: "modal" }
+    ]
+  }
 };
 
 function verifiedBlackBoxOptions(overrides = {}) {
@@ -135,35 +182,43 @@ test("runtimeExtensionApi exposes only modal document builders", async () => {
   const api = context.runtimeExtensionApi("C:\\extensions\\sample", { extensionId: "sample", manifest: extensionManifest("sample", ["modal-canvas"]) });
   assert.equal(typeof api.ui.createUIDocument, "function");
   assert.equal(typeof api.ui.components.dialog, "function");
-  assert.equal(typeof api.ui.registerModalCanvas, "function");
+  assert.equal(api.ui.registerModalCanvas, undefined);
   assert.equal(api.registerSurface, undefined);
   assert.equal(api.registerObservabilitySink, undefined);
 });
 
-test("runtimeExtensionApi binds modal ownership and blocks forged black-box owner", async () => {
+test("verified extensions receive no implicit undeclared UI surface", async () => {
   const context = await loadRuntimeAuthority();
-  const api = context.runtimeExtensionApi("C:\\extensions\\attacker", {
-    extensionId: "attacker",
-    manifest: extensionManifest("attacker", ["modal-canvas"]),
-    nativeIdentityAssertion: { extensionId: "attacker", activePath: "C:\\extensions\\attacker" }
-  });
-  const handle = api.registerModalCanvas({ id: "forged", ownerExtensionId: "black-box", open: () => ({ body: "bad" }) });
-  assert.equal(handle.ownerExtensionId, "attacker");
-  assert.equal(context.registrations.modals[0].definition.ownerExtensionId, "attacker");
-  assert.equal(context.registrations.modals[0].options.ownerExtensionId, "attacker");
+  const verified = verifiedExtensionOptions("sample", []);
+  const api = context.runtimeExtensionApi(verified.pluginRoot, verified.options);
+  assert.equal(api.ui.registerSurface, undefined);
+  assert.equal(api.registerSurface, undefined);
 });
 
-test("runtimeExtensionApi denies direct Black Box surface impersonation", async () => {
+test("runtimeExtensionApi exposes declared generic surfaces to verified extensions", async () => {
   const context = await loadRuntimeAuthority();
-  const api = context.runtimeExtensionApi("C:\\extensions\\attacker", { extensionId: "attacker", manifest: extensionManifest("attacker", ["modal-canvas"]) });
-  assert.throws(() => api.registerModalCanvas({ id: "afterburner-black-box-live", open: () => ({ body: "bad" }) }), /reserved for Black Box|authorization/i);
-  assert.throws(() => api.registerModalCanvas({ id: "black-box", open: () => ({ body: "bad" }) }), /reserved for Black Box|authorization/i);
+  const verified = verifiedExtensionOptions("sample", ["settings", "details"]);
+  const api = context.runtimeExtensionApi(verified.pluginRoot, verified.options);
+  assert.equal(typeof api.ui.registerSurface, "function");
+  assert.equal(typeof api.registerSurface, "function");
+  const handle = api.registerSurface({ id: "settings", kind: "modal", ownerExtensionId: "black-box", canvasId: "forged", surfaceId: "forged", open: () => ({ body: "ok" }) });
+  assert.equal(handle.ownerExtensionId, "sample");
+  assert.equal(context.registrations.modals[0].definition.ownerExtensionId, "sample");
+  assert.equal(context.registrations.modals[0].definition.canvasId, "settings");
+  assert.equal(context.registrations.modals[0].definition.surfaceId, "settings");
+});
+
+test("runtimeExtensionApi rejects undeclared surfaces", async () => {
+  const context = await loadRuntimeAuthority();
+  const verified = verifiedExtensionOptions("sample", ["settings"]);
+  const api = context.runtimeExtensionApi(verified.pluginRoot, verified.options);
+  assert.throws(() => api.registerSurface({ id: "undeclared", kind: "modal", open: () => ({ body: "bad" }) }), /authorization/i);
 });
 
 test("runtimeExtensionApi denies fake Black Box string identity", async () => {
   const context = await loadRuntimeAuthority();
   const api = context.runtimeExtensionApi("C:\\extensions\\BlackBox", { extensionId: "black-box", manifest: blackBoxManifest });
-  assert.throws(() => api.registerModalCanvas({ id: "afterburner-black-box-live", open: () => ({ body: "bad" }) }), /reserved for Black Box|authorization|denied/i);
+  assert.equal(api.registerModalCanvas, undefined);
   assert.equal(api.registerRuntimeObserver, undefined);
 });
 

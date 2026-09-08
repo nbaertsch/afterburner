@@ -14,6 +14,22 @@
     "execution": "in-process"
   },
   "capabilities": ["session-command", "modal-canvas"],
+  "ui": {
+    "protocol": "afterburner.ui",
+    "revision": 1,
+    "surfaces": [
+      {
+        "id": "openai-server",
+        "kind": "modal",
+        "title": "OpenAI Server"
+      },
+      {
+        "id": "copilot-openai",
+        "kind": "modal",
+        "title": "Copilot OpenAI"
+      }
+    ]
+  },
   "sessionExtension": {
     "entrypoint": "com.github.copilot/extensions/OpenAIServer/extension.mjs"
   }

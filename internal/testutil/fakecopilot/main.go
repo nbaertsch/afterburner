@@ -49,11 +49,14 @@ type modalReopenCapture struct {
 }
 
 type modalEvent struct {
-	Type       string `json:"type"`
-	ID         string `json:"id"`
-	Generation int64  `json:"generation,omitempty"`
-	ActionName string `json:"actionName,omitempty"`
-	Key        string `json:"key,omitempty"`
+	Type             string `json:"type"`
+	ID               string `json:"id"`
+	Generation       int64  `json:"generation,omitempty"`
+	TargetID         string `json:"targetId,omitempty"`
+	DocumentRevision int64  `json:"documentRevision,omitempty"`
+	ActionName       string `json:"actionName,omitempty"`
+	Key              string `json:"key,omitempty"`
+	Value            any    `json:"value,omitempty"`
 }
 
 type modalSurface struct {
@@ -309,7 +312,9 @@ func exerciseModalPipe() (*modalExerciseCapture, error) {
 	if err != nil {
 		return nil, err
 	}
-	surface, err := registerModalSurface(bootstrap, "black-box", "black-box", "black-box")
+	owner, canvas, surfaceID := modalTestIdentity()
+	title := firstNonEmptyEnv("AFTERBURNER_TEST_MODAL_TITLE", "Afterburner Black Box Live")
+	surface, err := registerModalSurface(bootstrap, owner, canvas, surfaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -318,10 +323,10 @@ func exerciseModalPipe() (*modalExerciseCapture, error) {
 	result := &modalExerciseCapture{}
 	if response, err := sendModalRequest(pipeName, map[string]any{
 		"operation":        "open",
-		"id":               "forged-black-box",
+		"id":               "forged-" + surfaceID,
 		"ownerExtensionId": surface.OwnerExtensionID,
 		"canvasId":         surface.CanvasID,
-		"surfaceId":        "forged-black-box",
+		"surfaceId":        "forged-" + surfaceID,
 		"generation":       generation,
 		"title":            "forged raw replay should not render",
 		"body":             "forged modal body",
@@ -337,16 +342,20 @@ func exerciseModalPipe() (*modalExerciseCapture, error) {
 		result.Sizes = append(result.Sizes, size)
 	}
 	actions := modalActionsForTest()
-	if response, err := sendModalRequest(pipeName, map[string]any{
+	openRequest := map[string]any{
 		"operation":  "open",
-		"id":         "black-box",
+		"id":         surfaceID,
 		"generation": generation,
-		"title":      "Afterburner Black Box Live",
+		"title":      title,
 		"status":     "test modal open",
 		"body":       "live metadata frame",
 		"footer":     "waiting for structured close event",
 		"actions":    actions,
-	}); err != nil {
+	}
+	if document := modalDocumentForTest(surfaceID, 1); document != nil {
+		openRequest["document"] = document
+	}
+	if response, err := sendModalRequest(pipeName, openRequest); err != nil {
 		return result, err
 	} else if !response.OK {
 		return result, fmt.Errorf("modal open failed: %s", response.Error)
@@ -354,15 +363,19 @@ func exerciseModalPipe() (*modalExerciseCapture, error) {
 		result.Opened = true
 	}
 	time.Sleep(150 * time.Millisecond)
-	if response, err := sendModalRequest(pipeName, map[string]any{
+	updateRequest := map[string]any{
 		"operation":  "update",
-		"id":         "black-box",
+		"id":         surfaceID,
 		"generation": generation,
 		"status":     "test modal live update",
 		"body":       "live activity update frame",
 		"footer":     "waiting for structured close event",
 		"actions":    actions,
-	}); err != nil {
+	}
+	if document := modalDocumentForTest(surfaceID, 2); document != nil {
+		updateRequest["document"] = document
+	}
+	if response, err := sendModalRequest(pipeName, updateRequest); err != nil {
 		return result, err
 	} else if !response.OK {
 		return result, fmt.Errorf("modal update failed: %s", response.Error)
@@ -378,25 +391,77 @@ func exerciseModalPipe() (*modalExerciseCapture, error) {
 	if os.Getenv("AFTERBURNER_TEST_MODAL_EXIT_OPEN") == "1" || os.Getenv("AFTERBURNER_TEST_MODAL_CRASH_OPEN") == "1" {
 		return result, nil
 	}
-	if os.Getenv("AFTERBURNER_TEST_MODAL_ACTIONS") == "1" || os.Getenv("AFTERBURNER_TEST_MODAL_FOCUS_ACTIONS") == "1" {
-		if err := exerciseModalActionRouting(pipeName, result, generation, actions); err != nil {
+	if os.Getenv("AFTERBURNER_TEST_MODAL_CONTROLS") == "1" {
+		if err := exerciseModalControlRouting(pipeName, surfaceID, result, generation); err != nil {
 			return result, err
 		}
 		return result, nil
 	}
-	if event, err := closeAndPollModal(pipeName, "black-box", generation); err != nil {
+	if os.Getenv("AFTERBURNER_TEST_MODAL_ACTIONS") == "1" || os.Getenv("AFTERBURNER_TEST_MODAL_FOCUS_ACTIONS") == "1" {
+		if err := exerciseModalActionRouting(pipeName, surfaceID, result, generation, actions); err != nil {
+			return result, err
+		}
+		return result, nil
+	}
+	if event, err := closeAndPollModal(pipeName, surfaceID, generation); err != nil {
 		return result, err
 	} else {
 		result.Event = event
 	}
 	if os.Getenv("AFTERBURNER_TEST_MODAL_REOPEN") == "1" {
-		reopen, err := exerciseModalReopen(pipeName)
+		reopen, err := exerciseModalReopen(pipeName, surfaceID)
 		result.Reopen = reopen
 		if err != nil {
 			return result, err
 		}
 	}
 	return result, nil
+}
+
+func modalDocumentForTest(surfaceID string, revision int64) any {
+	if os.Getenv("AFTERBURNER_TEST_MODAL_CONTROLS") != "1" {
+		return nil
+	}
+	return map[string]any{
+		"schemaVersion": 1,
+		"protocol":      "afterburner.ui",
+		"revision":      revision,
+		"surfaceId":     surfaceID,
+		"root": map[string]any{
+			"id": "root", "kind": "dialog",
+			"children": []any{
+				map[string]any{"id": "name", "kind": "textInput", "props": map[string]any{"label": "Display name", "value": ""}},
+				map[string]any{"id": "enabled", "kind": "checkbox", "props": map[string]any{"label": "Enabled", "checked": false}},
+				map[string]any{"id": "save", "kind": "button", "props": map[string]any{"label": "Save"}, "actionBindings": map[string]any{"activate": "save"}},
+			},
+		},
+	}
+}
+
+func exerciseModalControlRouting(pipeName, id string, result *modalExerciseCapture, generation int64) error {
+	for _, expected := range []struct {
+		eventType string
+		targetID  string
+	}{
+		{"change", "name"},
+		{"change", "enabled"},
+		{"activate", "save"},
+	} {
+		event, err := pollModalEvent(pipeName, id, generation)
+		if err != nil {
+			return err
+		}
+		if event.Type != expected.eventType || event.TargetID != expected.targetID || event.DocumentRevision != 2 {
+			return fmt.Errorf("modal control event = %#v, want %s/%s revision 2", event, expected.eventType, expected.targetID)
+		}
+		result.ActionEvents = append(result.ActionEvents, *event)
+	}
+	event, err := closeAndPollModal(pipeName, id, generation)
+	if err != nil {
+		return err
+	}
+	result.Event = event
+	return nil
 }
 
 func modalActionsForTest() []map[string]string {
@@ -410,7 +475,7 @@ func modalActionsForTest() []map[string]string {
 	}
 }
 
-func exerciseModalActionRouting(pipeName string, result *modalExerciseCapture, generation int64, actions []map[string]string) error {
+func exerciseModalActionRouting(pipeName, id string, result *modalExerciseCapture, generation int64, actions []map[string]string) error {
 	expectedEvents := []struct {
 		name string
 		key  string
@@ -430,7 +495,7 @@ func exerciseModalActionRouting(pipeName string, result *modalExerciseCapture, g
 		}
 	}
 	for _, expected := range expectedEvents {
-		event, err := pollModalEvent(pipeName, "black-box", generation)
+		event, err := pollModalEvent(pipeName, id, generation)
 		if err != nil {
 			return err
 		}
@@ -442,7 +507,7 @@ func exerciseModalActionRouting(pipeName string, result *modalExerciseCapture, g
 		case "refresh":
 			if response, err := sendModalRequest(pipeName, map[string]any{
 				"operation":  "update",
-				"id":         "black-box",
+				"id":         id,
 				"generation": generation,
 				"status":     "refresh action observed",
 				"body":       "refresh action updated frame",
@@ -456,7 +521,7 @@ func exerciseModalActionRouting(pipeName string, result *modalExerciseCapture, g
 		case "doctor":
 			if response, err := sendModalRequest(pipeName, map[string]any{
 				"operation":  "update",
-				"id":         "black-box",
+				"id":         id,
 				"generation": generation,
 				"title":      "Afterburner Black Box Doctor",
 				"status":     "doctor action observed",
@@ -469,7 +534,7 @@ func exerciseModalActionRouting(pipeName string, result *modalExerciseCapture, g
 				return fmt.Errorf("modal doctor update failed: %s", response.Error)
 			}
 		case "close":
-			closed, err := closeAndPollModal(pipeName, "black-box", generation)
+			closed, err := closeAndPollModal(pipeName, id, generation)
 			if err != nil {
 				return err
 			}
@@ -480,7 +545,7 @@ func exerciseModalActionRouting(pipeName string, result *modalExerciseCapture, g
 	const escapeGeneration int64 = 2
 	if response, err := sendModalRequest(pipeName, map[string]any{
 		"operation":  "open",
-		"id":         "black-box",
+		"id":         id,
 		"generation": escapeGeneration,
 		"title":      "Afterburner Black Box Escape",
 		"status":     "escape close check",
@@ -492,7 +557,7 @@ func exerciseModalActionRouting(pipeName string, result *modalExerciseCapture, g
 	} else if !response.OK {
 		return fmt.Errorf("modal escape reopen failed: %s", response.Error)
 	}
-	event, err := pollModalEvent(pipeName, "black-box", escapeGeneration)
+	event, err := pollModalEvent(pipeName, id, escapeGeneration)
 	if err != nil {
 		return err
 	}
@@ -548,13 +613,13 @@ func closeAndPollModal(pipeName, id string, generation int64) (*modalEvent, erro
 	return response.Event, nil
 }
 
-func exerciseModalReopen(pipeName string) (*modalReopenCapture, error) {
+func exerciseModalReopen(pipeName, id string) (*modalReopenCapture, error) {
 	const staleGeneration int64 = 1
 	const generation int64 = 2
 	result := &modalReopenCapture{}
 	if response, err := sendModalRequest(pipeName, map[string]any{
 		"operation":  "open",
-		"id":         "black-box",
+		"id":         id,
 		"generation": generation,
 		"title":      "Afterburner Black Box Reopened",
 		"status":     "test modal reopened",
@@ -571,7 +636,7 @@ func exerciseModalReopen(pipeName string) (*modalReopenCapture, error) {
 	time.Sleep(150 * time.Millisecond)
 	if response, err := sendModalRequest(pipeName, map[string]any{
 		"operation":  "close",
-		"id":         "black-box",
+		"id":         id,
 		"generation": staleGeneration,
 	}); err != nil {
 		return result, err
@@ -583,7 +648,7 @@ func exerciseModalReopen(pipeName string) (*modalReopenCapture, error) {
 	}
 	if response, err := sendModalRequest(pipeName, map[string]any{
 		"operation":  "poll",
-		"id":         "black-box",
+		"id":         id,
 		"generation": staleGeneration,
 	}); err != nil {
 		return result, err
@@ -593,7 +658,7 @@ func exerciseModalReopen(pipeName string) (*modalReopenCapture, error) {
 			return result, fmt.Errorf("stale modal poll was accepted: %#v", response)
 		}
 	}
-	event, err := closeAndPollModal(pipeName, "black-box", generation)
+	event, err := closeAndPollModal(pipeName, id, generation)
 	if err != nil {
 		return result, err
 	}
@@ -652,9 +717,7 @@ func registerModalSurface(bootstrap modalBootstrap, owner, canvas, surfaceID str
 }
 
 func applyModalIdentity(request map[string]any) {
-	owner := "black-box"
-	canvas := "black-box"
-	surface := "black-box"
+	owner, canvas, surface := modalTestIdentity()
 	if _, ok := request["ownerExtensionId"]; !ok {
 		request["ownerExtensionId"] = owner
 	}
@@ -664,6 +727,20 @@ func applyModalIdentity(request map[string]any) {
 	if _, ok := request["surfaceId"]; !ok {
 		request["surfaceId"] = surface
 	}
+}
+
+func modalTestIdentity() (string, string, string) {
+	owner := firstNonEmptyEnv("AFTERBURNER_TEST_MODAL_OWNER", "black-box")
+	canvas := firstNonEmptyEnv("AFTERBURNER_TEST_MODAL_CANVAS", owner)
+	surface := firstNonEmptyEnv("AFTERBURNER_TEST_MODAL_SURFACE", canvas)
+	return owner, canvas, surface
+}
+
+func firstNonEmptyEnv(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func sendModalRequestOnce(pipeName string, request map[string]any) (modalResponse, error) {

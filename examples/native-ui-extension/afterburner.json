@@ -1,0 +1,28 @@
+{
+  "$schema": "../../schemas/extension-v1.schema.json",
+  "schemaVersion": 1,
+  "id": "native-ui-example",
+  "displayName": "Native UI Example",
+  "visibility": "private",
+  "requires": {
+    "afterburner": ">=0.3.0 <1.0.0"
+  },
+  "capabilities": [
+    "modal-canvas"
+  ],
+  "runtime": {
+    "entrypoint": "extension.mjs",
+    "execution": "in-process"
+  },
+  "ui": {
+    "protocol": "afterburner.ui",
+    "revision": 1,
+    "surfaces": [
+      {
+        "id": "settings",
+        "kind": "modal",
+        "title": "Example settings"
+      }
+    ]
+  }
+}

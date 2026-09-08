@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "protocol": "afterburner.ui",
+  "revision": 1,
+  "surfaceId": "settings",
+  "root": {
+    "id": "settings-root",
+    "kind": "dialog",
+    "props": {
+      "title": "Example settings"
+    },
+    "children": [
+      {
+        "id": "settings-form",
+        "kind": "form",
+        "props": {
+          "title": "Configuration"
+        },
+        "children": [
+          {
+            "id": "display-name",
+            "kind": "textInput",
+            "props": {
+              "label": "Display name",
+              "value": "Afterburner"
+            }
+          },
+          {
+            "id": "enabled",
+            "kind": "checkbox",
+            "props": {
+              "label": "Enabled",
+              "checked": true
+            }
+          },
+          {
+            "id": "save",
+            "kind": "button",
+            "props": {
+              "label": "Save"
+            },
+            "actionBindings": {
+              "activate": "save"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

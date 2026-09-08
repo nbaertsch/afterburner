@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nbaertsch/afterburner/schemas/ui-document-v1.schema.json",
+  "title": "Afterburner native extension UI document",
+  "type": "object",
+  "required": ["schemaVersion", "protocol", "revision", "surfaceId", "root"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "protocol": { "const": "afterburner.ui" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "surfaceId": { "$ref": "#/$defs/id" },
+    "locale": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[^\\u001b]*$"
+    },
+    "root": {
+      "allOf": [
+        { "$ref": "#/$defs/node" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "dialog" }
+          }
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "jsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        {
+          "type": "string",
+          "pattern": "^[^\\u001b]*$"
+        },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/jsonValue" }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+        }
+      ]
+    },
+    "properties": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+    },
+    "interactiveNode": {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "button",
+              "link",
+              "textInput",
+              "searchInput",
+              "numberInput",
+              "dateInput",
+              "fileInput",
+              "passwordInput",
+              "textArea",
+              "select",
+              "checkbox",
+              "radioGroup",
+              "toggle",
+              "slider",
+              "tabs"
+            ]
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": { "required": ["id"] }
+    },
+    "node": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": {
+          "enum": [
+            "dialog",
+            "application",
+            "surface",
+            "window",
+            "viewport",
+            "stack",
+            "row",
+            "column",
+            "group",
+            "grid",
+            "statusGrid",
+            "split",
+            "section",
+            "box",
+            "disclosure",
+            "panel",
+            "card",
+            "scroll",
+            "toolbar",
+            "separator",
+            "spacer",
+            "breadcrumb",
+            "contextMenu",
+            "icon",
+            "text",
+            "markdown",
+            "code",
+            "keyValue",
+            "detail",
+            "badge",
+            "alert",
+            "toast",
+            "progress",
+            "meter",
+            "bar",
+            "sparkline",
+            "spinner",
+            "loading",
+            "errorBoundary",
+            "empty",
+            "list",
+            "table",
+            "tree",
+            "timeline",
+            "tabs",
+            "log",
+            "commandPalette",
+            "form",
+            "button",
+            "link",
+            "textInput",
+            "searchInput",
+            "numberInput",
+            "dateInput",
+            "fileInput",
+            "passwordInput",
+            "textArea",
+            "select",
+            "checkbox",
+            "radioGroup",
+            "toggle",
+            "slider",
+            "actionBar",
+            "keybindingHint",
+            "pagination",
+            "help",
+            "confirmation",
+            "prompt"
+          ]
+        },
+        "props": { "$ref": "#/$defs/properties" },
+        "children": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/node" }
+        },
+        "accessibility": { "$ref": "#/$defs/properties" },
+        "actionBindings": { "$ref": "#/$defs/properties" },
+        "metadata": { "$ref": "#/$defs/properties" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/interactiveNode" }
+      ]
+    }
+  }
+}

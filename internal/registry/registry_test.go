@@ -7,6 +7,31 @@ import (
 	"testing"
 )
 
+func TestHashTreeIncludesExecutableDependencyDirectories(t *testing.T) {
+	root := t.TempDir()
+	dependency := filepath.Join(root, "node_modules", "payload", "index.mjs")
+	if err := os.MkdirAll(filepath.Dir(dependency), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dependency, []byte("export const value = 1;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := HashTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dependency, []byte("export const value = 2;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := HashTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("node_modules modification did not change package tree hash")
+	}
+}
+
 func TestSaveReplacesExistingRegistry(t *testing.T) {
 	root := t.TempDir()
 	first := Registry{SchemaVersion: 1, Extensions: map[string]Entry{}}
@@ -151,6 +176,44 @@ func TestLoadRejectsInvalidVisibility(t *testing.T) {
 	}
 }
 
+func TestValidateManifestUI(t *testing.T) {
+	base := Manifest{
+		Capabilities: []string{"modal-canvas"},
+		UI: &UIManifest{
+			Protocol: UIProtocol,
+			Revision: UIRevision,
+			Surfaces: []UISurface{{ID: "settings", Kind: "modal"}},
+		},
+	}
+	if err := ValidateManifestUI(base); err != nil {
+		t.Fatalf("valid UI manifest rejected: %v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Manifest)
+	}{
+		{name: "protocol", mutate: func(value *Manifest) { value.UI.Protocol = "afterburner.ui.future" }},
+		{name: "revision", mutate: func(value *Manifest) { value.UI.Revision = 2 }},
+		{name: "empty", mutate: func(value *Manifest) { value.UI.Surfaces = nil }},
+		{name: "invalid-id", mutate: func(value *Manifest) { value.UI.Surfaces[0].ID = "Settings!" }},
+		{name: "kind", mutate: func(value *Manifest) { value.UI.Surfaces[0].Kind = "panel" }},
+		{name: "duplicate", mutate: func(value *Manifest) { value.UI.Surfaces = append(value.UI.Surfaces, value.UI.Surfaces[0]) }},
+		{name: "capability", mutate: func(value *Manifest) { value.Capabilities = nil }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			value := base
+			ui := *base.UI
+			ui.Surfaces = append([]UISurface(nil), base.UI.Surfaces...)
+			value.UI = &ui
+			tc.mutate(&value)
+			if err := ValidateManifestUI(value); err == nil {
+				t.Fatal("expected invalid UI manifest to be rejected")
+			}
+		})
+	}
+}
+
 func TestLoadRejectsReservedBuiltinIDFromGenericSource(t *testing.T) {
 	root := t.TempDir()
 	active := filepath.Join(root, "extensions", "black-box", "v1")
@@ -185,8 +248,42 @@ func TestLoadAcceptsReservedBuiltinIDWithVerifiedEmbeddedIdentity(t *testing.T) 
 	if err := Save(root, value); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(root); err != nil {
+	loaded, err := Load(root)
+	if err != nil {
 		t.Fatalf("expected verified embedded built-in to load: %v", err)
+	}
+	if !loaded.Extensions["black-box"].Verified {
+		t.Fatal("content-bound built-in identity was not verified")
+	}
+}
+
+func TestLoadDoesNotVerifyModifiedPackage(t *testing.T) {
+	root := t.TempDir()
+	active := filepath.Join(root, "extensions", "example", "v1")
+	manifest := Manifest{SchemaVersion: 1, ID: "example", DisplayName: "Example", Visibility: "private", Requires: Requirements{Afterburner: ">=0.1.0 <1.0.0"}, Runtime: RuntimeManifest{Execution: "in-process", Entrypoint: "runtime.mjs"}}
+	writeRegistryPackage(t, active, manifest, "export default {}")
+	manifestHash, treeHash, err := VerifyActivePackage(Entry{ActivePath: active})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := Entry{Enabled: true, ActivePath: active, Manifest: manifest, Source: Source{Type: "path", Value: active}, UpdatedAt: "2026-09-08T00:00:00Z"}
+	entry.Identity = IdentityBinding{ExtensionID: manifest.ID, ManifestHash: manifestHash, TreeHash: treeHash, SourceType: entry.Source.Type, SourceValue: entry.Source.Value, RegistryEpoch: 1, GrantEpoch: 1, BoundAt: entry.UpdatedAt}
+	entry, err = SealEntry(root, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(root, Registry{SchemaVersion: 1, Extensions: map[string]Entry{"example": entry}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(active, "runtime.mjs"), []byte("export default { modified: true }"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Extensions["example"].Verified {
+		t.Fatal("modified package retained verified authority")
 	}
 }
 

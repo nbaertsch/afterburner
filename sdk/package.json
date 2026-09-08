@@ -1,0 +1,17 @@
+{
+  "name": "@afterburner/extension-sdk",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    "./ui": {
+      "types": "./ui.d.ts",
+      "import": "./ui.mjs"
+    }
+  },
+  "files": [
+    "ui.mjs",
+    "ui.d.ts",
+    "README.md"
+  ],
+  "sideEffects": false
+}

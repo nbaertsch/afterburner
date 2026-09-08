@@ -42,6 +42,7 @@
       },
       "uniqueItems": true
     },
+    "ui": { "$ref": "extension-ui-v1.schema.json" },
     "sessionExtension": {
       "type": "object",
       "required": ["entrypoint"],

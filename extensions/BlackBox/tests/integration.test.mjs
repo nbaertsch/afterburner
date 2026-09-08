@@ -308,13 +308,18 @@ test("session registration renders the visible panel without canvas support", as
     assert.match(logs[0], /Signals\s*:/);
 });
 
-test("Black Box manifest does not advertise generic canvas capability", async () => {
+test("Black Box manifest declares only native modal UI surfaces", async () => {
     const manifest = JSON.parse(await readFile(new URL("../afterburner.json", import.meta.url), "utf8"));
     assert.equal(manifest.id, "black-box");
     assert.ok(manifest.capabilities.includes("modal-canvas"));
     assert.equal(manifest.capabilities.includes("canvas"), false);
     assert.equal(manifest.capabilities.includes("enterprise-surface"), false);
-    assert.equal(manifest.ui, undefined);
+    assert.equal(manifest.ui.protocol, "afterburner.ui");
+    assert.equal(manifest.ui.revision, 1);
+    assert.deepEqual(manifest.ui.surfaces.map(surface => [surface.id, surface.kind]), [
+        ["afterburner-black-box-live", "modal"],
+        ["black-box", "modal"]
+    ]);
 });
 
 test("session extension wrapper does not open the generic Copilot canvas", async () => {

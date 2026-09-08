@@ -19,6 +19,22 @@
     "sanitized-export",
     "modal-canvas"
   ],
+  "ui": {
+    "protocol": "afterburner.ui",
+    "revision": 1,
+    "surfaces": [
+      {
+        "id": "afterburner-black-box-live",
+        "kind": "modal",
+        "title": "Afterburner Black Box Live"
+      },
+      {
+        "id": "black-box",
+        "kind": "modal",
+        "title": "Black Box"
+      }
+    ]
+  },
   "sessionExtension": {
     "entrypoint": "com.github.copilot/extensions/BlackBox/extension.mjs"
   }

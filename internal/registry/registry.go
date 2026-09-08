@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/nbaertsch/afterburner/internal/platform"
@@ -22,7 +23,20 @@ type Manifest struct {
 	Requires         Requirements      `json:"requires"`
 	Runtime          RuntimeManifest   `json:"runtime"`
 	Capabilities     []string          `json:"capabilities,omitempty"`
+	UI               *UIManifest       `json:"ui,omitempty"`
 	SessionExtension *SessionExtension `json:"sessionExtension,omitempty"`
+}
+
+type UIManifest struct {
+	Protocol string      `json:"protocol"`
+	Revision int         `json:"revision"`
+	Surfaces []UISurface `json:"surfaces"`
+}
+
+type UISurface struct {
+	ID    string `json:"id"`
+	Kind  string `json:"kind"`
+	Title string `json:"title,omitempty"`
 }
 
 type Requirements struct {
@@ -63,7 +77,12 @@ const (
 	OpenAIServerID       = "openai-server"
 	LegacyOpenAIServerID = "copilot-openai"
 	OpenAIServerName     = "OpenAI Server"
+	UIProtocol           = "afterburner.ui"
+	UIRevision           = 1
+	MaxUISurfaces        = 16
 )
+
+var validUISurfaceID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 type Registry struct {
 	SchemaVersion int              `json:"schemaVersion"`
@@ -108,7 +127,12 @@ func Load(root string) (Registry, error) {
 		if entry.ActivePath == "" || !Within(entry.ActivePath, filepath.Join(root, "extensions")) {
 			return Registry{}, fmt.Errorf("extension %q active path escapes the managed package root", id)
 		}
-		entry.Verified = true
+		entry.Verified = false
+		if !entry.Identity.IsZero() {
+			if manifestHash, treeHash, verifyErr := VerifyActivePackage(entry); verifyErr == nil {
+				entry.Verified = entry.Identity.ValidateForContent(root, entry, manifestHash, treeHash) == nil
+			}
+		}
 		if IsReservedBuiltinID(id) && !allowedReservedBuiltinEntry(id, entry) {
 			return Registry{}, fmt.Errorf("extension %q uses a reserved built-in ID outside the built-in installer route", id)
 		}
@@ -158,6 +182,50 @@ func NormalizeManifest(manifest *Manifest) {
 	normalizeManifestNames(manifest)
 }
 
+func ValidateManifestUI(manifest Manifest) error {
+	if manifest.UI == nil {
+		return nil
+	}
+	if manifest.UI.Protocol != UIProtocol {
+		return fmt.Errorf("unsupported UI protocol %q", manifest.UI.Protocol)
+	}
+	if manifest.UI.Revision != UIRevision {
+		return fmt.Errorf("unsupported UI revision %d", manifest.UI.Revision)
+	}
+	if len(manifest.UI.Surfaces) == 0 {
+		return fmt.Errorf("UI manifest must declare at least one surface")
+	}
+	if len(manifest.UI.Surfaces) > MaxUISurfaces {
+		return fmt.Errorf("UI manifest exceeds the %d-surface limit", MaxUISurfaces)
+	}
+	if !containsCapability(manifest.Capabilities, "modal-canvas") {
+		return fmt.Errorf("UI surfaces require the modal-canvas capability")
+	}
+	seen := make(map[string]struct{}, len(manifest.UI.Surfaces))
+	for _, surface := range manifest.UI.Surfaces {
+		if !validUISurfaceID.MatchString(surface.ID) {
+			return fmt.Errorf("invalid UI surface id %q", surface.ID)
+		}
+		if surface.Kind != "modal" {
+			return fmt.Errorf("unsupported UI surface kind %q", surface.Kind)
+		}
+		if _, exists := seen[surface.ID]; exists {
+			return fmt.Errorf("duplicate UI surface id %q", surface.ID)
+		}
+		seen[surface.ID] = struct{}{}
+	}
+	return nil
+}
+
+func containsCapability(capabilities []string, want string) bool {
+	for _, capability := range capabilities {
+		if capability == want {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeManifestNames(manifest *Manifest) {
 	manifest.Name = strings.TrimSpace(manifest.Name)
 	manifest.DisplayName = strings.TrimSpace(manifest.DisplayName)
@@ -198,6 +266,7 @@ func IsTrustedBuiltinSourceType(sourceType string) bool {
 func IsTrustedBuiltinEntry(entry Entry) bool {
 	return entry.Verified && entry.Manifest.Visibility == "builtin" &&
 		entry.Source.Value == entry.Manifest.ID &&
+		entry.Identity.IsTrustedBuiltinFor(entry.Manifest.ID) &&
 		(IsTrustedBuiltinSourceType(entry.Source.Type) || entry.Source.Type == "builtin")
 }
 
@@ -248,7 +317,7 @@ func HashTree(root string) (string, error) {
 			return fmt.Errorf("extension packages may not contain symbolic links: %s", relative)
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || entry.Name() == "node_modules" || entry.Name() == "bin" || entry.Name() == "obj" {
+			if entry.Name() == ".git" {
 				return filepath.SkipDir
 			}
 			return nil

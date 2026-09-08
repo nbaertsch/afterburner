@@ -139,8 +139,24 @@ OpenAI Server exposes the active Copilot session through a localhost OpenAI-comp
 ## Native terminal UI
 
 Interactive extension views use Afterburner's authenticated native terminal modal broker. Modal
-registration and actions remain scoped to the verified extension identity; no parallel browser,
-panel, or generic canvas host is required.
+registration, documents, events, and actions remain scoped to the verified extension identity; no
+parallel browser, panel, or generic canvas host is required. Extensions declare local surface IDs
+under `ui.surfaces`, then register them through `api.ui.registerSurface`. The V1 API uses bounded,
+revisioned document snapshots with stable component IDs and native keyboard interaction for
+buttons, text fields, selections, toggles, sliders, and tabs.
+
+The zero-dependency author contract and TypeScript declarations are in
+[`sdk`](sdk/README.md). A complete arbitrary-extension example is in
+[`examples/native-ui-extension`](examples/native-ui-extension). The machine-readable contracts are
+[`schemas/extension-ui-v1.schema.json`](schemas/extension-ui-v1.schema.json) for manifest
+declarations and [`schemas/ui-document-v1.schema.json`](schemas/ui-document-v1.schema.json) for
+rendered documents.
+
+```powershell
+afterburn extension validate .\my-extension
+afterburn extension preview .\document.json 100
+afterburn extension pack .\my-extension .\dist\my-extension.zip
+```
 
 ## Compatibility and recovery
 
