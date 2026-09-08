@@ -29,6 +29,11 @@ type Prepared struct {
 	Path    string
 }
 
+func Digest() string {
+	sum := sha256.Sum256(append(append([]byte{}, runtimeHost...), runtimeAssetsDigest()...))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 func Prepare(layout home.Layout, base copilot.Package) (Prepared, error) {
 	platformName := "win32-" + mapArch(runtime.GOARCH)
 	sum := sha256.Sum256(append(append(append([]byte{}, runtimeHost...), runtimeAssetsDigest()...), []byte(base.AppSHA256+base.RuntimeSHA256)...))

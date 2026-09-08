@@ -1,10 +1,10 @@
 {
   "$schema": "../../schemas/extension-v1.schema.json",
   "schemaVersion": 1,
-  "id": "copilot-openai",
-  "displayName": "Copilot OpenAI Bridge",
+  "id": "openai-server",
+  "displayName": "OpenAI Server",
   "description": "Exposes the active Copilot session model catalog through a localhost OpenAI-compatible API when enabled.",
-  "visibility": "private",
+  "visibility": "builtin",
   "requires": {
     "afterburner": ">=0.1.0 <1.0.0",
     "copilotCli": [">=1.0.83-1 <1.0.84"]
@@ -15,6 +15,6 @@
   },
   "capabilities": ["session-command", "modal-canvas"],
   "sessionExtension": {
-    "entrypoint": "com.github.copilot/extensions/CopilotOpenAI/extension.mjs"
+    "entrypoint": "com.github.copilot/extensions/OpenAIServer/extension.mjs"
   }
 }

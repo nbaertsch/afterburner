@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -101,6 +102,9 @@ func (m Manager) syncBuiltins(ids []string, requireFetcher bool) error {
 			return err
 		}
 		ids = normalized
+		if slices.Contains(ids, registry.OpenAIServerID) {
+			registry.MigrateOpenAIServerAlias(value)
+		}
 		for _, id := range ids {
 			_, knownBuiltin := catalog[id]
 			overridePath, hasOverride := overrides[id]
@@ -154,8 +158,12 @@ func (m Manager) syncBuiltins(ids []string, requireFetcher bool) error {
 				source, sourceMetadata, cleanup = extracted, registry.Source{Type: "embedded", Value: id}, extractCleanup
 			}
 			previous := value.Extensions[id]
+			enabled := builtinDefaultEnabled(id)
+			if previous.Manifest.ID == id {
+				enabled = previous.Enabled
+			}
 			trustedBuiltin := !hasOverride
-			entry, err := m.materialize(source, sourceMetadata, previous, true, trustedBuiltin)
+			entry, err := m.materialize(source, sourceMetadata, previous, enabled, trustedBuiltin, false)
 			if err != nil {
 				cleanup()
 				return err
@@ -165,8 +173,10 @@ func (m Manager) syncBuiltins(ids []string, requireFetcher bool) error {
 				fmt.Fprintf(m.Stdout, "Built-in extension %q is already synced at %s.\n", id, filepath.Base(entry.ActivePath))
 			} else if requireFetcher {
 				fmt.Fprintf(m.Stdout, "Synced built-in extension %q to %s.\n", id, filepath.Base(entry.ActivePath))
-			} else {
+			} else if entry.Enabled {
 				fmt.Fprintf(m.Stdout, "Installed and enabled built-in extension %q at %s.\n", id, filepath.Base(entry.ActivePath))
+			} else {
+				fmt.Fprintf(m.Stdout, "Installed built-in extension %q disabled at %s.\n", id, filepath.Base(entry.ActivePath))
 			}
 			if err := m.initializeBuiltinConfig(id, source); err != nil {
 				cleanup()
@@ -188,8 +198,15 @@ func (m Manager) SetBuiltinsEnabled(ids []string, enabled bool) error {
 			return err
 		}
 		for _, id := range normalized {
-			entry, ok := value.Extensions[id]
-			if !ok || entry.Manifest.Visibility != "builtin" {
+			if id == registry.OpenAIServerID {
+				if _, canonicalInstalled := value.Extensions[registry.OpenAIServerID]; canonicalInstalled {
+					registry.MigrateOpenAIServerAlias(value)
+				}
+			}
+			key := registryEntryKey(value, id)
+			entry, ok := value.Extensions[key]
+			legacyOpenAIServer := id == registry.OpenAIServerID && key == registry.LegacyOpenAIServerID
+			if !ok || (entry.Manifest.Visibility != "builtin" && !legacyOpenAIServer) {
 				return fmt.Errorf("built-in extension %q is not installed; run 'afterburn install %s'", id, id)
 			}
 			entry.Enabled = enabled
@@ -200,7 +217,7 @@ func (m Manager) SetBuiltinsEnabled(ids []string, enabled bool) error {
 				}
 				entry = sealed
 			}
-			value.Extensions[id] = entry
+			value.Extensions[key] = entry
 			fmt.Fprintf(m.Stdout, "%s built-in extension %q.\n", map[bool]string{true: "Enabled", false: "Disabled"}[enabled], id)
 		}
 		return nil
@@ -218,12 +235,34 @@ func (m Manager) UninstallBuiltins(ids []string) error {
 			return err
 		}
 		for _, id := range normalized {
-			entry, ok := value.Extensions[id]
+			if id == registry.OpenAIServerID {
+				found := false
+				for _, key := range []string{registry.OpenAIServerID, registry.LegacyOpenAIServerID} {
+					entry, ok := value.Extensions[key]
+					if !ok {
+						continue
+					}
+					if key == registry.OpenAIServerID && entry.Manifest.Visibility != "builtin" {
+						return fmt.Errorf("extension %q is not a built-in", id)
+					}
+					found = true
+					delete(value.Extensions, key)
+					remove = append(remove, filepath.Join(m.Layout.Extensions, key))
+				}
+				if !found {
+					fmt.Fprintf(m.Stdout, "Uninstalled built-in extension %q.\n", id)
+					continue
+				}
+				fmt.Fprintf(m.Stdout, "Uninstalled built-in extension %q.\n", id)
+				continue
+			}
+			key := registryEntryKey(value, id)
+			entry, ok := value.Extensions[key]
 			if ok && entry.Manifest.Visibility != "builtin" {
 				return fmt.Errorf("extension %q is not a built-in", id)
 			}
-			delete(value.Extensions, id)
-			remove = append(remove, filepath.Join(m.Layout.Extensions, id))
+			delete(value.Extensions, key)
+			remove = append(remove, filepath.Join(m.Layout.Extensions, key))
 			fmt.Fprintf(m.Stdout, "Uninstalled built-in extension %q.\n", id)
 		}
 		return nil
@@ -249,7 +288,7 @@ func (m Manager) Install(source string) error {
 	}
 	defer cleanup()
 	return m.withRegistry(func(value *registry.Registry) error {
-		entry, err := m.materialize(resolvedPath, sourceMetadata, registry.Entry{}, false, false)
+		entry, err := m.materialize(resolvedPath, sourceMetadata, registry.Entry{}, false, false, false)
 		if err != nil {
 			return err
 		}
@@ -262,7 +301,13 @@ func (m Manager) Install(source string) error {
 func (m Manager) SetEnabled(id string, enabled bool) error {
 	id = canonicalID(id)
 	return m.withRegistry(func(value *registry.Registry) error {
-		entry, ok := value.Extensions[id]
+		if id == registry.OpenAIServerID {
+			if _, canonicalInstalled := value.Extensions[registry.OpenAIServerID]; canonicalInstalled {
+				registry.MigrateOpenAIServerAlias(value)
+			}
+		}
+		key := registryEntryKey(value, id)
+		entry, ok := value.Extensions[key]
 		if !ok {
 			return fmt.Errorf("unknown Afterburner extension %q", id)
 		}
@@ -274,7 +319,7 @@ func (m Manager) SetEnabled(id string, enabled bool) error {
 			}
 			entry = sealed
 		}
-		value.Extensions[id] = entry
+		value.Extensions[key] = entry
 		fmt.Fprintf(m.Stdout, "%s %q.\n", map[bool]string{true: "Enabled", false: "Disabled"}[enabled], id)
 		return nil
 	})
@@ -283,7 +328,8 @@ func (m Manager) SetEnabled(id string, enabled bool) error {
 func (m Manager) Update(id string) error {
 	id = canonicalID(id)
 	return m.withRegistry(func(value *registry.Registry) error {
-		current, ok := value.Extensions[id]
+		key := registryEntryKey(value, id)
+		current, ok := value.Extensions[key]
 		if !ok {
 			return fmt.Errorf("unknown Afterburner extension %q", id)
 		}
@@ -295,14 +341,15 @@ func (m Manager) Update(id string) error {
 			return err
 		}
 		defer cleanup()
-		entry, err := m.materialize(resolvedPath, sourceMetadata, current, current.Enabled, false)
+		legacyOpenAIServer := id == registry.OpenAIServerID && key == registry.LegacyOpenAIServerID
+		entry, err := m.materialize(resolvedPath, sourceMetadata, current, current.Enabled, false, legacyOpenAIServer)
 		if err != nil {
 			return err
 		}
-		if entry.Manifest.ID != id {
-			return fmt.Errorf("source package changed identity from %q to %q", id, entry.Manifest.ID)
+		if entry.Manifest.ID != key {
+			return fmt.Errorf("source package changed identity from %q to %q", key, entry.Manifest.ID)
 		}
-		value.Extensions[id] = entry
+		value.Extensions[key] = entry
 		if entry.ActivePath == current.ActivePath {
 			fmt.Fprintf(m.Stdout, "%q is already current.\n", id)
 		} else {
@@ -341,7 +388,8 @@ func (m Manager) UpdateAll() error {
 func (m Manager) Rollback(id string) error {
 	id = canonicalID(id)
 	return m.withRegistry(func(value *registry.Registry) error {
-		entry, ok := value.Extensions[id]
+		key := registryEntryKey(value, id)
+		entry, ok := value.Extensions[key]
 		if !ok {
 			return fmt.Errorf("unknown Afterburner extension %q", id)
 		}
@@ -349,14 +397,16 @@ func (m Manager) Rollback(id string) error {
 			return fmt.Errorf("no rollback version is available for %q", id)
 		}
 		previous := *entry.PreviousActivePath
-		if !registry.Within(previous, filepath.Join(m.Layout.Extensions, id)) {
+		legacyOpenAIServerRollback := id == registry.OpenAIServerID &&
+			registry.Within(previous, filepath.Join(m.Layout.Extensions, registry.LegacyOpenAIServerID))
+		if !registry.Within(previous, filepath.Join(m.Layout.Extensions, id)) && !legacyOpenAIServerRollback {
 			return fmt.Errorf("rollback package for %q escapes its managed root", id)
 		}
-		manifest, err := readManifest(previous)
+		manifest, err := readManifestWithCanonicalID(previous, !legacyOpenAIServerRollback)
 		if err != nil {
 			return fmt.Errorf("validate rollback package for %q: %w", id, err)
 		}
-		if manifest.ID != id {
+		if manifest.ID != id && !(legacyOpenAIServerRollback && manifest.ID == registry.LegacyOpenAIServerID) {
 			return fmt.Errorf("rollback package identity mismatch for %q", id)
 		}
 		manifestHash, err := registry.HashFile(filepath.Join(previous, "afterburner.json"))
@@ -368,19 +418,29 @@ func (m Manager) Rollback(id string) error {
 			return fmt.Errorf("hash rollback package for %q: %w", id, err)
 		}
 		current := entry.ActivePath
+		currentSource := entry.Source
+		previousSource := entry.PreviousSource
 		entry.ActivePath = previous
 		entry.PreviousActivePath = &current
+		entry.PreviousSource = &currentSource
 		entry.Manifest = manifest
-		entry.Source.Version = filepath.Base(previous)
+		if previousSource != nil {
+			entry.Source = *previousSource
+		} else if legacyOpenAIServerRollback {
+			entry.Source = registry.Source{Type: "path", Value: previous}
+		} else {
+			entry.Source.Version = filepath.Base(previous)
+		}
 		entry.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		trustedBuiltin := manifest.Visibility == "builtin" && registry.IsTrustedBuiltinSourceType(entry.Source.Type) && entry.Source.Value == manifest.ID && entry.Identity.BuiltinSigned
+		trustedBuiltin := manifest.Visibility == "builtin" && registry.IsTrustedBuiltinSourceType(entry.Source.Type) && entry.Source.Value == manifest.ID
 		entry.Identity = identityBinding(manifest, entry.Source, manifestHash, treeHash, entry.Identity.GrantEpoch, entry.UpdatedAt, trustedBuiltin)
 		sealed, err := registry.SealEntry(m.Layout.Root, entry)
 		if err != nil {
 			return err
 		}
 		entry = sealed
-		value.Extensions[id] = entry
+		delete(value.Extensions, key)
+		value.Extensions[manifest.ID] = entry
 		fmt.Fprintf(m.Stdout, "Rolled back %q to %s.\n", id, filepath.Base(previous))
 		return nil
 	})
@@ -407,7 +467,7 @@ func (m Manager) Inspect(id string) error {
 	if err != nil {
 		return err
 	}
-	entry, ok := value.Extensions[canonicalID(id)]
+	entry, ok := value.Extensions[registryEntryKey(&value, canonicalID(id))]
 	if !ok {
 		return fmt.Errorf("unknown Afterburner extension %q", id)
 	}
@@ -442,12 +502,12 @@ func (m Manager) withRegistry(update func(*registry.Registry) error) error {
 	return sessions.Reconcile(m.Layout, value)
 }
 
-func (m Manager) materialize(source string, sourceMetadata registry.Source, previous registry.Entry, enabled bool, trustedBuiltin bool) (registry.Entry, error) {
+func (m Manager) materialize(source string, sourceMetadata registry.Source, previous registry.Entry, enabled bool, trustedBuiltin bool, preserveLegacyID bool) (registry.Entry, error) {
 	source, err := filepath.Abs(source)
 	if err != nil {
 		return registry.Entry{}, err
 	}
-	manifest, err := readManifest(source)
+	manifest, err := readManifestWithCanonicalID(source, !preserveLegacyID)
 	if err != nil {
 		return registry.Entry{}, err
 	}
@@ -507,11 +567,15 @@ func (m Manager) materialize(source string, sourceMetadata registry.Source, prev
 		}
 	}
 	var previousPath *string
+	var previousSource *registry.Source
 	if previous.ActivePath != "" && previous.ActivePath != target {
 		value := previous.ActivePath
 		previousPath = &value
+		source := previous.Source
+		previousSource = &source
 	} else {
 		previousPath = previous.PreviousActivePath
+		previousSource = previous.PreviousSource
 	}
 	sourceMetadata.Version = version
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -520,6 +584,7 @@ func (m Manager) materialize(source string, sourceMetadata registry.Source, prev
 		Enabled:            enabled,
 		ActivePath:         target,
 		PreviousActivePath: previousPath,
+		PreviousSource:     previousSource,
 		Manifest:           manifest,
 		Source:             sourceMetadata,
 		Identity:           identity,
@@ -613,6 +678,10 @@ func validateGitURL(value string) error {
 }
 
 func readManifest(source string) (registry.Manifest, error) {
+	return readManifestWithCanonicalID(source, true)
+}
+
+func readManifestWithCanonicalID(source string, canonicalize bool) (registry.Manifest, error) {
 	data, err := os.ReadFile(filepath.Join(source, "afterburner.json"))
 	if err != nil {
 		return registry.Manifest{}, fmt.Errorf("read extension manifest: %w", err)
@@ -621,7 +690,9 @@ func readManifest(source string) (registry.Manifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return registry.Manifest{}, fmt.Errorf("parse extension manifest: %w", err)
 	}
-	manifest.ID = canonicalID(manifest.ID)
+	if canonicalize {
+		manifest.ID = canonicalID(manifest.ID)
+	}
 	registry.NormalizeManifest(&manifest)
 	if manifest.SchemaVersion != 1 || !validID.MatchString(manifest.ID) || manifest.DisplayName == "" ||
 		!registry.ValidVisibility(manifest.Visibility) || manifest.Requires.Afterburner == "" ||
@@ -919,8 +990,31 @@ func normalizeIDs(ids []string) ([]string, error) {
 }
 
 func canonicalID(id string) string {
-	if id == "byomodels" {
+	switch id {
+	case "byomodels":
 		return "byo-models"
+	case registry.LegacyOpenAIServerID:
+		return registry.OpenAIServerID
+	default:
+		return id
+	}
+}
+
+func builtinDefaultEnabled(id string) bool {
+	return id != registry.OpenAIServerID
+}
+
+func registryEntryKey(value *registry.Registry, id string) string {
+	if value == nil {
+		return id
+	}
+	if _, ok := value.Extensions[id]; ok {
+		return id
+	}
+	if id == registry.OpenAIServerID {
+		if _, ok := value.Extensions[registry.LegacyOpenAIServerID]; ok {
+			return registry.LegacyOpenAIServerID
+		}
 	}
 	return id
 }

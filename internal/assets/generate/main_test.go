@@ -206,3 +206,27 @@ func readZipEntries(t *testing.T, path string) map[string]bool {
 	}
 	return entries
 }
+
+func TestGeneratedOpenAIServerArchiveUsesCanonicalAndLegacyWrappers(t *testing.T) {
+	archivePath := filepath.Join("..", "generated", "openai-server.zip")
+	contents := readZipContents(t, archivePath)
+	manifestData, ok := contents["afterburner.json"]
+	if !ok {
+		t.Fatal("generated OpenAI Server archive missing afterburner.json")
+	}
+	var manifest struct {
+		ID         string `json:"id"`
+		Visibility string `json:"visibility"`
+	}
+	if err := json.Unmarshal([]byte(manifestData), &manifest); err != nil {
+		t.Fatalf("decode generated OpenAI Server manifest: %v", err)
+	}
+	if manifest.ID != "openai-server" || manifest.Visibility != "builtin" {
+		t.Fatalf("unexpected OpenAI Server manifest identity: %#v", manifest)
+	}
+	for _, name := range []string{"com.github.copilot/extensions/OpenAIServer/extension.mjs", "com.github.copilot/extensions/CopilotOpenAI/extension.mjs", "extensions/OpenAIServer/extension.mjs"} {
+		if _, ok := contents[name]; !ok {
+			t.Fatalf("generated OpenAI Server archive missing %s", name)
+		}
+	}
+}

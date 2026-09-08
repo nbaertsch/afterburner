@@ -33,6 +33,8 @@ jobs:
             git diff -- internal/assets/generated
             throw "Embedded built-in archives are stale. Run 'go generate ./internal/assets'."
           }
+      - name: Verify generated runtime copies are current
+        run: npm run check:runtime
       - run: go test ./...
       # -unsafeptr=false: internal/terminal/conpty_windows.go passes the HPCON
       # handle by value to UpdateProcThreadAttribute per Microsoft's documented
@@ -40,6 +42,7 @@ jobs:
       # unsafe.Pointer(uintptr) heuristic flags this known-safe pattern with
       # no per-line suppression available (golang/go#50134).
       - run: go vet -unsafeptr=false ./...
+      - run: npm run test:sdk-ui
       - run: npm test
       - name: Validate native ConPTY signal forwarding
         shell: pwsh

@@ -96,6 +96,7 @@ jobs:
           $builtinSources = [ordered]@{
             "black-box" = "extensions/BlackBox"
             "byo-models" = "extensions/BYOModels"
+            "openai-server" = "extensions/OpenAIServer"
           }
           $releaseBuiltins = foreach ($id in $builtinSources.Keys) {
             $archive = Join-Path artifacts "$id.zip"
@@ -132,14 +133,20 @@ jobs:
             "$($builtin.sha256)  $($builtin.name)"
           }
           $checksums | Set-Content artifacts/checksums.txt -Encoding ascii
+          Remove-Item Env:GOOS -ErrorAction SilentlyContinue
+          Remove-Item Env:GOARCH -ErrorAction SilentlyContinue
+          $compatibility = go run ./internal/releaseinfo | ConvertFrom-Json
           [ordered]@{
+            # Keep schema 1 so installed updaters can consume this release.
+            # Compatibility is additive and validated by newer cores.
             schemaVersion = 1
             repository = "${{ github.repository }}"
             version = $version
             commit = "${{ github.sha }}"
             assets = @($releaseAssets)
             builtins = @($releaseBuiltins)
-          } | ConvertTo-Json -Depth 4 | Set-Content artifacts/release-manifest.json -Encoding utf8
+            compatibility = $compatibility
+          } | ConvertTo-Json -Depth 6 | Set-Content artifacts/release-manifest.json -Encoding utf8
 
       - uses: actions/upload-artifact@v4
         with:
@@ -149,6 +156,7 @@ jobs:
             artifacts/afterburn-windows-arm64.zip
             artifacts/black-box.zip
             artifacts/byo-models.zip
+            artifacts/openai-server.zip
             artifacts/checksums.txt
             artifacts/release-manifest.json
           if-no-files-found: error
@@ -241,6 +249,7 @@ jobs:
             artifacts/afterburn-windows-arm64.zip `
             artifacts/black-box.zip `
             artifacts/byo-models.zip `
+            artifacts/openai-server.zip `
             artifacts/checksums.txt `
             artifacts/release-manifest.json `
             artifacts/release-manifest.sig `

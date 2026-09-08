@@ -27,6 +27,7 @@ func main() {
 	}{
 		{"BYOModels", "byo-models.zip"},
 		{"BlackBox", "black-box.zip"},
+		{"OpenAIServer", "openai-server.zip"},
 	} {
 		if err := createArchive(
 			filepath.Join(repository, "extensions", item.source),

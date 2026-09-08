@@ -41,6 +41,28 @@ func TestBrokerRequiresFileStreams(t *testing.T) {
 	}
 }
 
+func TestPreissuedModalRegistrationsPreserveLegacyOpenAIServerOwner(t *testing.T) {
+	value := &registry.Registry{Extensions: map[string]registry.Entry{
+		registry.LegacyOpenAIServerID: {
+			Enabled:  true,
+			Verified: true,
+			Manifest: registry.Manifest{
+				ID:           registry.LegacyOpenAIServerID,
+				Capabilities: []string{"modal-canvas"},
+			},
+		},
+	}}
+	got := preissuedModalRegistrations(value)
+	want := []terminal.ModalRegistration{{
+		OwnerExtensionID: registry.LegacyOpenAIServerID,
+		CanvasID:         registry.LegacyOpenAIServerID,
+		SurfaceID:        registry.LegacyOpenAIServerID,
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("registrations = %#v, want %#v", got, want)
+	}
+}
+
 func TestRunDirectFallbackPreservesBytesEnvArgsAndExit(t *testing.T) {
 	t.Setenv("AFTERBURNER_TERMINAL_BROKER", "1")
 	capturePath := filepath.Join(t.TempDir(), "capture.json")
@@ -259,19 +281,22 @@ func TestPreissueModalCapabilitiesRequiresVerifiedModalCapability(t *testing.T) 
 	}
 
 	verified := registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{
-		"black-box":      verifiedEntry("black-box", "builtin", "embedded", "black-box", true, []string{"modal-canvas"}),
-		"copilot-openai": verifiedEntry("copilot-openai", "private", "path", `C:\\repo\\extensions\\CopilotOpenAI`, false, []string{"modal-canvas"}),
-		"no-modal":       verifiedEntry("no-modal", "private", "path", `C:\\repo\\extensions\\NoModal`, false, []string{"session-command"}),
+		"black-box":     verifiedEntry("black-box", "builtin", "embedded", "black-box", true, []string{"modal-canvas"}),
+		"openai-server": verifiedEntry("openai-server", "builtin", "embedded", "openai-server", true, []string{"modal-canvas"}),
+		"no-modal":      verifiedEntry("no-modal", "private", "path", `C:\\repo\\extensions\\NoModal`, false, []string{"session-command"}),
 	}}
 	got := preissueModalCapabilities(server, &verified)
-	if len(got) != 3 {
+	if len(got) != 4 {
 		t.Fatalf("verified modal surfaces = %#v", got)
 	}
 	if got[0].OwnerExtensionID != "black-box" || got[0].SurfaceID != "afterburner-black-box-live" || got[1].SurfaceID != "black-box" {
 		t.Fatalf("black-box compatibility surfaces = %#v", got[:2])
 	}
-	if got[2].OwnerExtensionID != "copilot-openai" || got[2].CanvasID != "copilot-openai" || got[2].SurfaceID != "copilot-openai" {
-		t.Fatalf("copilot-openai modal surface = %#v", got[2])
+	if got[2].OwnerExtensionID != "openai-server" || got[2].CanvasID != "openai-server" || got[2].SurfaceID != "openai-server" {
+		t.Fatalf("openai-server modal surface = %#v", got[2])
+	}
+	if got[3].OwnerExtensionID != "openai-server" || got[3].CanvasID != "copilot-openai" || got[3].SurfaceID != "copilot-openai" {
+		t.Fatalf("legacy openai-server modal surface = %#v", got[3])
 	}
 }
 

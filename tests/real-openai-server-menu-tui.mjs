@@ -6,7 +6,7 @@ import process from "node:process";
 import pty from "node-pty";
 
 const afterburn = resolve(process.argv[2] ?? process.env.AFTERBURNER_EXE ?? ".native-build/afterburn.exe");
-const captureDirectory = resolve(process.argv[3] ?? join(process.cwd(), "artifacts", "copilot-openai-menu-tui"));
+const captureDirectory = resolve(process.argv[3] ?? join(process.cwd(), "artifacts", "openai-server-menu-tui"));
 const timeoutMs = Number(process.argv[4] ?? process.env.AFTERBURNER_REAL_TUI_TIMEOUT_MS ?? 90_000);
 const repoRoot = process.cwd();
 const root = join(tmpdir(), `afterburn-openai-menu-${process.pid}-${Date.now()}`);
@@ -78,7 +78,7 @@ const installCopilotSdkShim = activePath => {
 const isolatedEnvironment = (extra = {}) => {
   const environment = { ...process.env };
   for (const key of Object.keys(environment)) {
-    if (/^(COPILOT_HOME|COPILOT_AGENT_SESSION_ID|COPILOT_LOADER_PID|COPILOT_SUPERVISED|AFTERBURNER_HOME|AFTERBURNER_NORMAL_COPILOT_HOME|AFTERBURNER_COPILOT_OPENAI_CONFIG|AFTERBURNER_DISABLED_EXTENSIONS|AFTERBURNER_COPILOT_EXECUTABLE)$/i.test(key)) delete environment[key];
+    if (/^(COPILOT_HOME|COPILOT_AGENT_SESSION_ID|COPILOT_LOADER_PID|COPILOT_SUPERVISED|AFTERBURNER_HOME|AFTERBURNER_NORMAL_COPILOT_HOME|AFTERBURNER_OPENAI_SERVER_CONFIG|AFTERBURNER_COPILOT_OPENAI_CONFIG|AFTERBURNER_DISABLED_EXTENSIONS|AFTERBURNER_COPILOT_EXECUTABLE)$/i.test(key)) delete environment[key];
   }
   environment.USERPROFILE = isolatedUserHome;
   environment.HOME = isolatedUserHome;
@@ -94,42 +94,42 @@ mkdirSync(join(root, "localappdata"), { recursive: true });
 mkdirSync(join(root, "appdata"), { recursive: true });
 
 const installEnv = isolatedEnvironment({ AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH: "1" });
-const installResult = spawnSync(afterburn, ["extension", "install", resolve(repoRoot, "extensions", "CopilotOpenAI")], {
+const installResult = spawnSync(afterburn, ["install", "openai-server"], {
   cwd: repoRoot,
   encoding: "utf8",
   env: installEnv
 });
 if (installResult.status !== 0) {
-  throw new Error(`failed to install CopilotOpenAI local extension: status=${installResult.status} stdout=${installResult.stdout} stderr=${installResult.stderr}`);
+  throw new Error(`failed to install OpenAI Server built-in extension: status=${installResult.status} stdout=${installResult.stdout} stderr=${installResult.stderr}`);
 }
-const enableResult = spawnSync(afterburn, ["extension", "enable", "copilot-openai"], {
+const enableResult = spawnSync(afterburn, ["enable", "openai-server"], {
   cwd: repoRoot,
   encoding: "utf8",
   env: installEnv
 });
 if (enableResult.status !== 0) {
-  throw new Error(`failed to enable CopilotOpenAI local extension: status=${enableResult.status} stdout=${enableResult.stdout} stderr=${enableResult.stderr}`);
+  throw new Error(`failed to enable OpenAIServer local extension: status=${enableResult.status} stdout=${enableResult.stdout} stderr=${enableResult.stderr}`);
 }
 const registry = JSON.parse(readFileSync(join(afterburnerHome, "registry.json"), "utf8"));
-const entry = registry.extensions?.["copilot-openai"];
+const entry = registry.extensions?.["openai-server"];
 const activePath = entry?.activePath;
-if (!activePath) throw new Error("CopilotOpenAI extension did not install into registry");
+if (!activePath) throw new Error("OpenAIServer extension did not install into registry");
 const sdkShimInstalled = installCopilotSdkShim(activePath);
 writeJson(join(afterburnerHome, "copilot-home", "settings.json"), {
   experimental: true,
-  enabledPlugins: { "afterburner-copilot-openai": true },
+  enabledPlugins: { "afterburner-openai-server": true },
   extensions: { disabledExtensions: [] }
 });
 writeJson(join(afterburnerHome, "copilot-home", "config.json"), {
   appTipShown: true,
   askedSetupTerminals: ["windows-terminal"]
 });
-const bridgeConfigPath = join(afterburnerHome, "config", "copilot-openai.json");
+const bridgeConfigPath = join(afterburnerHome, "config", "openai-server.json");
 writeJson(bridgeConfigPath, { enabled: false, port: 0, requireApiKey: false });
 
 const env = isolatedEnvironment({
   COPILOT_RUNTIME_EXTENSION_DEBUG: "1",
-  AFTERBURNER_COPILOT_OPENAI_CONFIG: bridgeConfigPath,
+  AFTERBURNER_OPENAI_SERVER_CONFIG: bridgeConfigPath,
   AFTERBURNER_SKIP_PREFLIGHT: "1"
 });
 const child = pty.spawn(afterburn, ["--name", `afterburn-openai-menu-uat-${process.pid}-${Date.now()}`, "--no-remote"], {
@@ -202,9 +202,9 @@ const recentPlain = () => currentPlain().slice(-6000);
 
 const writePngReport = capture => {
   if (process.platform !== "win32") return;
-  const payloadPath = artifactPath("copilot-openai-menu-visual.json");
-  const scriptPath = artifactPath("render-copilot-openai-menu-png.ps1");
-  const outputPath = artifactPath("copilot-openai-menu-tui-report.png");
+  const payloadPath = artifactPath("openai-server-menu-visual.json");
+  const scriptPath = artifactPath("render-openai-server-menu-png.ps1");
+  const outputPath = artifactPath("openai-server-menu-tui-report.png");
   const payload = { capture, screens: operatorSteps.map(step => ({ title: step.name, content: step.viewportText })) };
   writeJson(payloadPath, payload);
   writeFileSync(scriptPath, `param([string]$PayloadPath, [string]$OutputPath)
@@ -243,7 +243,7 @@ try {
 } finally { $graphics.Dispose(); $bitmap.Dispose(); $font.Dispose(); $titleFont.Dispose(); $brush.Dispose(); $titleBrush.Dispose(); $panel.Dispose(); $pen.Dispose() }
 `, "utf8");
   const renderer = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, payloadPath, outputPath], { encoding: "utf8" });
-  if (renderer.status !== 0) writeFileSync(artifactPath("copilot-openai-menu-png-render.log"), `${renderer.stdout ?? ""}\n${renderer.stderr ?? ""}`, "utf8");
+  if (renderer.status !== 0) writeFileSync(artifactPath("openai-server-menu-png-render.log"), `${renderer.stdout ?? ""}\n${renderer.stderr ?? ""}`, "utf8");
 };
 
 const finish = (exitCode, message) => {
@@ -270,23 +270,23 @@ const finish = (exitCode, message) => {
       wrapperFiles: existsSync(join(activePath, "com.github.copilot", "extensions")) ? readdirSync(join(activePath, "com.github.copilot", "extensions")) : []
     },
     assertions: {
-      oneSlashCommandMenuVisible: ioEvents.some(event => event.type === "input" && event.display.includes("/copilot-openai")),
-      nativeModalRendered: /Copilot OpenAI Bridge[\s\S]*Keyboard shortcuts: s Start · x Stop · r Status · d Doctor · q Close/i.test(plain),
-      noCanvasOnlyFallback: !/Canvas opened:\s*Copilot OpenAI Bridge/i.test(plain),
+      oneSlashCommandMenuVisible: ioEvents.some(event => event.type === "input" && event.display.includes("/openai-server")),
+      nativeModalRendered: /OpenAI Server[\s\S]*Endpoint:\s*(?:127\.0\.0\.1:\d+|not allocated)/i.test(plain),
+      noCanvasOnlyFallback: !/Canvas opened:\s*OpenAI Server/i.test(plain),
       noTextFallback: !/interactive menu could not open|native menu unavailable/i.test(plain),
       everyAdvertisedActionExercised: actionSteps.every(step => Boolean(actionSeenAt[step.name])) && Boolean(closeSeenAt),
       packageHasModalCapability: (entry?.manifest?.capabilities ?? []).includes("modal-canvas"),
-      packageHasOneWrapper: (existsSync(join(activePath, "com.github.copilot", "extensions")) ? readdirSync(join(activePath, "com.github.copilot", "extensions")) : []).join(",") === "CopilotOpenAI"
+      packageHasCompatibilityWrappers: ["CopilotOpenAI", "OpenAIServer"].every(name => (existsSync(join(activePath, "com.github.copilot", "extensions")) ? readdirSync(join(activePath, "com.github.copilot", "extensions")) : []).includes(name))
     },
     operatorSteps,
     artifacts: {
-      rawAnsi: artifactPath("copilot-openai-menu-tui.raw.ansi"),
-      plainText: artifactPath("copilot-openai-menu-tui.txt"),
-      ioJsonl: artifactPath("copilot-openai-menu-tui-io.jsonl"),
-      cast: artifactPath("copilot-openai-menu-tui.cast"),
-      operatorJson: artifactPath("copilot-openai-menu-operator.json"),
-      operatorMarkdown: artifactPath("copilot-openai-menu-operator.md"),
-      pngReport: artifactPath("copilot-openai-menu-tui-report.png")
+      rawAnsi: artifactPath("openai-server-menu-tui.raw.ansi"),
+      plainText: artifactPath("openai-server-menu-tui.txt"),
+      ioJsonl: artifactPath("openai-server-menu-tui-io.jsonl"),
+      cast: artifactPath("openai-server-menu-tui.cast"),
+      operatorJson: artifactPath("openai-server-menu-operator.json"),
+      operatorMarkdown: artifactPath("openai-server-menu-operator.md"),
+      pngReport: artifactPath("openai-server-menu-tui-report.png")
     }
   };
   const failedAssertions = Object.entries(result.assertions).filter(([, passed]) => passed !== true).map(([name]) => name);
@@ -300,14 +300,14 @@ const finish = (exitCode, message) => {
   writeFileSync(result.artifacts.plainText, plain, "utf8");
   writeFileSync(result.artifacts.ioJsonl, ioEvents.map(event => JSON.stringify(event)).join("\n") + "\n", "utf8");
   const cast = [
-    JSON.stringify({ version: 2, width: terminalColumns, height: terminalRows, timestamp: Math.floor(startedAt / 1000), env: { TERM: "xterm-256color", SHELL: "afterburn.exe" }, title: "Copilot OpenAI menu real TUI UAT" }),
+    JSON.stringify({ version: 2, width: terminalColumns, height: terminalRows, timestamp: Math.floor(startedAt / 1000), env: { TERM: "xterm-256color", SHELL: "afterburn.exe" }, title: "OpenAI Server menu real TUI UAT" }),
     ...ioEvents.map(event => JSON.stringify([event.t, event.type === "input" ? "i" : "o", Buffer.from(event.dataBase64, "base64").toString("utf8")]))
   ].join("\n") + "\n";
   writeFileSync(result.artifacts.cast, cast, "utf8");
-  writeJson(result.artifacts.operatorJson, { goal: "Operate /copilot-openai like a real user and verify every advertised menu action.", steps: operatorSteps });
-  writeFileSync(result.artifacts.operatorMarkdown, [`# Copilot OpenAI menu UAT`, "", `Result: ${result.status}`, `Message: ${message}`, "", ...operatorSteps.map(step => `## ${step.name}\n- Key/input: ${step.key}\n- Latency: ${step.latencyMs}ms\n- Assertions: ${step.assertions.join("; ")}\n\n\`\`\`text\n${step.viewportText}\n\`\`\``)].join("\n"), "utf8");
+  writeJson(result.artifacts.operatorJson, { goal: "Operate /openai-server like a real user and verify every advertised menu action.", steps: operatorSteps });
+  writeFileSync(result.artifacts.operatorMarkdown, [`# OpenAI Server menu UAT`, "", `Result: ${result.status}`, `Message: ${message}`, "", ...operatorSteps.map(step => `## ${step.name}\n- Key/input: ${step.key}\n- Latency: ${step.latencyMs}ms\n- Assertions: ${step.assertions.join("; ")}\n\n\`\`\`text\n${step.viewportText}\n\`\`\``)].join("\n"), "utf8");
   writePngReport(result);
-  writeJson(artifactPath("copilot-openai-menu-result.json"), result);
+  writeJson(artifactPath("openai-server-menu-result.json"), result);
   try { child.kill(); } catch {}
   if (exitCode === 0) process.stdout.write(`${message}\n`);
   else process.stderr.write(`${message}\n--- tail ---\n${plain.slice(-6000)}\n`);
@@ -325,26 +325,26 @@ child.onData(data => {
   if (!approved && /wants elevated permissions/i.test(recent)) { approved = true; scheduleWrite("\r", 250, "approve elevated permissions"); return; }
   if (!terminalSetupDeclined && /Set up terminal for multi-line input support/i.test(recent)) { terminalSetupDeclined = true; scheduleWrite("\x1b", 250, "dismiss terminal setup"); return; }
 
-  const runtimeReady = /activated Afterburner extension 'copilot-openai'/i.test(text) && /runtime-extension-host/i.test(text);
+  const runtimeReady = /activated Afterburner extension 'openai-server'/i.test(text) && /runtime-extension-host/i.test(text);
   const promptReady = /\/ commands|tab next tab|\? help|@ files · # issues/i.test(recent);
   if (flushPendingCommandIfReady(promptReady)) return;
   if (!commandInputStartedAt && runtimeReady && promptReady) {
     commandInputStartedAt = Date.now();
-    scheduleCommand("/copilot-openai", 1000, () => { commandSentAt = Date.now(); }, "submit /copilot-openai");
+    scheduleCommand("/openai-server", 1000, () => { commandSentAt = Date.now(); }, "submit /openai-server");
     return;
   }
-  if (commandSentAt && !menuSeenAt && /\/copilot-openai/i.test(recent) && Date.now() - commandSubmitRetryAt > 4000) {
+  if (commandSentAt && !menuSeenAt && /\/openai-server/i.test(recent) && Date.now() - commandSubmitRetryAt > 4000) {
     commandSubmitRetryAt = Date.now();
-    writeInput("\r\n", "retry /copilot-openai submit");
+    writeInput("\r\n", "retry /openai-server submit");
   }
-  if (commandSentAt && !menuSeenAt && /Unknown command:\s*\/copilot-openai/i.test(recent)) return finish(1, "Copilot rejected /copilot-openai as an unknown command");
-  if (commandSentAt && !menuSeenAt && /native menu unavailable|interactive menu could not open/i.test(recent)) return finish(1, "CopilotOpenAI reported that the native interactive menu could not open");
-  if (/Canvas opened:\s*Copilot OpenAI Bridge/i.test(recent)) return finish(1, "CopilotOpenAI fell back to generic canvas-open text instead of native rendered UI");
+  if (commandSentAt && !menuSeenAt && /Unknown command:\s*\/openai-server/i.test(recent)) return finish(1, "Copilot rejected /openai-server as an unknown command");
+  if (commandSentAt && !menuSeenAt && /native menu unavailable|interactive menu could not open/i.test(recent)) return finish(1, "OpenAIServer reported that the native interactive menu could not open");
+  if (/Canvas opened:\s*OpenAI Server/i.test(recent)) return finish(1, "OpenAIServer fell back to generic canvas-open text instead of native rendered UI");
 
-  const menuReady = /Copilot OpenAI Bridge[\s\S]*Keyboard shortcuts: s Start · x Stop · r Status · d Doctor · q Close/i.test(text);
+  const menuReady = /OpenAI Server[\s\S]*Endpoint:\s*(?:127\.0\.0\.1:\d+|not allocated)/i.test(text);
   if (commandSentAt && !menuSeenAt && menuReady) {
     menuSeenAt = Date.now();
-    recordStep("open native modal menu", "/copilot-openai", commandSentAt, menuSeenAt, ["single slash command accepted", "native modal title rendered", "keyboard shortcuts visible"]);
+    recordStep("open native modal menu", "/openai-server", commandSentAt, menuSeenAt, ["single slash command accepted", "native modal title rendered", "endpoint status visible"]);
     const step = actionSteps[actionIndex];
     actionSentAt[step.name] = Date.now();
     activeActionRawLength = raw.length;
@@ -378,14 +378,14 @@ child.onData(data => {
     closeSeenAt = Date.now();
     recordStep("close action", "q", closeSentAt, closeSeenAt, ["Close shortcut returned focus to Copilot prompt"]);
     const actionSummary = actionSteps.map(step => `${step.name}:${actionSeenAt[step.name] - actionSentAt[step.name]}ms`).join(",");
-    finish(0, `real-copilot-openai-menu-tui-ok openLatencyMs=${menuSeenAt - commandSentAt} actions=${actionSummary} closeLatencyMs=${closeSeenAt - closeSentAt} report=${artifactPath("copilot-openai-menu-tui-report.png")}`);
+    finish(0, `real-openai-server-menu-tui-ok openLatencyMs=${menuSeenAt - commandSentAt} actions=${actionSummary} closeLatencyMs=${closeSeenAt - closeSentAt} report=${artifactPath("openai-server-menu-tui-report.png")}`);
   }
 });
 
 child.onExit(({ exitCode }) => {
-  if (!finished) finish(exitCode === 0 ? 1 : exitCode, `afterburn exited before CopilotOpenAI menu UAT completed exitCode=${exitCode}`);
+  if (!finished) finish(exitCode === 0 ? 1 : exitCode, `afterburn exited before OpenAIServer menu UAT completed exitCode=${exitCode}`);
 });
 
 setTimeout(() => {
-  finish(1, "timed out before completing CopilotOpenAI one-command menu UAT");
+  finish(1, "timed out before completing OpenAI Server one-command menu UAT");
 }, timeoutMs).unref?.();

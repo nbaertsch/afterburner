@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nbaertsch/afterburner/internal/extensions"
+	"github.com/nbaertsch/afterburner/internal/home"
 	"github.com/nbaertsch/afterburner/internal/platform"
 	"github.com/nbaertsch/afterburner/internal/releasesign"
 )
@@ -36,12 +38,19 @@ type ManifestAsset struct {
 }
 
 type Manifest struct {
-	SchemaVersion int               `json:"schemaVersion"`
-	Repository    string            `json:"repository"`
-	Version       string            `json:"version"`
-	Commit        string            `json:"commit"`
-	Assets        []ManifestAsset   `json:"assets"`
-	Builtins      []ManifestBuiltin `json:"builtins,omitempty"`
+	SchemaVersion int                   `json:"schemaVersion"`
+	Repository    string                `json:"repository"`
+	Version       string                `json:"version"`
+	Commit        string                `json:"commit"`
+	Assets        []ManifestAsset       `json:"assets"`
+	Builtins      []ManifestBuiltin     `json:"builtins,omitempty"`
+	Compatibility ManifestCompatibility `json:"compatibility,omitempty"`
+}
+
+type ManifestCompatibility struct {
+	RuntimeDigest   string   `json:"runtimeDigest"`
+	CopilotProfiles []string `json:"copilotProfiles"`
+	BuiltinIDs      []string `json:"builtinIds"`
 }
 
 // ManifestBuiltin describes a signed built-in extension package published as
@@ -62,6 +71,48 @@ func builtinManifestEntry(manifest Manifest, id string) (ManifestBuiltin, bool) 
 		}
 	}
 	return ManifestBuiltin{}, false
+}
+
+func validateManifest(manifest Manifest) error {
+	if manifest.SchemaVersion != 1 && manifest.SchemaVersion != 2 {
+		return fmt.Errorf("unsupported release manifest schema %d", manifest.SchemaVersion)
+	}
+	if manifest.SchemaVersion == 1 &&
+		manifest.Compatibility.RuntimeDigest == "" &&
+		len(manifest.Compatibility.CopilotProfiles) == 0 &&
+		len(manifest.Compatibility.BuiltinIDs) == 0 {
+		return nil
+	}
+	if !strings.HasPrefix(manifest.Compatibility.RuntimeDigest, "sha256:") ||
+		len(strings.TrimPrefix(manifest.Compatibility.RuntimeDigest, "sha256:")) != 64 {
+		return fmt.Errorf("release compatibility tuple has an invalid runtime digest")
+	}
+	if len(manifest.Compatibility.CopilotProfiles) == 0 {
+		return fmt.Errorf("release compatibility tuple has no Copilot profiles")
+	}
+	profiles := map[string]bool{}
+	for _, id := range manifest.Compatibility.CopilotProfiles {
+		if strings.TrimSpace(id) == "" || profiles[id] {
+			return fmt.Errorf("release compatibility tuple has invalid Copilot profiles")
+		}
+		profiles[id] = true
+	}
+	builtins := map[string]bool{}
+	for _, builtin := range manifest.Builtins {
+		if builtin.ID == "" || builtins[builtin.ID] {
+			return fmt.Errorf("release manifest has invalid built-in entries")
+		}
+		builtins[builtin.ID] = true
+	}
+	if len(builtins) != len(manifest.Compatibility.BuiltinIDs) {
+		return fmt.Errorf("release compatibility tuple does not match built-in assets")
+	}
+	for _, id := range manifest.Compatibility.BuiltinIDs {
+		if !builtins[id] {
+			return fmt.Errorf("release compatibility tuple does not authorize built-in %q", id)
+		}
+	}
+	return nil
 }
 
 func (client Client) Stage(ctx context.Context, release Release, root string) (string, error) {
@@ -114,7 +165,10 @@ func (client Client) Stage(ctx context.Context, release Release, root string) (s
 		return "", fmt.Errorf("parse release manifest: %w", err)
 	}
 	manifestAssetEntry, ok := manifestEntry(manifest, archiveName, architecture)
-	if manifest.SchemaVersion != 1 || manifest.Repository != repository ||
+	if err := validateManifest(manifest); err != nil {
+		return "", err
+	}
+	if manifest.Repository != repository ||
 		manifest.Version != release.TagName || manifest.Commit == "" || !ok ||
 		!strings.EqualFold(manifestAssetEntry.SHA256, expected) {
 		return "", fmt.Errorf("release manifest does not authorize %s for windows/%s", archiveName, architecture)
@@ -220,7 +274,10 @@ func (client Client) StageBuiltin(ctx context.Context, release Release, root, id
 		return "", fmt.Errorf("parse release manifest: %w", err)
 	}
 	builtinEntry, ok := builtinManifestEntry(manifest, id)
-	if manifest.SchemaVersion != 1 || manifest.Repository != repository ||
+	if err := validateManifest(manifest); err != nil {
+		return "", err
+	}
+	if manifest.Repository != repository ||
 		manifest.Version != release.TagName || manifest.Commit == "" || !ok ||
 		!strings.EqualFold(builtinEntry.SHA256, expected) {
 		return "", fmt.Errorf("release manifest does not authorize %s for built-in %q", archiveName, id)
@@ -329,14 +386,18 @@ func (fetcher BuiltinReleaseFetcher) FetchBuiltin(id string) (string, func(), er
 	return staging, func() { _ = os.RemoveAll(staging) }, nil
 }
 
-func BeginReplacement(candidate, target, previous string) error {
-	command := exec.Command(candidate,
+func BeginReplacement(candidate, target, previous, registrySnapshot string) error {
+	args := []string{
 		"core", "replace",
 		"--parent", strconv.Itoa(os.Getpid()),
 		"--source", candidate,
 		"--target", target,
 		"--previous", previous,
-	)
+	}
+	if registrySnapshot != "" {
+		args = append(args, "--registry-snapshot", registrySnapshot)
+	}
+	command := exec.Command(candidate, args...)
 	return platform.StartDetached(command)
 }
 
@@ -380,9 +441,17 @@ func StageRollback(root, previous string) (string, error) {
 	return candidate, nil
 }
 
-func ApplyReplacement(parentPID int, source, target, previous string) (resultErr error) {
+func ApplyReplacement(parentPID int, source, target, previous, registrySnapshot string) (resultErr error) {
 	root := filepath.Dir(filepath.Dir(target))
 	defer func() {
+		if resultErr != nil && registrySnapshot != "" {
+			if restoreErr := RestoreRegistrySnapshot(root, registrySnapshot); restoreErr != nil {
+				resultErr = fmt.Errorf("%v; restore extension registry: %w", resultErr, restoreErr)
+			}
+		}
+		if discardErr := DiscardRegistrySnapshot(root, registrySnapshot); discardErr != nil && resultErr == nil {
+			resultErr = discardErr
+		}
 		_ = writeStatus(root, resultErr)
 	}()
 	if err := platform.WaitForPID(parentPID, 2*time.Minute); err != nil {
@@ -434,11 +503,15 @@ func ApplyReplacement(parentPID int, source, target, previous string) (resultErr
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	doctor := exec.CommandContext(ctx, target, "doctor", "--json")
-	if err := doctor.Run(); err != nil {
+	validationErr := syncEmbeddedBuiltins(root)
+	if validationErr == nil {
+		doctor := exec.CommandContext(ctx, target, "doctor", "--json")
+		validationErr = doctor.Run()
+	}
+	if validationErr != nil {
 		rollbackData, readErr := os.ReadFile(previous)
 		if readErr != nil {
-			return fmt.Errorf("post-update validation failed and rollback binary is unavailable: %w", err)
+			return fmt.Errorf("post-update validation failed and rollback binary is unavailable: %w", validationErr)
 		}
 		rollback, createErr := os.CreateTemp(filepath.Dir(target), ".afterburn-rollback-*.exe")
 		if createErr != nil {
@@ -456,7 +529,36 @@ func ApplyReplacement(parentPID int, source, target, previous string) (resultErr
 		if replaceErr := platform.ReplaceFile(rollbackPath, target); replaceErr != nil {
 			return fmt.Errorf("post-update validation failed and automatic rollback failed: %w", replaceErr)
 		}
-		return fmt.Errorf("post-update validation failed; previous executable restored")
+		return fmt.Errorf("post-update validation failed; previous executable restored: %w", validationErr)
+	}
+	return nil
+}
+
+func syncEmbeddedBuiltins(root string) error {
+	layout := home.Layout{
+		Root:            root,
+		CopilotHome:     filepath.Join(root, "copilot-home"),
+		Config:          filepath.Join(root, "config"),
+		ExtensionData:   filepath.Join(root, "extension-data"),
+		Extensions:      filepath.Join(root, "extensions"),
+		Staging:         filepath.Join(root, "staging"),
+		BYOModelsConfig: filepath.Join(root, "config", "byomodels.json"),
+	}
+	for _, path := range []string{
+		layout.Root,
+		layout.CopilotHome,
+		layout.Config,
+		layout.ExtensionData,
+		layout.Extensions,
+		layout.Staging,
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return fmt.Errorf("prepare built-in synchronization: %w", err)
+		}
+	}
+	manager := extensions.Manager{Layout: layout, Stdout: io.Discard}
+	if err := manager.InstallBuiltins(nil); err != nil {
+		return fmt.Errorf("sync built-ins embedded in replacement core: %w", err)
 	}
 	return nil
 }

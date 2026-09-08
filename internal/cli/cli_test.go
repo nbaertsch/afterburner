@@ -35,6 +35,20 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+func TestReplacementRegistrySnapshotAcceptsOldAndNewProtocols(t *testing.T) {
+	oldArgs := []string{"replace", "--parent", "1", "--source", "source", "--target", "target", "--previous", "previous"}
+	if snapshot, ok := replacementRegistrySnapshot(oldArgs); !ok || snapshot != "" {
+		t.Fatalf("old protocol = %q, %t", snapshot, ok)
+	}
+	newArgs := append(append([]string(nil), oldArgs...), "--registry-snapshot", "snapshot")
+	if snapshot, ok := replacementRegistrySnapshot(newArgs); !ok || snapshot != "snapshot" {
+		t.Fatalf("new protocol = %q, %t", snapshot, ok)
+	}
+	if _, ok := replacementRegistrySnapshot(append(oldArgs, "--unknown", "value")); ok {
+		t.Fatal("unknown replacement protocol was accepted")
+	}
+}
+
 func TestCoreUpdateStatusWarningReportsFailedReplacement(t *testing.T) {
 	root := t.TempDir()
 	state := filepath.Join(root, "state")
@@ -221,6 +235,14 @@ func TestUIRenderFixtureCommandRejectsBadViewportOptions(t *testing.T) {
 	code, err := Run(context.Background(), []string{"ui", "render-fixture", "--width", "0", "component-gallery"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
 	if err == nil || code != 2 || !strings.Contains(err.Error(), "--width must be a positive integer") {
 		t.Fatalf("expected invalid width failure, code=%d err=%v stdout=%q", code, err, stdout.String())
+	}
+}
+
+func TestDisabledExtensionsForRuntimeIncludesOpenAIServerAlias(t *testing.T) {
+	got := disabledExtensionsForRuntime([]string{"copilot-openai", "black-box"})
+	want := []string{"openai-server", "copilot-openai", "black-box"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("disabled extensions = %#v", got)
 	}
 }
 

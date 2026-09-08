@@ -13,6 +13,11 @@ import (
 	"github.com/nbaertsch/afterburner/internal/registry"
 )
 
+const (
+	openAIServerPlugin       = "afterburner-openai-server"
+	legacyOpenAIServerPlugin = "afterburner-copilot-openai"
+)
+
 func Reconcile(layout home.Layout, value registry.Registry) error {
 	configPath := filepath.Join(layout.CopilotHome, "config.json")
 	config := map[string]any{}
@@ -111,7 +116,25 @@ func Reconcile(layout home.Layout, value registry.Registry) error {
 		retained = append(retained, raw)
 	}
 	config["installedPlugins"] = append(retained, desired...)
+	migrateOpenAIServerPluginState(config, desiredNames)
 	return saveConfig(configPath, prefix, config)
+}
+
+func migrateOpenAIServerPluginState(config map[string]any, desiredNames map[string]bool) {
+	if !desiredNames[openAIServerPlugin] {
+		return
+	}
+	enabled, ok := config["enabledPlugins"].(map[string]any)
+	if !ok {
+		return
+	}
+	if _, hasLegacy := enabled[legacyOpenAIServerPlugin]; !hasLegacy {
+		return
+	}
+	if _, hasCanonical := enabled[openAIServerPlugin]; !hasCanonical {
+		enabled[openAIServerPlugin] = enabled[legacyOpenAIServerPlugin]
+	}
+	delete(enabled, legacyOpenAIServerPlugin)
 }
 
 func splitConfig(data []byte) ([]byte, string, error) {

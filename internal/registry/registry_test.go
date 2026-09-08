@@ -63,6 +63,73 @@ func TestLoadNormalizesLegacyManifestName(t *testing.T) {
 	}
 }
 
+func TestMigrateOpenAIServerAlias(t *testing.T) {
+	root := t.TempDir()
+	active := filepath.Join(root, "extensions", LegacyOpenAIServerID, "v1")
+	if err := os.MkdirAll(active, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	value := Registry{SchemaVersion: 1, Extensions: map[string]Entry{
+		LegacyOpenAIServerID: {
+			Enabled:    true,
+			ActivePath: active,
+			Manifest: Manifest{
+				ID:          LegacyOpenAIServerID,
+				DisplayName: "Copilot OpenAI Bridge",
+				Visibility:  "private",
+			},
+			Source:   Source{Type: "path", Value: active},
+			Identity: IdentityBinding{ExtensionID: LegacyOpenAIServerID},
+		},
+	}}
+	if err := Save(root, value); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := got.Extensions[LegacyOpenAIServerID]; !exists {
+		t.Fatal("load should preserve the legacy identity until an explicit migration transaction")
+	}
+	if !MigrateOpenAIServerAlias(&got) {
+		t.Fatal("legacy openai server registry entry was not migrated")
+	}
+	if _, exists := got.Extensions[LegacyOpenAIServerID]; exists {
+		t.Fatal("legacy openai server registry key was retained")
+	}
+	entry, exists := got.Extensions[OpenAIServerID]
+	if !exists || !entry.Enabled || entry.Manifest.ID != OpenAIServerID || entry.Manifest.DisplayName != OpenAIServerName || entry.Identity.ExtensionID != OpenAIServerID {
+		t.Fatalf("migrated entry = %#v", entry)
+	}
+}
+
+func TestLoadMergesDuplicateLegacyOpenAIServerAlias(t *testing.T) {
+	root := t.TempDir()
+	legacyActive := filepath.Join(root, "extensions", LegacyOpenAIServerID, "v1")
+	currentActive := filepath.Join(root, "extensions", OpenAIServerID, "v1")
+	for _, path := range []string{legacyActive, currentActive} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	value := Registry{SchemaVersion: 1, Extensions: map[string]Entry{
+		LegacyOpenAIServerID: {Enabled: true, ActivePath: legacyActive, Manifest: Manifest{ID: LegacyOpenAIServerID, DisplayName: "Copilot OpenAI Bridge", Visibility: "private"}, Source: Source{Type: "path", Value: legacyActive}},
+		OpenAIServerID:       {Enabled: false, ActivePath: currentActive, Manifest: Manifest{ID: OpenAIServerID, DisplayName: OpenAIServerName, Visibility: "builtin"}, Source: Source{Type: "embedded", Value: OpenAIServerID}},
+	}}
+	if err := Save(root, value); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	MigrateOpenAIServerAlias(&got)
+	if len(got.Extensions) != 1 || !got.Extensions[OpenAIServerID].Enabled || got.Extensions[OpenAIServerID].PreviousActivePath == nil {
+		t.Fatalf("duplicate alias was not merged: %#v", got.Extensions)
+	}
+}
+
 func TestLoadRejectsInvalidVisibility(t *testing.T) {
 	root := t.TempDir()
 	active := filepath.Join(root, "extensions", "example", "v1")

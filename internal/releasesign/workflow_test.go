@@ -40,4 +40,13 @@ func TestReleaseWorkflowKeepsSigningKeyOutOfTagSelectedJobs(t *testing.T) {
 		!strings.Contains(workflow, "-notmatch '^v[0-9]+\\.[0-9]+\\.[0-9]+") {
 		t.Fatal("release workflow does not pass and validate untrusted values as data")
 	}
+	if !strings.Contains(build, "Remove-Item Env:GOOS") ||
+		!strings.Contains(build, "Remove-Item Env:GOARCH") ||
+		!strings.Contains(build, "go run ./internal/releaseinfo") {
+		t.Fatal("release compatibility metadata may execute under the cross-compilation environment")
+	}
+	if !strings.Contains(build, "schemaVersion = 1") ||
+		!strings.Contains(build, "compatibility = $compatibility") {
+		t.Fatal("release manifest must remain readable by legacy updaters while carrying the additive compatibility tuple")
+	}
 }

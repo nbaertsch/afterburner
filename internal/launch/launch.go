@@ -351,6 +351,19 @@ func preissuedModalRegistrations(value *registry.Registry) []terminal.ModalRegis
 			)
 			continue
 		}
+		if id == registry.OpenAIServerID {
+			registrations = append(registrations,
+				terminal.ModalRegistration{OwnerExtensionID: registry.OpenAIServerID, CanvasID: registry.OpenAIServerID, SurfaceID: registry.OpenAIServerID},
+				terminal.ModalRegistration{OwnerExtensionID: registry.OpenAIServerID, CanvasID: registry.LegacyOpenAIServerID, SurfaceID: registry.LegacyOpenAIServerID},
+			)
+			continue
+		}
+		if id == registry.LegacyOpenAIServerID {
+			registrations = append(registrations,
+				terminal.ModalRegistration{OwnerExtensionID: registry.LegacyOpenAIServerID, CanvasID: registry.LegacyOpenAIServerID, SurfaceID: registry.LegacyOpenAIServerID},
+			)
+			continue
+		}
 		registrations = append(registrations, terminal.ModalRegistration{OwnerExtensionID: id, CanvasID: id, SurfaceID: id})
 	}
 	return registrations

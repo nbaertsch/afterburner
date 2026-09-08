@@ -19,11 +19,11 @@ afterburn install
 
 `core install` atomically installs the executable at `~\.afterburner\bin\afterburn.exe`, retains the
 previous core for rollback, and adds that directory to the user PATH. `afterburn install` installs
-and enables the BYOModels and Black Box built-ins.
+and enables BYOModels and Black Box, and installs OpenAI Server disabled until explicitly enabled.
 
 Tagged GitHub Releases publish `afterburn-windows-amd64.zip`,
-`afterburn-windows-arm64.zip`, `black-box.zip`, `byo-models.zip`, `checksums.txt`,
-`release-manifest.json`, and `release-manifest.sig`.
+`afterburn-windows-arm64.zip`, `black-box.zip`, `byo-models.zip`, `openai-server.zip`,
+`checksums.txt`, `release-manifest.json`, and `release-manifest.sig`.
 
 Release publication is manually dispatched from `main` for a version tag that identifies the exact
 current `origin/main` commit. Unsigned assets are built in a secretless job; signing occurs only in
@@ -34,7 +34,7 @@ ref.
 
 Built-in extensions are versioned in lockstep with the Afterburner core release. `afterburn update`
 fetches the signed core archive plus every built-in package listed in that release manifest (for
-example `black-box.zip` and `byo-models.zip`) and re-syncs the installed built-ins to the same tag
+example `black-box.zip`, `byo-models.zip`, and `openai-server.zip`) and re-syncs the installed built-ins to the same tag
 before staging the core replacement. If a pinned built-in cannot be fetched or verified, the update
 fails instead of leaving a core/extension mismatch.
 
@@ -88,14 +88,14 @@ Manage embedded built-ins:
 
 ```powershell
 afterburn install
-afterburn install byo-models black-box
+afterburn install byo-models black-box openai-server
 afterburn enable black-box
+afterburn enable openai-server
 afterburn disable black-box
 afterburn uninstall black-box
 ```
 
-Uninstall removes managed package registration and immutable package caches while preserving
-configuration and extension data.
+OpenAI Server is installed disabled by default because it exposes a localhost API; enable it explicitly when needed. Uninstall removes managed package registration and immutable package caches while preserving configuration and extension data.
 
 Manage custom local or Git extensions:
 
@@ -131,6 +131,10 @@ for `256K`, `512K`, `768K`, and `1.05M` where supported. See
 Black Box records bounded, metadata-only runtime diagnostics under
 `~\.afterburner\extension-data\black-box`. It does not copy prompts, responses, source, tool
 arguments/results, or summaries. See [`extensions/BlackBox/README.md`](extensions/BlackBox/README.md).
+
+## OpenAI Server
+
+OpenAI Server exposes the active Copilot session through a localhost OpenAI-compatible `/v1` API when enabled. Use `/openai-server` in a session to start and manage it. Legacy `/copilot-openai`, `copilot-openai.json`, and `AFTERBURNER_COPILOT_OPENAI_*` names remain compatibility aliases. See [`extensions/OpenAIServer/README.md`](extensions/OpenAIServer/README.md).
 
 ## Enterprise UI architecture contract
 
@@ -214,6 +218,7 @@ go generate ./internal/assets
 go test ./...
 go vet -unsafeptr=false ./...
 npm test
+npm run test:release-local
 ```
 
 Windows CI also builds amd64/arm64 binaries and validates exact resume forwarding, Ctrl+C, and

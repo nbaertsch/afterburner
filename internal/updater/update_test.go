@@ -18,6 +18,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/nbaertsch/afterburner/internal/registry"
 )
 
 func TestChecksumAndArchiveExtraction(t *testing.T) {
@@ -327,6 +329,38 @@ func TestStageRequiresManifestSignature(t *testing.T) {
 	}
 }
 
+func TestValidateManifestCompatibilityTuple(t *testing.T) {
+	valid := Manifest{
+		SchemaVersion: 1,
+		Builtins: []ManifestBuiltin{
+			{ID: "black-box"},
+			{ID: "byo-models"},
+			{ID: "openai-server"},
+		},
+		Compatibility: ManifestCompatibility{
+			RuntimeDigest:   "sha256:" + strings.Repeat("a", 64),
+			CopilotProfiles: []string{"copilot-1.0.83-3-win32-x64"},
+			BuiltinIDs:      []string{"black-box", "byo-models", "openai-server"},
+		},
+	}
+	if err := validateManifest(valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateManifest(Manifest{SchemaVersion: 1}); err != nil {
+		t.Fatalf("legacy schema 1 manifest should remain valid: %v", err)
+	}
+	invalid := valid
+	invalid.Compatibility.BuiltinIDs = []string{"black-box", "byo-models"}
+	if err := validateManifest(invalid); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("error = %v", err)
+	}
+	invalid = valid
+	invalid.Compatibility.RuntimeDigest = "sha256:short"
+	if err := validateManifest(invalid); err == nil || !strings.Contains(err.Error(), "runtime digest") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("replacement semantics are validated on Windows")
@@ -338,11 +372,18 @@ func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 		source := filepath.Join(root, "update-staging", "fixture", "afterburn.exe")
 		copyFile(t, buildFixtureExecutable(t, "old", true), target)
 		copyFile(t, buildFixtureExecutable(t, "new", true), source)
-		if err := ApplyReplacement(0, source, target, previous); err != nil {
+		if err := ApplyReplacement(0, source, target, previous, ""); err != nil {
 			t.Fatal(err)
 		}
 		assertVersion(t, target, "new")
 		assertVersion(t, previous, "old")
+		value, err := registry.Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := value.Extensions[registry.OpenAIServerID]; !ok {
+			t.Fatal("replacement core did not bootstrap its embedded OpenAI Server built-in")
+		}
 	})
 	t.Run("running old executable", func(t *testing.T) {
 		root := t.TempDir()
@@ -359,7 +400,7 @@ func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 			_ = running.Process.Kill()
 			_, _ = running.Process.Wait()
 		}()
-		if err := ApplyReplacement(0, source, target, previous); err != nil {
+		if err := ApplyReplacement(0, source, target, previous, ""); err != nil {
 			t.Fatal(err)
 		}
 		assertVersion(t, target, "new")
@@ -372,11 +413,81 @@ func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 		source := filepath.Join(root, "update-staging", "fixture", "afterburn.exe")
 		copyFile(t, buildFixtureExecutable(t, "old", true), target)
 		copyFile(t, buildFixtureExecutable(t, "bad", false), source)
-		if err := ApplyReplacement(0, source, target, previous); err == nil {
+		if err := ApplyReplacement(0, source, target, previous, ""); err == nil {
 			t.Fatal("expected post-update validation failure")
 		}
 		assertVersion(t, target, "old")
 	})
+}
+
+func TestFailedReplacementRestoresRegistrySnapshot(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("replacement semantics are validated on Windows")
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "bin", "afterburn.exe")
+	previous := filepath.Join(root, "bin", "afterburn.previous.exe")
+	source := filepath.Join(root, "update-staging", "fixture", "afterburn.exe")
+	registryPath := filepath.Join(root, "registry.json")
+	copyFile(t, buildFixtureExecutable(t, "old", true), target)
+	copyFile(t, buildFixtureExecutable(t, "bad", false), source)
+	if err := os.WriteFile(registryPath, []byte("old-registry\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := SnapshotRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(registryPath, []byte("new-registry\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyReplacement(0, source, target, previous, snapshot); err == nil {
+		t.Fatal("expected post-update validation failure")
+	}
+	data, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "old-registry\n" {
+		t.Fatalf("registry = %q", data)
+	}
+}
+
+func TestRegistrySnapshotsUseUniqueTransactionPaths(t *testing.T) {
+	root := t.TempDir()
+	first, err := SnapshotRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := SnapshotRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("registry snapshots reused %q", first)
+	}
+	for _, path := range []string{first, second} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("snapshot %s: %v", path, err)
+		}
+	}
+}
+
+func TestDiscardRegistrySnapshotRejectsOutsidePathsAndRemovesSnapshot(t *testing.T) {
+	root := t.TempDir()
+	path, err := SnapshotRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := DiscardRegistrySnapshot(root, filepath.Join(root, "outside.json")); err == nil {
+		t.Fatal("outside snapshot path was accepted")
+	}
+	if err := DiscardRegistrySnapshot(root, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("snapshot still exists: %v", err)
+	}
 }
 
 func buildFixtureExecutable(t *testing.T, version string, doctorOK bool) string {

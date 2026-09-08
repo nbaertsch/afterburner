@@ -52,12 +52,19 @@ type Entry struct {
 	Enabled            bool            `json:"enabled"`
 	ActivePath         string          `json:"activePath"`
 	PreviousActivePath *string         `json:"previousActivePath"`
+	PreviousSource     *Source         `json:"previousSource,omitempty"`
 	Manifest           Manifest        `json:"manifest"`
 	Source             Source          `json:"source"`
 	Identity           IdentityBinding `json:"identity,omitempty"`
 	UpdatedAt          string          `json:"updatedAt"`
 	Verified           bool            `json:"-"`
 }
+
+const (
+	OpenAIServerID       = "openai-server"
+	LegacyOpenAIServerID = "copilot-openai"
+	OpenAIServerName     = "OpenAI Server"
+)
 
 type Registry struct {
 	SchemaVersion int              `json:"schemaVersion"`
@@ -103,12 +110,49 @@ func Load(root string) (Registry, error) {
 			return Registry{}, fmt.Errorf("extension %q active path escapes the managed package root", id)
 		}
 		entry.Verified = true
-		if IsReservedBuiltinID(id) && (entry.Manifest.Visibility != "builtin" || entry.Source.Value != id) {
+		if IsReservedBuiltinID(id) && !allowedReservedBuiltinEntry(id, entry) {
 			return Registry{}, fmt.Errorf("extension %q uses a reserved built-in ID outside the built-in installer route", id)
 		}
 		value.Extensions[id] = entry
 	}
 	return value, nil
+}
+
+func MigrateOpenAIServerAlias(value *Registry) bool {
+	if value == nil || value.Extensions == nil {
+		return false
+	}
+	legacy, ok := value.Extensions[LegacyOpenAIServerID]
+	if !ok {
+		return false
+	}
+	if current, exists := value.Extensions[OpenAIServerID]; exists {
+		if legacy.Enabled && !current.Enabled {
+			current.Enabled = true
+		}
+		if current.PreviousActivePath == nil && legacy.ActivePath != "" && legacy.ActivePath != current.ActivePath {
+			previous := legacy.ActivePath
+			current.PreviousActivePath = &previous
+			source := legacy.Source
+			current.PreviousSource = &source
+		}
+		value.Extensions[OpenAIServerID] = current
+		delete(value.Extensions, LegacyOpenAIServerID)
+		return true
+	}
+	legacy.Manifest.ID = OpenAIServerID
+	if legacy.Manifest.DisplayName == "" || strings.EqualFold(legacy.Manifest.DisplayName, "Copilot OpenAI Bridge") {
+		legacy.Manifest.DisplayName = OpenAIServerName
+	}
+	if legacy.Manifest.Name == "" || strings.EqualFold(legacy.Manifest.Name, "Copilot OpenAI Bridge") {
+		legacy.Manifest.Name = OpenAIServerName
+	}
+	if legacy.Identity.ExtensionID == LegacyOpenAIServerID {
+		legacy.Identity.ExtensionID = OpenAIServerID
+	}
+	value.Extensions[OpenAIServerID] = legacy
+	delete(value.Extensions, LegacyOpenAIServerID)
+	return true
 }
 
 func NormalizeManifest(manifest *Manifest) {
@@ -132,11 +176,15 @@ func ValidVisibility(visibility string) bool {
 
 func IsReservedBuiltinID(id string) bool {
 	switch id {
-	case "black-box", "byo-models":
+	case "black-box", "byo-models", OpenAIServerID:
 		return true
 	default:
 		return false
 	}
+}
+
+func allowedReservedBuiltinEntry(id string, entry Entry) bool {
+	return entry.Manifest.Visibility == "builtin" && entry.Source.Value == id
 }
 
 func IsTrustedBuiltinSourceType(sourceType string) bool {

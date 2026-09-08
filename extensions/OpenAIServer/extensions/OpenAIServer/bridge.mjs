@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
+import { CANONICAL_HEALTH_MARKER, CANONICAL_HEALTH_PATH, CANONICAL_ID, LEGACY_HEALTH_MARKER, LEGACY_HEALTH_PATH, LEGACY_ID } from "./names.mjs";
 
 export const bridgeProtocolVersion = 1;
 export const defaultConfig = Object.freeze({
@@ -18,21 +19,23 @@ const hopByHopHeaders = new Set([
 
 export function loadConfig(raw = {}, env = process.env) {
     const config = { ...defaultConfig, ...raw };
-    if (env.AFTERBURNER_COPILOT_OPENAI_PORT) {
-        config.port = Number(env.AFTERBURNER_COPILOT_OPENAI_PORT);
+    const port = env.AFTERBURNER_OPENAI_SERVER_PORT || env.AFTERBURNER_COPILOT_OPENAI_PORT;
+    const apiKey = env.AFTERBURNER_OPENAI_SERVER_API_KEY || env.AFTERBURNER_COPILOT_OPENAI_API_KEY;
+    if (port) {
+        config.port = Number(port);
     }
-    if (env.AFTERBURNER_COPILOT_OPENAI_API_KEY) {
-        config.apiKey = env.AFTERBURNER_COPILOT_OPENAI_API_KEY;
+    if (apiKey) {
+        config.apiKey = apiKey;
         config.requireApiKey = true;
     }
     if (config.host !== "127.0.0.1" && config.host !== "localhost") {
-        throw new Error("Copilot OpenAI bridge only supports localhost binding.");
+        throw new Error("OpenAI server only supports localhost binding.");
     }
     if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
-        throw new Error("Copilot OpenAI bridge port must be an integer between 0 and 65535.");
+        throw new Error("OpenAI server port must be an integer between 0 and 65535.");
     }
     if (!Number.isInteger(config.maxBodyBytes) || config.maxBodyBytes < 1024 || config.maxBodyBytes > 16 * 1024 * 1024) {
-        throw new Error("Copilot OpenAI bridge maxBodyBytes must be between 1 KiB and 16 MiB.");
+        throw new Error("OpenAI server maxBodyBytes must be between 1 KiB and 16 MiB.");
     }
     if (config.requireApiKey && typeof config.apiKey !== "string") {
         config.apiKey = randomBytes(24).toString("base64url");
@@ -111,7 +114,7 @@ export function normalizeModel(model) {
 
 export function createBridge({ adapter, config = {}, logger = undefined, identity = {} }) {
     if (!adapter || typeof adapter.listModels !== "function") {
-        throw new Error("Copilot OpenAI bridge requires an adapter with listModels().");
+        throw new Error("OpenAI server requires an adapter with listModels().");
     }
     const effective = loadConfig(config);
     const state = {
@@ -136,8 +139,11 @@ export function createBridge({ adapter, config = {}, logger = undefined, identit
                 return writeJSON(response, 401, openAIErrorBody("invalid_api_key", "Missing or invalid local API key."));
             }
             const url = new URL(request.url ?? "/", `http://${effective.host}`);
-            if (request.method === "GET" && url.pathname === "/__afterburner/copilot-openai/health") {
+            if (request.method === "GET" && url.pathname === CANONICAL_HEALTH_PATH) {
                 return writeJSON(response, 200, healthSnapshot());
+            }
+            if (request.method === "GET" && url.pathname === LEGACY_HEALTH_PATH) {
+                return writeJSON(response, 200, healthSnapshot({ legacy: true }));
             }
             if (request.method === "GET" && url.pathname === "/v1/models") {
                 const data = await adapter.listModels();
@@ -150,19 +156,20 @@ export function createBridge({ adapter, config = {}, logger = undefined, identit
                 if (body?.stream === true) return writeStream(response, result, body.model);
                 return writeJSON(response, 200, normalizeCompletion(result, body.model));
             }
-            return writeJSON(response, 404, openAIErrorBody("not_found", `Unsupported Copilot OpenAI bridge endpoint: ${request.method} ${url.pathname}`));
+            return writeJSON(response, 404, openAIErrorBody("not_found", `Unsupported OpenAI server endpoint: ${request.method} ${url.pathname}`));
         } catch (error) {
             state.errorCount++;
             state.lastError = sanitizeError(error);
-            logger?.warn?.(`Copilot OpenAI bridge request failed: ${state.lastError}`);
+            logger?.warn?.(`OpenAI server request failed: ${state.lastError}`);
             const status = Number.isInteger(error?.status) ? error.status : 500;
             writeJSON(response, status, openAIErrorBody(error?.code ?? "bridge_error", state.lastError));
         }
     }
 
-    function healthSnapshot() {
+    function healthSnapshot(options = {}) {
+        const legacy = options.legacy === true;
         return {
-            marker: "afterburner-copilot-openai-bridge-v1",
+            marker: legacy ? LEGACY_HEALTH_MARKER : CANONICAL_HEALTH_MARKER,
             protocolVersion: bridgeProtocolVersion,
             active: state.active,
             shared: state.shared,
@@ -173,7 +180,8 @@ export function createBridge({ adapter, config = {}, logger = undefined, identit
             lastError: state.lastError,
             modelCount: state.modelCount,
             identity: {
-                extensionId: "copilot-openai",
+                extensionId: legacy ? LEGACY_ID : CANONICAL_ID,
+                canonicalExtensionId: CANONICAL_ID,
                 sessionId: identity.sessionId ? hashPublic(identity.sessionId) : null
             }
         };
@@ -230,16 +238,15 @@ export function createBridge({ adapter, config = {}, logger = undefined, identit
 }
 
 async function verifySharedBridge(host, port) {
-    try {
-        const response = await fetch(`http://${host}:${port}/__afterburner/copilot-openai/health`, { signal: AbortSignal.timeout(2000) });
-        if (!response.ok) return undefined;
-        const body = await response.json();
-        return body?.marker === "afterburner-copilot-openai-bridge-v1" && body?.protocolVersion === bridgeProtocolVersion
-            ? body
-            : undefined;
-    } catch {
-        return undefined;
+    for (const [path, marker] of [[CANONICAL_HEALTH_PATH, CANONICAL_HEALTH_MARKER], [LEGACY_HEALTH_PATH, LEGACY_HEALTH_MARKER]]) {
+        try {
+            const response = await fetch(`http://${host}:${port}${path}`, { signal: AbortSignal.timeout(2000) });
+            if (!response.ok) continue;
+            const body = await response.json();
+            if (body?.marker === marker && body?.protocolVersion === bridgeProtocolVersion) return body;
+        } catch {}
     }
+    return undefined;
 }
 
 function authorize(request, config) {

@@ -1,16 +1,17 @@
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { afterburnerHome, CANONICAL_ID, LEGACY_ID } from "./names.mjs";
 
 const MAX_REQUEST_AGE_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 3_000;
-const afterburnerHome = () => process.env.AFTERBURNER_HOME ?? join(process.env.USERPROFILE ?? "", ".afterburner");
-const stateDirectory = () => join(afterburnerHome(), "state", "copilot-openai");
-const modalActivationPath = () => join(stateDirectory(), "modal-activation.jsonl");
-const modalAckDirectory = () => join(stateDirectory(), "modal-activation-acks");
-const actionPath = () => join(stateDirectory(), "modal-actions.jsonl");
-const actionAckDirectory = () => join(stateDirectory(), "modal-action-acks");
-const statePath = () => join(stateDirectory(), "bridge-state.json");
+const stateDirectory = (id = CANONICAL_ID) => join(afterburnerHome(), "state", id);
+const modalActivationPath = (id = CANONICAL_ID) => join(stateDirectory(id), "modal-activation.jsonl");
+const modalAckDirectory = (id = CANONICAL_ID) => join(stateDirectory(id), "modal-activation-acks");
+const actionPath = (id = CANONICAL_ID) => join(stateDirectory(id), "modal-actions.jsonl");
+const actionAckDirectory = (id = CANONICAL_ID) => join(stateDirectory(id), "modal-action-acks");
+const statePath = (id = CANONICAL_ID) => join(stateDirectory(id), "bridge-state.json");
+const stateIds = [CANONICAL_ID, LEGACY_ID];
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const now = () => new Date().toISOString();
@@ -20,14 +21,24 @@ async function appendJsonLine(path, value) {
     await writeFile(path, `${JSON.stringify(value)}\n`, { flag: "a" });
 }
 
-async function readAndClearJsonLines(path, predicate = () => true) {
-    let body = "";
-    try { body = await readFile(path, "utf8"); }
-    catch (error) {
+async function readAndClearJsonLines(path, stateId, predicate = () => true) {
+    const claimedPath = `${path}.${process.pid}-${randomBytes(6).toString("hex")}.claimed`;
+    try {
+        await rename(path, claimedPath);
+    } catch (error) {
         if (error?.code === "ENOENT") return [];
         throw error;
     }
-    try { await unlink(path); } catch {}
+    let body = "";
+    try {
+        body = await readFile(claimedPath, "utf8");
+    } finally {
+        try {
+            await unlink(claimedPath);
+        } catch (error) {
+            if (error?.code !== "ENOENT") throw error;
+        }
+    }
     const current = Date.now();
     return body.split(/\r?\n/).filter(Boolean).map(line => {
         try { return JSON.parse(line); }
@@ -36,7 +47,7 @@ async function readAndClearJsonLines(path, predicate = () => true) {
         if (!request || request.schemaVersion !== 1 || typeof request.requestId !== "string") return false;
         const createdAt = Date.parse(request.createdAt ?? "");
         return Number.isFinite(createdAt) && current - createdAt <= MAX_REQUEST_AGE_MS && predicate(request);
-    });
+    }).map(request => ({ ...request, __stateId: stateId }));
 }
 
 async function waitForAck(directory, requestId, timeoutMs) {
@@ -64,15 +75,18 @@ export async function writeBridgeState(state = {}, detail = undefined) {
 }
 
 export async function readBridgeState() {
-    try { return JSON.parse(await readFile(statePath(), "utf8")); }
-    catch { return { schemaVersion: 1, active: false, endpoint: null, modelCount: 0, requestCount: 0, errorCount: 0, detail: "state unavailable" }; }
+    for (const id of stateIds) {
+        try { return JSON.parse(await readFile(statePath(id), "utf8")); }
+        catch {}
+    }
+    return { schemaVersion: 1, active: false, endpoint: null, modelCount: 0, requestCount: 0, errorCount: 0, detail: "state unavailable" };
 }
 
 export async function requestModalOpen(input = {}) {
     const request = {
         schemaVersion: 1,
         requestId: randomBytes(12).toString("hex"),
-        surfaceId: "copilot-openai",
+        surfaceId: CANONICAL_ID,
         createdAt: now(),
         input
     };
@@ -83,13 +97,18 @@ export async function requestModalOpen(input = {}) {
 }
 
 export async function consumeModalOpenRequests() {
-    return readAndClearJsonLines(modalActivationPath(), request => request.surfaceId === "copilot-openai");
+    const requests = [];
+    for (const id of stateIds) {
+        requests.push(...await readAndClearJsonLines(modalActivationPath(id), id, request => request.surfaceId === CANONICAL_ID || request.surfaceId === LEGACY_ID));
+    }
+    return requests;
 }
 
 export async function completeModalOpenRequest(request, result = {}) {
     if (!request?.requestId) return false;
-    await mkdir(modalAckDirectory(), { recursive: true });
-    await writeFile(join(modalAckDirectory(), `${request.requestId}.json`), JSON.stringify({ schemaVersion: 1, requestId: request.requestId, ok: result.ok === true, error: result.error, completedAt: now() }), "utf8");
+    const id = request.__stateId === LEGACY_ID ? LEGACY_ID : CANONICAL_ID;
+    await mkdir(modalAckDirectory(id), { recursive: true });
+    await writeFile(join(modalAckDirectory(id), `${request.requestId}.json`), JSON.stringify({ schemaVersion: 1, requestId: request.requestId, ok: result.ok === true, error: result.error, completedAt: now() }), "utf8");
     return true;
 }
 
@@ -102,12 +121,17 @@ export async function requestBridgeAction(action, input = {}) {
 }
 
 export async function consumeBridgeActionRequests() {
-    return readAndClearJsonLines(actionPath(), request => typeof request.action === "string");
+    const requests = [];
+    for (const id of stateIds) {
+        requests.push(...await readAndClearJsonLines(actionPath(id), id, request => typeof request.action === "string"));
+    }
+    return requests;
 }
 
 export async function completeBridgeActionRequest(request, result = {}) {
     if (!request?.requestId) return false;
-    await mkdir(actionAckDirectory(), { recursive: true });
-    await writeFile(join(actionAckDirectory(), `${request.requestId}.json`), JSON.stringify({ schemaVersion: 1, requestId: request.requestId, ok: result.ok === true, state: result.state, error: result.error, completedAt: now() }), "utf8");
+    const id = request.__stateId === LEGACY_ID ? LEGACY_ID : CANONICAL_ID;
+    await mkdir(actionAckDirectory(id), { recursive: true });
+    await writeFile(join(actionAckDirectory(id), `${request.requestId}.json`), JSON.stringify({ schemaVersion: 1, requestId: request.requestId, ok: result.ok === true, state: result.state, error: result.error, completedAt: now() }), "utf8");
     return true;
 }

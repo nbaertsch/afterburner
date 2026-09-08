@@ -617,3 +617,280 @@ func TestSyncBuiltinsRequiresPinnedFetcherAndPreservesLockstep(t *testing.T) {
 		t.Fatalf("entry/content = %#v %q", entry, content)
 	}
 }
+
+func TestOpenAIServerBuiltinInstallsDisabledByDefaultAndMigratesLegacy(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "openai-source")
+	legacyActive := filepath.Join(root, "home", "extensions", "copilot-openai", "old")
+	for _, path := range []string{source, legacyActive} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeBuiltinFixture(t, source, registry.OpenAIServerID, "openai")
+	legacyManifest := `{
+	  "schemaVersion": 1,
+	  "id": "copilot-openai",
+	  "displayName": "Copilot OpenAI Bridge",
+	  "visibility": "private",
+	  "requires": {"afterburner": ">=0.1.0 <1.0.0"},
+	  "runtime": {"execution": "in-process", "entrypoint": "runtime.mjs"}
+	}`
+	if err := os.WriteFile(filepath.Join(legacyActive, "afterburner.json"), []byte(legacyManifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyActive, "runtime.mjs"), []byte("export default 'legacy'"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layout := home.Layout{
+		Root:          filepath.Join(root, "home"),
+		CopilotHome:   filepath.Join(root, "home", "copilot-home"),
+		Config:        filepath.Join(root, "home", "config"),
+		ExtensionData: filepath.Join(root, "home", "extension-data"),
+		Extensions:    filepath.Join(root, "home", "extensions"),
+		Staging:       filepath.Join(root, "home", "staging"),
+	}
+	manager := Manager{Layout: layout, Stdout: io.Discard, BuiltinFetcher: fakeBuiltinFetcher{paths: map[string]string{registry.OpenAIServerID: source}}}
+	if err := manager.InstallBuiltins([]string{registry.OpenAIServerID}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Extensions[registry.OpenAIServerID].Enabled {
+		t.Fatal("openai-server should install disabled by default")
+	}
+
+	legacy := value.Extensions[registry.OpenAIServerID]
+	legacy.Enabled = true
+	legacy.ActivePath = legacyActive
+	legacy.Manifest.ID = registry.LegacyOpenAIServerID
+	legacy.Manifest.DisplayName = "Copilot OpenAI Bridge"
+	legacy.Source = registry.Source{Type: "path", Value: legacyActive}
+	delete(value.Extensions, registry.OpenAIServerID)
+	value.Extensions[registry.LegacyOpenAIServerID] = legacy
+	if err := registry.Save(layout.Root, value); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.InstallBuiltins([]string{registry.OpenAIServerID}); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := migrated.Extensions[registry.LegacyOpenAIServerID]; exists {
+		t.Fatal("legacy openai-server entry was retained")
+	}
+	entry := migrated.Extensions[registry.OpenAIServerID]
+	if !entry.Enabled || entry.PreviousActivePath == nil || *entry.PreviousActivePath != legacyActive || entry.Manifest.Visibility != "builtin" {
+		t.Fatalf("migrated openai-server entry = %#v", entry)
+	}
+	if err := manager.Rollback(registry.OpenAIServerID); err != nil {
+		t.Fatal(err)
+	}
+	rolledBack, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := rolledBack.Extensions[registry.OpenAIServerID]; exists {
+		t.Fatal("canonical entry remained after rollback to the legacy package")
+	}
+	legacyEntry, exists := rolledBack.Extensions[registry.LegacyOpenAIServerID]
+	if !exists || !legacyEntry.Enabled || legacyEntry.ActivePath != legacyActive || legacyEntry.Manifest.ID != registry.LegacyOpenAIServerID {
+		t.Fatalf("legacy rollback entry = %#v", legacyEntry)
+	}
+	if err := manager.SetBuiltinsEnabled([]string{registry.OpenAIServerID}, false); err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.Extensions[registry.LegacyOpenAIServerID].Enabled {
+		t.Fatal("canonical management ID did not disable the rolled-back legacy entry")
+	}
+	if err := manager.Rollback(registry.OpenAIServerID); err != nil {
+		t.Fatal(err)
+	}
+	restoredCanonical, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalEntry, exists := restoredCanonical.Extensions[registry.OpenAIServerID]
+	if !exists || canonicalEntry.Manifest.Visibility != "builtin" || !canonicalEntry.Identity.BuiltinSigned ||
+		!registry.IsTrustedBuiltinSourceType(canonicalEntry.Source.Type) || canonicalEntry.Source.Value != registry.OpenAIServerID {
+		t.Fatalf("canonical built-in was not restored with trusted source metadata: %#v", canonicalEntry)
+	}
+	if err := manager.Rollback(registry.OpenAIServerID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyActive, "runtime.mjs"), []byte("export default 'legacy-updated'"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Update(registry.OpenAIServerID); err != nil {
+		t.Fatal(err)
+	}
+	updatedLegacy, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedLegacy.Extensions[registry.LegacyOpenAIServerID].ActivePath == legacyActive {
+		t.Fatal("canonical update ID did not update the rolled-back legacy entry")
+	}
+}
+
+func TestOpenAIServerBuiltinManagementCollapsesDuplicateAliases(t *testing.T) {
+	root := t.TempDir()
+	layout := home.Layout{
+		Root:            root,
+		CopilotHome:     filepath.Join(root, "copilot-home"),
+		Config:          filepath.Join(root, "config"),
+		ExtensionData:   filepath.Join(root, "extension-data"),
+		Extensions:      filepath.Join(root, "extensions"),
+		Staging:         filepath.Join(root, "staging"),
+		BYOModelsConfig: filepath.Join(root, "config", "byomodels.json"),
+	}
+	manager := Manager{Layout: layout, Stdout: io.Discard}
+	if err := manager.InstallBuiltins([]string{registry.OpenAIServerID}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(layout.Extensions, registry.LegacyOpenAIServerID, "legacy")
+	if err := os.MkdirAll(legacyPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	value.Extensions[registry.LegacyOpenAIServerID] = registry.Entry{
+		Enabled:    true,
+		ActivePath: legacyPath,
+		Manifest: registry.Manifest{
+			ID: registry.LegacyOpenAIServerID, Visibility: "private",
+		},
+		Source: registry.Source{Type: "path", Value: legacyPath},
+	}
+	if err := registry.Save(layout.Root, value); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetBuiltinsEnabled([]string{registry.OpenAIServerID}, false); err != nil {
+		t.Fatal(err)
+	}
+	value, err = registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := value.Extensions[registry.LegacyOpenAIServerID]; exists {
+		t.Fatal("legacy alias remained after canonical management")
+	}
+	if value.Extensions[registry.OpenAIServerID].Enabled {
+		t.Fatal("canonical extension remained enabled")
+	}
+
+	value.Extensions[registry.LegacyOpenAIServerID] = registry.Entry{
+		Enabled:    true,
+		ActivePath: legacyPath,
+		Manifest: registry.Manifest{
+			ID: registry.LegacyOpenAIServerID, Visibility: "private",
+		},
+		Source: registry.Source{Type: "path", Value: legacyPath},
+	}
+	if err := registry.Save(layout.Root, value); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.UninstallBuiltins([]string{registry.OpenAIServerID}); err != nil {
+		t.Fatal(err)
+	}
+	value, err = registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, canonical := value.Extensions[registry.OpenAIServerID]; canonical {
+		t.Fatal("canonical alias remained after uninstall")
+	}
+	if _, legacy := value.Extensions[registry.LegacyOpenAIServerID]; legacy {
+		t.Fatal("legacy alias remained after uninstall")
+	}
+}
+
+func TestOpenAIServerReservedIDCannotBeClaimedByNamedLocalPath(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "CopilotOpenAI-spoof")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{
+	  "schemaVersion": 1,
+	  "id": "openai-server",
+	  "displayName": "Spoof",
+	  "visibility": "private",
+	  "requires": {"afterburner": ">=0.1.0 <1.0.0"},
+	  "runtime": {"execution": "in-process", "entrypoint": "runtime.mjs"}
+	}`
+	if err := os.WriteFile(filepath.Join(source, "afterburner.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "runtime.mjs"), []byte("export default 'spoof'"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layout := home.Layout{
+		Root:          filepath.Join(root, "home"),
+		CopilotHome:   filepath.Join(root, "home", "copilot-home"),
+		Config:        filepath.Join(root, "home", "config"),
+		ExtensionData: filepath.Join(root, "home", "extension-data"),
+		Extensions:    filepath.Join(root, "home", "extensions"),
+		Staging:       filepath.Join(root, "home", "staging"),
+	}
+	manager := Manager{Layout: layout, Stdout: io.Discard}
+	if err := manager.Install(source); err == nil {
+		t.Fatal("expected local path to be rejected for the reserved openai-server ID")
+	}
+}
+
+func TestInstallingOtherBuiltinDoesNotMigrateLegacyOpenAIServer(t *testing.T) {
+	root := t.TempDir()
+	layout := home.Layout{
+		Root:          filepath.Join(root, "home"),
+		CopilotHome:   filepath.Join(root, "home", "copilot-home"),
+		Config:        filepath.Join(root, "home", "config"),
+		ExtensionData: filepath.Join(root, "home", "extension-data"),
+		Extensions:    filepath.Join(root, "home", "extensions"),
+		Staging:       filepath.Join(root, "home", "staging"),
+	}
+	legacyActive := filepath.Join(layout.Extensions, registry.LegacyOpenAIServerID, "old")
+	if err := os.MkdirAll(legacyActive, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	value := registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{
+		registry.LegacyOpenAIServerID: {
+			Enabled:    true,
+			ActivePath: legacyActive,
+			Manifest: registry.Manifest{
+				SchemaVersion: 1,
+				ID:            registry.LegacyOpenAIServerID,
+				DisplayName:   "Copilot OpenAI Bridge",
+				Visibility:    "private",
+			},
+			Source: registry.Source{Type: "path", Value: legacyActive},
+		},
+	}}
+	if err := registry.Save(layout.Root, value); err != nil {
+		t.Fatal(err)
+	}
+	manager := Manager{Layout: layout, Stdout: io.Discard}
+	if err := manager.InstallBuiltins([]string{"black-box"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := loaded.Extensions[registry.LegacyOpenAIServerID]; !exists {
+		t.Fatalf("unrelated built-in install migrated legacy entry: %#v", loaded.Extensions)
+	}
+	if _, exists := loaded.Extensions[registry.OpenAIServerID]; exists {
+		t.Fatalf("unrelated built-in install created canonical entry: %#v", loaded.Extensions)
+	}
+}

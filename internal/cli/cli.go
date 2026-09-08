@@ -143,7 +143,7 @@ func runRollback(args []string, opts Options) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if err := updater.BeginReplacement(candidate, target, previous); err != nil {
+	if err := updater.BeginReplacement(candidate, target, previous, ""); err != nil {
 		_ = os.RemoveAll(filepath.Dir(candidate))
 		return 1, err
 	}
@@ -196,11 +196,20 @@ func runUpdate(ctx context.Context, args []string, opts Options) (int, error) {
 		Root:    layout.Root,
 		Version: release.TagName,
 	}}
+	registrySnapshot, err := updater.SnapshotRegistry(layout.Root)
+	if err != nil {
+		_ = os.RemoveAll(filepath.Dir(candidate))
+		return 1, err
+	}
 	if err := manager.SyncBuiltins(nil); err != nil {
+		_ = updater.RestoreRegistrySnapshot(layout.Root, registrySnapshot)
+		_ = updater.DiscardRegistrySnapshot(layout.Root, registrySnapshot)
 		_ = os.RemoveAll(filepath.Dir(candidate))
 		return 1, fmt.Errorf("sync built-in extensions for %s: %w", release.TagName, err)
 	}
-	if err := updater.BeginReplacement(candidate, target, previous); err != nil {
+	if err := updater.BeginReplacement(candidate, target, previous, registrySnapshot); err != nil {
+		_ = updater.RestoreRegistrySnapshot(layout.Root, registrySnapshot)
+		_ = updater.DiscardRegistrySnapshot(layout.Root, registrySnapshot)
 		return 1, err
 	}
 	fmt.Fprintf(opts.Stdout, "Afterburner %s and built-in extensions are staged; core replacement will complete after this process exits.\n", release.TagName)
@@ -222,9 +231,8 @@ func runCoreCommand(args []string, opts Options) (int, error) {
 		}
 		return 0, nil
 	}
-	if len(args) == 9 && args[0] == "replace" &&
-		args[1] == "--parent" && args[3] == "--source" &&
-		args[5] == "--target" && args[7] == "--previous" {
+	registrySnapshot, replaceCommand := replacementRegistrySnapshot(args)
+	if replaceCommand {
 		parent, err := strconv.Atoi(args[2])
 		if err != nil || parent <= 0 {
 			return 2, fmt.Errorf("invalid replacement parent PID")
@@ -237,15 +245,31 @@ func runCoreCommand(args []string, opts Options) (int, error) {
 		expectedPrevious := filepath.Join(layout.Root, "bin", "afterburn.previous.exe")
 		if !strings.EqualFold(filepath.Clean(args[6]), filepath.Clean(expectedTarget)) ||
 			!strings.EqualFold(filepath.Clean(args[8]), filepath.Clean(expectedPrevious)) ||
-			!registry.Within(args[4], filepath.Join(layout.Root, "update-staging")) {
+			!registry.Within(args[4], filepath.Join(layout.Root, "update-staging")) ||
+			(registrySnapshot != "" && !registry.Within(registrySnapshot, filepath.Join(layout.Root, "state"))) {
 			return 2, fmt.Errorf("replacement paths are outside the managed update transaction")
 		}
-		if err := updater.ApplyReplacement(parent, args[4], args[6], args[8]); err != nil {
+		if err := updater.ApplyReplacement(parent, args[4], args[6], args[8], registrySnapshot); err != nil {
 			return 1, err
 		}
 		return 0, nil
 	}
 	return 2, fmt.Errorf("usage: afterburn core install")
+}
+
+func replacementRegistrySnapshot(args []string) (string, bool) {
+	if len(args) < 9 || args[0] != "replace" ||
+		args[1] != "--parent" || args[3] != "--source" ||
+		args[5] != "--target" || args[7] != "--previous" {
+		return "", false
+	}
+	if len(args) == 9 {
+		return "", true
+	}
+	if len(args) == 11 && args[9] == "--registry-snapshot" {
+		return args[10], true
+	}
+	return "", false
 }
 
 func runExtensionCommand(route Route, opts Options) (int, error) {
@@ -361,19 +385,27 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	}
 	traceStartup("registry")
 	effectiveRegistry := extensionRegistry
+	disabledExtensionsForEnv := append([]string(nil), launchOptions.disabledExtensions...)
 	if launchOptions.safeMode {
 		for id, entry := range effectiveRegistry.Extensions {
 			entry.Enabled = false
 			effectiveRegistry.Extensions[id] = entry
 		}
 	} else {
+		disabledExtensionsForEnv = disabledExtensionsForRuntime(launchOptions.disabledExtensions)
 		for _, id := range launchOptions.disabledExtensions {
-			entry, ok := effectiveRegistry.Extensions[id]
+			canonical := canonicalLaunchExtensionID(id)
+			key := canonical
+			entry, ok := effectiveRegistry.Extensions[key]
+			if !ok && canonical == registry.OpenAIServerID {
+				key = registry.LegacyOpenAIServerID
+				entry, ok = effectiveRegistry.Extensions[key]
+			}
 			if !ok {
 				return 2, fmt.Errorf("unknown extension %q", id)
 			}
 			entry.Enabled = false
-			effectiveRegistry.Extensions[id] = entry
+			effectiveRegistry.Extensions[key] = entry
 		}
 	}
 	if err := sessions.Reconcile(layout, effectiveRegistry); err != nil {
@@ -412,8 +444,8 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	env = setEnv(env, "AFTERBURNER_COMPATIBILITY_PROFILE", selection.Profile.ID)
 	if launchOptions.safeMode {
 		env = setEnv(env, "AFTERBURNER_DISABLED_EXTENSIONS", "*")
-	} else if len(launchOptions.disabledExtensions) > 0 {
-		env = setEnv(env, "AFTERBURNER_DISABLED_EXTENSIONS", strings.Join(launchOptions.disabledExtensions, ","))
+	} else if len(disabledExtensionsForEnv) > 0 {
+		env = setEnv(env, "AFTERBURNER_DISABLED_EXTENSIONS", strings.Join(disabledExtensionsForEnv, ","))
 	}
 	if _, ok := os.LookupEnv("AFTERBURNER_BYOMODELS_CONFIG"); !ok {
 		if _, err := os.Stat(layout.BYOModelsConfig); err == nil {
@@ -1016,6 +1048,35 @@ func statusExit(report tooling.Report) int {
 		return 1
 	}
 	return 0
+}
+
+func canonicalLaunchExtensionID(id string) string {
+	if id == registry.LegacyOpenAIServerID {
+		return registry.OpenAIServerID
+	}
+	return id
+}
+
+func disabledExtensionsForRuntime(ids []string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, id := range ids {
+		canonical := canonicalLaunchExtensionID(id)
+		if canonical == registry.OpenAIServerID {
+			for _, alias := range []string{registry.OpenAIServerID, registry.LegacyOpenAIServerID} {
+				if !seen[alias] {
+					seen[alias] = true
+					result = append(result, alias)
+				}
+			}
+			continue
+		}
+		if !seen[canonical] {
+			seen[canonical] = true
+			result = append(result, canonical)
+		}
+	}
+	return result
 }
 
 func setEnv(env []string, key, value string) []string {

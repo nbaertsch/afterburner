@@ -1,27 +1,24 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { joinSession } from "@github/copilot-sdk/extension";
 import { CopilotSessionAdapter, createBridge, loadConfig } from "./bridge.mjs";
 import { completeBridgeActionRequest, consumeBridgeActionRequests, requestModalOpen, writeBridgeState } from "./modal-ipc.mjs";
+import { configuredPathCandidates, displayConfigPath } from "./names.mjs";
 
-const afterburnerHome = process.env.AFTERBURNER_HOME ?? join(process.env.USERPROFILE ?? "", ".afterburner");
-const configuredPath = process.env.AFTERBURNER_COPILOT_OPENAI_CONFIG?.trim() ||
-    join(afterburnerHome, "config", "copilot-openai.json");
-
-function commandText(input) {
-    if (typeof input === "string") return input.trim();
-    if (typeof input?.arguments === "string") return input.arguments.trim();
-    if (typeof input?.text === "string") return input.text.trim();
-    return "";
-}
+let activeConfigPath = displayConfigPath();
 
 async function readConfig() {
-    try {
-        return JSON.parse(await readFile(configuredPath, "utf8"));
-    } catch (error) {
-        if (error?.code === "ENOENT") return {};
-        throw new Error(`Read Copilot OpenAI bridge config: ${error.message}`);
+    for (const candidate of configuredPathCandidates()) {
+        try {
+            const config = JSON.parse(await readFile(candidate, "utf8"));
+            activeConfigPath = candidate;
+            return config;
+        } catch (error) {
+            if (error?.code === "ENOENT") continue;
+            throw new Error(`Read OpenAI server config: ${error.message}`);
+        }
     }
+    activeConfigPath = displayConfigPath();
+    return {};
 }
 
 let session;
@@ -30,7 +27,7 @@ let lastStart;
 
 function status() {
     return {
-        configPath: configuredPath,
+        configPath: activeConfigPath,
         ...bridge?.healthSnapshot?.(),
         apiKeyRequired: Boolean(bridge?.state?.apiKey)
     };
@@ -51,8 +48,8 @@ async function startBridge() {
 }
 
 function formatStatus(snapshot = status()) {
-    if (!snapshot?.active) return "Copilot OpenAI bridge is not running.";
-    return `Copilot OpenAI bridge listening at ${snapshot.url}; requests=${snapshot.requestCount}; errors=${snapshot.errorCount}; models=${snapshot.modelCount}.`;
+    if (!snapshot?.active) return "OpenAI server is not running.";
+    return `OpenAI server listening at ${snapshot.url}; requests=${snapshot.requestCount}; errors=${snapshot.errorCount}; models=${snapshot.modelCount}.`;
 }
 
 async function stopBridge() {
@@ -93,20 +90,27 @@ function startActionPump() {
     actionPump = setInterval(() => { void pollBridgeActions(); }, 100);
 }
 
-async function handleMenuCommand() {
+async function handleMenuCommand(input = {}) {
+    const invokedAs = typeof input === "string" ? input.trim() : (input?.name ?? input?.command ?? "openai-server");
     const snapshot = await startBridge();
     await writeBridgeState(snapshot, "interactive menu open");
-    const opened = await requestModalOpen({ openedFrom: "/copilot-openai" });
+    const opened = await requestModalOpen({ openedFrom: invokedAs === "copilot-openai" ? "/copilot-openai" : "/openai-server" });
     if (opened.ok !== true) {
-        await session.log(`Copilot OpenAI native menu unavailable: ${opened.error ?? "not acknowledged"}`);
+        await session.log(`OpenAI Server native menu unavailable: ${opened.error ?? "not acknowledged"}`);
     }
 }
 
 session = await joinSession({
     commands: [
         {
+            name: "openai-server",
+            description: "Open the interactive OpenAI Server management menu.",
+            handler: handleMenuCommand
+        },
+        {
             name: "copilot-openai",
-            description: "Open the interactive Copilot OpenAI bridge management menu.",
+            description: "Deprecated alias for /openai-server.",
+            hidden: true,
             handler: handleMenuCommand
         }
     ],

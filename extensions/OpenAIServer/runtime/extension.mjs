@@ -1,5 +1,6 @@
-import { completeModalOpenRequest, consumeModalOpenRequests, readBridgeState, requestBridgeAction } from "../extensions/CopilotOpenAI/modal-ipc.mjs";
-import { MENU_ID, modalFrame } from "../extensions/CopilotOpenAI/menu.mjs";
+import { completeModalOpenRequest, consumeModalOpenRequests, readBridgeState, requestBridgeAction } from "../extensions/OpenAIServer/modal-ipc.mjs";
+import { MENU_ID, modalFrame } from "../extensions/OpenAIServer/menu.mjs";
+import { CANONICAL_TITLE, displayConfigPath } from "../extensions/OpenAIServer/names.mjs";
 
 const POLL_MS = 100;
 
@@ -10,7 +11,8 @@ function modalRegistrar(api = {}) {
 }
 
 async function frame(detail = undefined, diagnostics = false) {
-    return modalFrame({ snapshot: await readBridgeState(), configuredPath: process.env.AFTERBURNER_COPILOT_OPENAI_CONFIG, detail, diagnostics });
+    const snapshot = await readBridgeState();
+    return modalFrame({ snapshot, configuredPath: snapshot.configPath ?? displayConfigPath(), detail, diagnostics });
 }
 
 async function updateFromAction(action, controls) {
@@ -18,7 +20,7 @@ async function updateFromAction(action, controls) {
     const result = await requestBridgeAction(action);
     const next = modalFrame({
         snapshot: result.state ?? await readBridgeState(),
-        configuredPath: process.env.AFTERBURNER_COPILOT_OPENAI_CONFIG,
+        configuredPath: result.state?.configPath ?? displayConfigPath(),
         detail: result.ok ? (result.state?.detail ?? (action === "doctor" ? "diagnostics refreshed" : `${action} complete`)) : `action failed: ${result.error ?? "unknown"}`,
         diagnostics: action === "doctor"
     });
@@ -33,8 +35,8 @@ export async function activate(api = {}) {
     try {
         modal = register.fn.call(register.target, {
             id: MENU_ID,
-            displayName: "Copilot OpenAI Bridge",
-            description: "Visible terminal management menu for the localhost OpenAI-compatible Copilot bridge.",
+            displayName: CANONICAL_TITLE,
+            description: "Visible terminal management menu for the localhost OpenAI-compatible server backed by the active Copilot session.",
             actions: [
                 { name: "start", label: "Start", key: "s", description: "Start or reuse the localhost bridge.", handler: async (_input, controls) => updateFromAction("start", controls) },
                 { name: "stop", label: "Stop", key: "x", description: "Stop this session's bridge listener.", handler: async (_input, controls) => updateFromAction("stop", controls) },
@@ -71,7 +73,7 @@ export async function activate(api = {}) {
     timer.unref?.();
     let watcher;
     try {
-        const target = await import("../extensions/CopilotOpenAI/modal-ipc.mjs");
+        const target = await import("../extensions/OpenAIServer/modal-ipc.mjs");
         // Polling is the correctness path; best-effort wakeup comes from the timer in all environments.
         void target;
     } catch {}

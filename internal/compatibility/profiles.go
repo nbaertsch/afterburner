@@ -158,6 +158,14 @@ func Profiles() []Profile {
 	return append([]Profile(nil), profiles...)
 }
 
+func ProfileIDs() []string {
+	ids := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		ids = append(ids, profile.ID)
+	}
+	return ids
+}
+
 func FindProfile(id string) (Profile, bool) {
 	for _, profile := range profiles {
 		if profile.ID == id {

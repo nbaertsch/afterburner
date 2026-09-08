@@ -96,6 +96,7 @@ type registryMACPayload struct {
 	Enabled            bool            `json:"enabled"`
 	ActivePath         string          `json:"activePath"`
 	PreviousActivePath *string         `json:"previousActivePath,omitempty"`
+	PreviousSource     *Source         `json:"previousSource,omitempty"`
 	Manifest           Manifest        `json:"manifest"`
 	Source             Source          `json:"source"`
 	Identity           IdentityBinding `json:"identity"`
@@ -112,6 +113,7 @@ func RegistryMAC(root string, entry Entry) (string, error) {
 		Enabled:            entry.Enabled,
 		ActivePath:         entry.ActivePath,
 		PreviousActivePath: entry.PreviousActivePath,
+		PreviousSource:     entry.PreviousSource,
 		Manifest:           entry.Manifest,
 		Source:             entry.Source,
 		Identity:           entry.Identity,
@@ -134,6 +136,7 @@ func SealEntry(root string, entry Entry) (Entry, error) {
 		Enabled:            entry.Enabled,
 		ActivePath:         entry.ActivePath,
 		PreviousActivePath: entry.PreviousActivePath,
+		PreviousSource:     entry.PreviousSource,
 		Manifest:           entry.Manifest,
 		Source:             entry.Source,
 		Identity:           entry.Identity,
