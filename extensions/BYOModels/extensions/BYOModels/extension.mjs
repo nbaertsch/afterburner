@@ -46,6 +46,19 @@ function validateConfig() {
         if (providerNames.has(provider.name)) {
             throw new Error(`Duplicate BYOModels provider name: ${provider.name}`);
         }
+        const maximumLength = provider.requestCompatibility?.maxInputItemIdLength;
+        if (maximumLength !== undefined &&
+            (!Number.isInteger(maximumLength) || maximumLength < 16)) {
+            throw new Error(
+                `Provider '${provider.name}' must define requestCompatibility.maxInputItemIdLength as an integer of at least 16.`
+            );
+        }
+        const forceStreaming = provider.requestCompatibility?.forceStreaming;
+        if (forceStreaming !== undefined && typeof forceStreaming !== "boolean") {
+            throw new Error(
+                `Provider '${provider.name}' must define requestCompatibility.forceStreaming as a boolean.`
+            );
+        }
         const proxyPort = provider.requestCompatibility?.proxyPort;
         if (proxyPort !== undefined &&
             (!Number.isInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535)) {

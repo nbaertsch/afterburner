@@ -163,6 +163,130 @@ func TestProxyDecompressesUpstreamResponses(t *testing.T) {
 	}
 }
 
+func TestProxyAdaptsNonStreamingResponsesForStreamingOnlyEndpoints(t *testing.T) {
+	var receivedURL string
+	var received struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		receivedURL = request.URL.String()
+		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		response.Header().Set("content-type", "text/event-stream")
+		_, _ = response.Write([]byte(
+			"event: response.created\n" +
+				"data: {\"type\":\"response.created\",\"response\":{\"id\":\"response-1\",\"status\":\"in_progress\"}}\n\n" +
+				"event: response.completed\n" +
+				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"response-1\",\"status\":\"completed\",\"model\":\"wire-model\",\"output\":[]}}\n\n" +
+				"data: [DONE]\n\n",
+		))
+	}))
+	defer upstream.Close()
+
+	port := availablePort(t)
+	path := writeStreamingConfig(
+		t,
+		upstream.URL+"/workspaces/default/stream/2.0/openai/v1?api-version=1",
+		port,
+	)
+	manager, err := Start(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	response, err := http.Post(
+		fmt.Sprintf("http://127.0.0.1:%d/responses?trace=1", port),
+		"application/json",
+		strings.NewReader(`{"model":"wire-model","input":"hello"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.StatusCode, body)
+	}
+	if contentType := response.Header.Get("content-type"); contentType != "application/json" {
+		t.Fatalf("content-type = %q", contentType)
+	}
+	if receivedURL != "/workspaces/default/stream/2.0/openai/v1/responses?api-version=1&trace=1" {
+		t.Fatalf("upstream URL = %q", receivedURL)
+	}
+	if received.Model != "wire-model" || !received.Stream {
+		t.Fatalf("upstream request = %#v", received)
+	}
+	var completed struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+		Model  string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed.ID != "response-1" || completed.Status != "completed" ||
+		completed.Model != "wire-model" {
+		t.Fatalf("completed response = %#v", completed)
+	}
+}
+
+func TestProxyPreservesCallerRequestedStreamingResponse(t *testing.T) {
+	const eventStream = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n" +
+		"data: [DONE]\n\n"
+	var receivedStream bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var payload struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		receivedStream = payload.Stream
+		response.Header().Set("content-type", "text/event-stream")
+		_, _ = response.Write([]byte(eventStream))
+	}))
+	defer upstream.Close()
+
+	port := availablePort(t)
+	manager, err := Start(writeStreamingConfig(t, upstream.URL, port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	response, err := http.Post(
+		fmt.Sprintf("http://127.0.0.1:%d/responses", port),
+		"application/json",
+		strings.NewReader(`{"model":"wire-model","stream":true,"input":"hello"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.StatusCode, body)
+	}
+	if contentType := response.Header.Get("content-type"); contentType != "text/event-stream" {
+		t.Fatalf("content-type = %q", contentType)
+	}
+	if string(body) != eventStream {
+		t.Fatalf("body = %q", body)
+	}
+	if !receivedStream {
+		t.Fatal("upstream stream flag was false")
+	}
+}
+
 func TestMissingConfigurationIsNoop(t *testing.T) {
 	manager, err := Start(filepath.Join(t.TempDir(), "missing.json"))
 	if err != nil {
@@ -171,6 +295,27 @@ func TestMissingConfigurationIsNoop(t *testing.T) {
 	if err := manager.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeStreamingConfig(t *testing.T, upstream string, port int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "byomodels.json")
+	value := fmt.Sprintf(`{
+  "version": 1,
+  "providers": [{
+    "name": "test-provider",
+    "baseUrl": %q,
+    "requestCompatibility": {
+      "forceStreaming": true,
+      "proxyPort": %d
+    }
+  }],
+  "models": []
+}`, upstream, port)
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func availablePort(t *testing.T) int {

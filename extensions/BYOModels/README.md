@@ -105,7 +105,19 @@ deleted with package versions. Normal `copilot` sessions do not load BYOModels.
 
 The bundled package currently supports Copilot CLI `>=1.0.83-1 <1.0.84`. Provider
 `requestCompatibility.maxInputItemIdLength` enables a loopback-only proxy that shortens oversized
-Responses API input-item IDs without changing message content. Set `requestCompatibility.proxyPort`
-to a stable, provider-specific port so resumed sessions never retain an expired ephemeral endpoint.
-Concurrent Afterburner sessions verify and share the same proxy, and a standby process takes
-ownership when the previous owner exits.
+Responses API input-item IDs without changing message content.
+`requestCompatibility.forceStreaming` supports endpoints that reject non-streaming Responses API
+requests: the proxy requests SSE upstream and converts the terminal response event back to the JSON
+response expected by Copilot. Configure it as:
+
+```json
+"requestCompatibility": {
+  "forceStreaming": true,
+  "proxyPort": 61952
+}
+```
+
+The proxy preserves path-prefixed base URLs and query parameters.
+Set `requestCompatibility.proxyPort` to a stable, provider-specific port so resumed sessions never
+retain an expired ephemeral endpoint. Concurrent Afterburner sessions verify and share the same
+proxy, and a standby process takes ownership when the previous owner exits.

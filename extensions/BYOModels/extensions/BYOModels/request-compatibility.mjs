@@ -21,14 +21,67 @@ export function rewriteOversizedInputItemIds(payload, maximumLength) {
 }
 
 function proxyIdentity(provider, upstream) {
+    const maximumLength = Number.isInteger(provider.requestCompatibility?.maxInputItemIdLength)
+        ? provider.requestCompatibility.maxInputItemIdLength
+        : 0;
+    const configuration = [
+        String(maximumLength),
+        String(provider.requestCompatibility?.forceStreaming === true),
+        provider.auth?.type ?? "",
+        provider.auth?.resource ?? ""
+    ].join("\0");
     return {
         marker: healthMarker,
         provider: provider.name,
-        upstream: upstream.href
+        upstream: upstream.href,
+        configuration: createHash("sha256").update(configuration).digest("base64url")
     };
 }
 
-function createProxyServer(provider, upstream, maximumLength, identity, onRewrite, getBearerToken) {
+function upstreamTarget(upstream, requestUrl) {
+    const incoming = new URL(requestUrl ?? "/", "http://127.0.0.1");
+    const target = new URL(upstream);
+    const basePath = target.pathname.replace(/\/$/, "");
+    const requestPath = incoming.pathname.replace(/^\//, "");
+    target.pathname = `${basePath}/${requestPath}`;
+    const query = [target.search.slice(1), incoming.search.slice(1)].filter(Boolean).join("&");
+    target.search = query ? `?${query}` : "";
+    return target;
+}
+
+function completedResponseFromEventStream(source) {
+    let completed;
+    for (const block of source.split(/\r?\n\r?\n/)) {
+        const data = block
+            .split(/\r?\n/)
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
+        if (!data || data === "[DONE]") continue;
+        const event = JSON.parse(data);
+        if ((event.type === "response.completed" || event.type === "response.failed") &&
+            event.response && typeof event.response === "object") {
+            completed = event.response;
+        }
+        if (event.type === "error") {
+            throw new Error(event.error?.message ?? event.message ?? "upstream streaming response failed");
+        }
+    }
+    if (!completed) {
+        throw new Error("upstream streaming response did not include a terminal response event");
+    }
+    return completed;
+}
+
+function createProxyServer(
+    provider,
+    upstream,
+    maximumLength,
+    forceStreaming,
+    identity,
+    onRewrite,
+    getBearerToken
+) {
     return createServer(async (request, response) => {
         if (request.method === "GET" && request.url === healthPath) {
             response.writeHead(200, { "content-type": "application/json" });
@@ -39,16 +92,27 @@ function createProxyServer(provider, upstream, maximumLength, identity, onRewrit
             const chunks = [];
             for await (const chunk of request) chunks.push(chunk);
             let body = Buffer.concat(chunks);
+            let translatedStreamingResponse = false;
             if (body.length > 0 && request.headers["content-type"]?.includes("application/json")) {
                 const payload = JSON.parse(body.toString("utf8"));
-                const rewritten = rewriteOversizedInputItemIds(payload, maximumLength);
+                const rewritten = Number.isInteger(maximumLength)
+                    ? rewriteOversizedInputItemIds(payload, maximumLength)
+                    : 0;
                 if (rewritten > 0) {
                     onRewrite(rewritten);
+                }
+                const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+                if (forceStreaming && request.method === "POST" &&
+                    pathname.endsWith("/responses") && payload.stream !== true) {
+                    payload.stream = true;
+                    translatedStreamingResponse = true;
+                }
+                if (rewritten > 0 || translatedStreamingResponse) {
                     body = Buffer.from(JSON.stringify(payload));
                 }
             }
 
-            const target = new URL(request.url ?? "/", upstream);
+            const target = upstreamTarget(upstream, request.url);
             const headers = { ...request.headers };
             delete headers.host;
             delete headers["content-length"];
@@ -67,6 +131,14 @@ function createProxyServer(provider, upstream, maximumLength, identity, onRewrit
             delete responseHeaders["content-length"];
             delete responseHeaders["content-encoding"];
             delete responseHeaders["transfer-encoding"];
+            if (translatedStreamingResponse && upstreamResponse.ok &&
+                upstreamResponse.headers.get("content-type")?.includes("text/event-stream")) {
+                const completed = completedResponseFromEventStream(await upstreamResponse.text());
+                responseHeaders["content-type"] = "application/json";
+                response.writeHead(upstreamResponse.status, responseHeaders);
+                response.end(JSON.stringify(completed));
+                return;
+            }
             response.writeHead(upstreamResponse.status, responseHeaders);
             if (upstreamResponse.body) {
                 Readable.fromWeb(upstreamResponse.body).pipe(response);
@@ -114,7 +186,8 @@ async function verifySharedProxy(port, identity) {
         const value = await response.json();
         return value?.marker === identity.marker &&
             value?.provider === identity.provider &&
-            value?.upstream === identity.upstream;
+            value?.upstream === identity.upstream &&
+            value?.configuration === identity.configuration;
     } catch {
         return false;
     }
@@ -125,7 +198,14 @@ export async function startRequestCompatibilityProxy(
     { onRewrite = () => {}, getBearerToken, standbyRetryMs = 1000 } = {}
 ) {
     const maximumLength = provider.requestCompatibility?.maxInputItemIdLength;
-    if (!Number.isInteger(maximumLength) || maximumLength < 16) return null;
+    const forceStreaming = provider.requestCompatibility?.forceStreaming === true;
+    if (maximumLength !== undefined &&
+        (!Number.isInteger(maximumLength) || maximumLength < 16)) {
+        throw new Error(
+            `Provider '${provider.name}' has an invalid requestCompatibility.maxInputItemIdLength.`
+        );
+    }
+    if ((!Number.isInteger(maximumLength) || maximumLength < 16) && !forceStreaming) return null;
     const configuredPort = provider.requestCompatibility?.proxyPort ?? 0;
     if (!Number.isInteger(configuredPort) || configuredPort < 0 || configuredPort > 65535) {
         throw new Error(`Provider '${provider.name}' has an invalid requestCompatibility.proxyPort.`);
@@ -139,7 +219,15 @@ export async function startRequestCompatibilityProxy(
     let closed = false;
 
     const create = () =>
-        createProxyServer(provider, upstream, maximumLength, identity, onRewrite, getBearerToken);
+        createProxyServer(
+            provider,
+            upstream,
+            maximumLength,
+            forceStreaming,
+            identity,
+            onRewrite,
+            getBearerToken
+        );
     const first = create();
     try {
         await listen(first, configuredPort);

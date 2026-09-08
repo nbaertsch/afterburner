@@ -10,6 +10,7 @@
       "wireApi": "responses",
       "requestCompatibility": {
         "maxInputItemIdLength": 64,
+        "forceStreaming": false,
         "proxyPort": 61951
       },
       "auth": {

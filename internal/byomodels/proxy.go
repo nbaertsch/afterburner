@@ -1,6 +1,7 @@
 package byomodels
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -40,8 +41,9 @@ type provider struct {
 }
 
 type requestCompatibility struct {
-	MaxInputItemIDLength int `json:"maxInputItemIdLength"`
-	ProxyPort            int `json:"proxyPort"`
+	MaxInputItemIDLength int  `json:"maxInputItemIdLength"`
+	ProxyPort            int  `json:"proxyPort"`
+	ForceStreaming       bool `json:"forceStreaming"`
 }
 
 type auth struct {
@@ -50,9 +52,10 @@ type auth struct {
 }
 
 type identity struct {
-	Marker   string `json:"marker"`
-	Provider string `json:"provider"`
-	Upstream string `json:"upstream"`
+	Marker        string `json:"marker"`
+	Provider      string `json:"provider"`
+	Upstream      string `json:"upstream"`
+	Configuration string `json:"configuration"`
 }
 
 type tokenValue struct {
@@ -104,7 +107,8 @@ func Start(configPath string) (*Manager, error) {
 	tokens := &tokenCache{values: map[string]tokenValue{}}
 	for _, configured := range value.Providers {
 		compatibility := configured.RequestCompatibility
-		if compatibility.MaxInputItemIDLength < 16 || compatibility.ProxyPort == 0 {
+		if (compatibility.MaxInputItemIDLength < 16 && !compatibility.ForceStreaming) ||
+			compatibility.ProxyPort == 0 {
 			continue
 		}
 		if compatibility.ProxyPort < 1024 || compatibility.ProxyPort > 65535 {
@@ -126,9 +130,10 @@ func Start(configPath string) (*Manager, error) {
 			provider: configured,
 			upstream: upstream,
 			identity: identity{
-				Marker:   healthMarker,
-				Provider: configured.Name,
-				Upstream: upstream.String(),
+				Marker:        healthMarker,
+				Provider:      configured.Name,
+				Upstream:      upstream.String(),
+				Configuration: proxyConfiguration(configured),
 			},
 			tokens: tokens,
 			client: &http.Client{},
@@ -141,6 +146,17 @@ func Start(configPath string) (*Manager, error) {
 		manager.services = append(manager.services, current)
 	}
 	return manager, nil
+}
+
+func proxyConfiguration(value provider) string {
+	configuration := strings.Join([]string{
+		strconv.Itoa(value.RequestCompatibility.MaxInputItemIDLength),
+		strconv.FormatBool(value.RequestCompatibility.ForceStreaming),
+		value.Auth.Type,
+		value.Auth.Resource,
+	}, "\x00")
+	hash := sha256.Sum256([]byte(configuration))
+	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
 func (manager *Manager) Close() error {
@@ -293,7 +309,16 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 			return
 		}
 	}
-	target := current.upstream.ResolveReference(request.URL)
+	translatedStreamingResponse := false
+	if current.provider.RequestCompatibility.ForceStreaming &&
+		request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/responses") {
+		body, translatedStreamingResponse, err = forceStreaming(body)
+		if err != nil {
+			writeProxyError(response, err)
+			return
+		}
+	}
+	target := upstreamTarget(current.upstream, request.URL)
 	upstreamRequest, err := http.NewRequestWithContext(request.Context(), request.Method, target.String(), bytes.NewReader(body))
 	if err != nil {
 		writeProxyError(response, err)
@@ -323,11 +348,125 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 	removeHopByHopHeaders(response.Header())
 	response.Header().Del("content-length")
 	response.Header().Del("content-encoding")
+	if translatedStreamingResponse && upstreamResponse.StatusCode >= 200 &&
+		upstreamResponse.StatusCode < 300 &&
+		strings.Contains(upstreamResponse.Header.Get("content-type"), "text/event-stream") {
+		completed, streamErr := completedResponseFromEventStream(upstreamResponse.Body)
+		if streamErr != nil {
+			writeProxyError(response, streamErr)
+			return
+		}
+		response.Header().Set("content-type", "application/json")
+		response.WriteHeader(upstreamResponse.StatusCode)
+		_, _ = response.Write(completed)
+		return
+	}
 	response.WriteHeader(upstreamResponse.StatusCode)
 	_, _ = io.Copy(response, upstreamResponse.Body)
 }
 
+func upstreamTarget(upstream, requestURL *url.URL) *url.URL {
+	target := *upstream
+	target.Path = strings.TrimSuffix(upstream.Path, "/") + "/" +
+		strings.TrimPrefix(requestURL.Path, "/")
+	switch {
+	case upstream.RawQuery == "":
+		target.RawQuery = requestURL.RawQuery
+	case requestURL.RawQuery == "":
+		target.RawQuery = upstream.RawQuery
+	default:
+		target.RawQuery = upstream.RawQuery + "&" + requestURL.RawQuery
+	}
+	target.Fragment = ""
+	return &target
+}
+
+func forceStreaming(body []byte) ([]byte, bool, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, false, err
+	}
+	if stream, ok := payload["stream"].(bool); ok && stream {
+		return body, false, nil
+	}
+	payload["stream"] = true
+	rewritten, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false, err
+	}
+	return rewritten, true, nil
+}
+
+func completedResponseFromEventStream(body io.Reader) ([]byte, error) {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 64*1024), 64*1024*1024)
+	var data []string
+	var completed json.RawMessage
+	flush := func() error {
+		if len(data) == 0 {
+			return nil
+		}
+		raw := strings.Join(data, "\n")
+		data = data[:0]
+		if raw == "[DONE]" {
+			return nil
+		}
+		var event struct {
+			Type     string          `json:"type"`
+			Response json.RawMessage `json:"response"`
+			Error    struct {
+				Message string `json:"message"`
+			} `json:"error"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return fmt.Errorf("parse upstream streaming response event: %w", err)
+		}
+		switch event.Type {
+		case "response.completed", "response.failed":
+			if len(event.Response) > 0 && string(event.Response) != "null" {
+				completed = append(completed[:0], event.Response...)
+			}
+		case "error":
+			message := event.Error.Message
+			if message == "" {
+				message = event.Message
+			}
+			if message == "" {
+				message = "upstream streaming response failed"
+			}
+			return errors.New(message)
+		}
+		return nil
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			data = append(data, strings.TrimLeft(line[len("data:"):], " \t"))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read upstream streaming response: %w", err)
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	if len(completed) == 0 {
+		return nil, errors.New("upstream streaming response did not include a terminal response event")
+	}
+	return completed, nil
+}
+
 func rewriteInputItemIDs(body []byte, maximumLength int) ([]byte, error) {
+	if maximumLength < 16 {
+		return body, nil
+	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, err
