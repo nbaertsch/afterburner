@@ -63,7 +63,10 @@ Supported provider authentication forms are:
 ```
 
 Sign in with Azure CLI before launching Afterburner. Tokens are acquired and refreshed at runtime;
-they are not stored in `byomodels.json`.
+they are not stored in `byomodels.json`. The `resource` may be any Entra resource accepted by
+`az account get-access-token`; it is not limited to Azure Cognitive Services. Providers without a
+request-compatibility proxy use the Copilot SDK's per-request bearer-token callback, which preserves
+path-prefixed OpenAI-compatible base URLs.
 
 ### API key environment variable
 

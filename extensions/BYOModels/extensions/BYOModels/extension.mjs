@@ -75,10 +75,7 @@ function validateConfig() {
 
 validateConfig();
 
-let cachedAzureToken;
-let refreshAzureTokenAfter = 0;
-let cachedAzureTokenExpiresAt = 0;
-let pendingAzureToken;
+const azureTokenCache = new Map();
 const compatibilityProxyRewrites = new Map();
 
 function requiredEnvironmentValue(provider, auth, field) {
@@ -132,15 +129,16 @@ function parseAzureCliToken(output) {
 }
 
 async function acquireAzureCliToken(resource) {
-    if (cachedAzureToken && Date.now() < refreshAzureTokenAfter) {
-        return cachedAzureToken;
+    const cached = azureTokenCache.get(resource);
+    if (cached?.token && Date.now() < cached.refreshAfter) {
+        return cached.token;
     }
 
-    if (pendingAzureToken) {
-        return pendingAzureToken;
+    if (cached?.pending) {
+        return cached.pending;
     }
 
-    pendingAzureToken = (async () => {
+    const pending = (async () => {
         const executable = process.platform === "win32" ? "az.cmd" : "az";
         const { stdout } = await execFileAsync(
             executable,
@@ -166,16 +164,22 @@ async function acquireAzureCliToken(resource) {
             throw new Error("Azure CLI returned a Foundry access token that expires in less than one minute.");
         }
 
-        cachedAzureToken = token;
-        cachedAzureTokenExpiresAt = expiresAt;
-        refreshAzureTokenAfter = Math.max(now, expiresAt - 5 * 60 * 1000);
+        azureTokenCache.set(resource, {
+            token,
+            expiresAt,
+            refreshAfter: Math.max(now, expiresAt - 5 * 60 * 1000)
+        });
         return token;
     })();
+    azureTokenCache.set(resource, { pending });
 
     try {
-        return await pendingAzureToken;
+        return await pending;
     } finally {
-        pendingAzureToken = undefined;
+        const current = azureTokenCache.get(resource);
+        if (current?.pending === pending) {
+            azureTokenCache.delete(resource);
+        }
     }
 }
 
@@ -204,14 +208,11 @@ async function hydrateProvider(provider) {
 
     switch (auth.type) {
         case "azure-cli":
-            if (!compatibilityProxy) {
-                throw new Error(
-                    `Provider '${provider.name}' requires a loopback compatibility proxy for Azure CLI authentication.`
-                );
-            }
             return {
                 ...sdkProvider,
-                bearerToken: "afterburner-loopback-auth"
+                ...(compatibilityProxy
+                    ? { bearerToken: "afterburner-loopback-auth" }
+                    : { bearerTokenProvider: () => acquireAzureCliToken(auth.resource) })
             };
         case "api-key-env":
             return {
@@ -307,6 +308,15 @@ async function writeRuntimeMetadata(metadata) {
 let registeredModels = [];
 
 function getStatus() {
+    const now = Date.now();
+    const activeTokens = [...azureTokenCache.values()]
+        .filter((value) => value.token && now < value.refreshAfter);
+    const earliestRefreshAfter = activeTokens.length > 0
+        ? Math.min(...activeTokens.map((value) => value.refreshAfter))
+        : 0;
+    const earliestExpiresAt = activeTokens.length > 0
+        ? Math.min(...activeTokens.map((value) => value.expiresAt))
+        : 0;
     const models = registeredModels.map((model) => ({
         selectionId: `${model.provider}/${model.id}`,
         name: model.name,
@@ -324,12 +334,12 @@ function getStatus() {
     return {
         providerCount: config.providers.length,
         modelCount: models.length,
-        activeTokenCache: Boolean(cachedAzureToken && Date.now() < refreshAzureTokenAfter),
-        tokenRefreshAfter: cachedAzureToken && refreshAzureTokenAfter
-            ? new Date(refreshAzureTokenAfter).toISOString()
+        activeTokenCache: activeTokens.length > 0,
+        tokenRefreshAfter: earliestRefreshAfter
+            ? new Date(earliestRefreshAfter).toISOString()
             : null,
-        tokenExpiresAt: cachedAzureToken && cachedAzureTokenExpiresAt
-            ? new Date(cachedAzureTokenExpiresAt).toISOString()
+        tokenExpiresAt: earliestExpiresAt
+            ? new Date(earliestExpiresAt).toISOString()
             : null,
         pluginDataAvailable: Boolean(process.env.COPILOT_PLUGIN_DATA),
         compatibilityProxyRewrites: Object.fromEntries(compatibilityProxyRewrites),
