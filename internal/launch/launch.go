@@ -2,6 +2,8 @@ package launch
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -305,9 +307,13 @@ func withNativeEnv(env []string, bootstrapPath string) []string {
 		"AFTERBURNER_MODAL_SURFACE_ID",
 		"AFTERBURNER_MODAL_BOOTSTRAP",
 		"AFTERBURNER_NATIVE_BOOTSTRAP",
+		"AFTERBURNER_SESSION_ROUTE",
 	)
 	if bootstrapPath == "" {
 		return childEnv
+	}
+	if route, ok := nativeBootstrapRoute(bootstrapPath); ok {
+		childEnv = withEnv(childEnv, "AFTERBURNER_SESSION_ROUTE", route)
 	}
 	return withEnv(childEnv, "AFTERBURNER_NATIVE_BOOTSTRAP", bootstrapPath)
 }
@@ -407,9 +413,35 @@ func prepareModalPipes(server *terminal.ModalServer, surfaces []terminal.ModalCa
 	return start, close, nil
 }
 
+func newSessionRoute() (string, error) {
+	buffer := make([]byte, 32)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", fmt.Errorf("generate session route: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buffer), nil
+}
+
+func nativeBootstrapRoute(path string) (string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	var payload struct {
+		SessionRoute string `json:"sessionRoute"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.SessionRoute == "" {
+		return "", false
+	}
+	return payload.SessionRoute, true
+}
+
 func writeNativeBootstrap(surfaces []terminal.ModalCapability, assertions []nativeIdentityAssertion) (string, func(), error) {
 	if len(surfaces) == 0 && len(assertions) == 0 {
 		return "", func() {}, nil
+	}
+	sessionRoute, err := newSessionRoute()
+	if err != nil {
+		return "", nil, err
 	}
 	dir, err := os.MkdirTemp("", "afterburner-native-")
 	if err != nil {
@@ -418,10 +450,12 @@ func writeNativeBootstrap(surfaces []terminal.ModalCapability, assertions []nati
 	path := filepath.Join(dir, "bootstrap.json")
 	payload := struct {
 		SchemaVersion int                        `json:"schemaVersion"`
+		SessionRoute  string                     `json:"sessionRoute"`
 		Surfaces      []terminal.ModalCapability `json:"modalSurfaces,omitempty"`
 		Assertions    []nativeIdentityAssertion  `json:"verifiedExtensions,omitempty"`
 	}{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
+		SessionRoute:  sessionRoute,
 		Surfaces:      append([]terminal.ModalCapability(nil), surfaces...),
 		Assertions:    assertions,
 	}

@@ -11,6 +11,10 @@ import { startBlackBoxService } from "../lib/service.mjs";
 import { buildModalFrame } from "../lib/modal-surface.mjs";
 import { MODAL_ACTIVATION_POLL_MS, activate } from "../runtime/extension.mjs";
 import { cleanup, completeConfig, workDirectory } from "./helpers.mjs";
+import { atomicWriteFile, routeAckDirectory, waitForRouteAck } from "../shared/route-ipc.mjs";
+
+const ROUTE_A = "routeAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const ROUTE_B = "routeBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
 test("configuration defaults use 500 MiB retention and 8 MiB segments", async t => {
     const home = await workDirectory("config");
@@ -36,7 +40,7 @@ test("modal activation requests wait for runtime acknowledgement", async t => {
     await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
     const service = await startBlackBoxService({
         mode: "session",
-        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, AFTERBURNER_SESSION_ROUTE: ROUTE_A }
     });
     t.after(() => service.close());
     const pending = service.requestModalOpen({ timeoutMs: 2000 });
@@ -47,31 +51,82 @@ test("modal activation requests wait for runtime acknowledgement", async t => {
     assert.equal((await pending).ok, true);
 });
 
-test("modal activation requests from other sessions are discarded on runtime startup", async t => {
-    const home = await workDirectory("modal-activation-other-session");
+test("modal activation preserves other routes until the owning route polls", async t => {
+    const home = await workDirectory("modal-activation-other-route");
+    t.after(() => cleanup(home));
+    const configPath = join(home, "config", "black-box.json");
+    await mkdir(join(home, "config"), { recursive: true });
+    await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
+    const sessionA = await startBlackBoxService({
+        mode: "session",
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, SESSION_ID: "session-a", AFTERBURNER_SESSION_ROUTE: ROUTE_A }
+    });
+    const runtimeB = await startBlackBoxService({
+        mode: "runtime",
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, SESSION_ID: "session-b", AFTERBURNER_SESSION_ROUTE: ROUTE_B }
+    });
+    const runtimeA = await startBlackBoxService({
+        mode: "runtime",
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, SESSION_ID: "session-a", AFTERBURNER_SESSION_ROUTE: ROUTE_A }
+    });
+    t.after(() => Promise.all([sessionA.close(), runtimeA.close(), runtimeB.close()]));
+    const pending = sessionA.requestModalOpen({ timeoutMs: 2000 });
+    await delay(50);
+    assert.deepEqual(await runtimeB.consumeModalOpenRequests(), []);
+    const requests = await runtimeA.consumeModalOpenRequests();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].routeId, ROUTE_A);
+    assert.equal(await runtimeB.completeModalOpenRequest(requests[0], { ok: true }), false);
+    await runtimeA.completeModalOpenRequest(requests[0], { ok: true });
+    assert.equal((await pending).ok, true);
+});
+
+test("modal activation survives old legacy consumers and does not steal live claims", async t => {
+    const home = await workDirectory("modal-activation-recovery");
+    t.after(() => cleanup(home));
+    const configPath = join(home, "config", "black-box.json");
+    await mkdir(join(home, "config"), { recursive: true });
+    await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
+    const env = { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, AFTERBURNER_SESSION_ROUTE: ROUTE_A };
+    const session = await startBlackBoxService({ mode: "session", env });
+    const runtime = await startBlackBoxService({ mode: "runtime", env });
+    t.after(() => Promise.all([session.close(), runtime.close()]));
+    const stateDirectory = join(home, "extension-data", "black-box", "state");
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(join(stateDirectory, "modal-activation.jsonl"), "", "utf8");
+    const pending = session.requestModalOpen({ timeoutMs: 5000 });
+    await delay(50);
+    assert.equal(await readFile(join(stateDirectory, "modal-activation.jsonl"), "utf8"), "");
+    const firstClaim = await runtime.consumeModalOpenRequests();
+    assert.equal(firstClaim.length, 1);
+    assert.deepEqual(await runtime.consumeModalOpenRequests(), []);
+    await delay(2100);
+    assert.deepEqual(await runtime.consumeModalOpenRequests(), []);
+    await runtime.completeModalOpenRequest(firstClaim[0], { ok: true });
+    assert.equal((await pending).ok, true);
+});
+
+test("modal activation retries partial acks and rejects stale acks", async t => {
+    const home = await workDirectory("modal-activation-ack-freshness");
     t.after(() => cleanup(home));
     const configPath = join(home, "config", "black-box.json");
     await mkdir(join(home, "config"), { recursive: true });
     await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
     const stateDirectory = join(home, "extension-data", "black-box", "state");
-    await mkdir(stateDirectory, { recursive: true });
-    await writeFile(join(stateDirectory, "modal-activation.jsonl"), JSON.stringify({
-        schemaVersion: 1,
-        requestId: "other-session-request",
-        sessionId: "previous-session",
-        surfaceId: "afterburner-black-box-live",
-        createdAt: new Date().toISOString(),
-        input: {}
-    }) + "\n", "utf8");
-    const service = await startBlackBoxService({
-        mode: "runtime",
-        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, SESSION_ID: "current-session" }
-    });
-    t.after(() => service.close());
-    assert.deepEqual(await service.consumeModalOpenRequests(), []);
+    const ackDirectory = join(stateDirectory, "modal-activation-acks");
+    const request = { schemaVersion: 2, routeId: ROUTE_A, requestId: "ackrequest", surfaceId: "afterburner-black-box-live", createdAt: new Date().toISOString() };
+    const routeAckDir = routeAckDirectory(ackDirectory, ROUTE_A);
+    await mkdir(routeAckDir, { recursive: true });
+    await writeFile(join(routeAckDir, "ackrequest.json"), "{", "utf8");
+    const pending = waitForRouteAck(ackDirectory, request, { env: { AFTERBURNER_SESSION_ROUTE: ROUTE_A }, timeoutMs: 2000 });
+    await delay(50);
+    await atomicWriteFile(join(routeAckDir, "ackrequest.json"), JSON.stringify({ schemaVersion: 2, routeId: ROUTE_A, requestId: "ackrequest", surfaceId: "afterburner-black-box-live", ok: true, completedAt: "2000-01-01T00:00:00.000Z" }) + "\n");
+    await delay(50);
+    await atomicWriteFile(join(routeAckDir, "ackrequest.json"), JSON.stringify({ schemaVersion: 2, routeId: ROUTE_A, requestId: "ackrequest", surfaceId: "afterburner-black-box-live", ok: true, completedAt: new Date().toISOString() }) + "\n");
+    assert.equal((await pending).ok, true);
 });
 
-test("preexisting modal activation requests are discarded on runtime startup", async t => {
+test("sessionless legacy modal activation requests are ignored with a trusted route", async t => {
     const home = await workDirectory("modal-activation-stale");
     t.after(() => cleanup(home));
     const configPath = join(home, "config", "black-box.json");
@@ -89,10 +144,28 @@ test("preexisting modal activation requests are discarded on runtime startup", a
     await delay(5);
     const service = await startBlackBoxService({
         mode: "runtime",
-        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, AFTERBURNER_SESSION_ROUTE: ROUTE_A }
     });
     t.after(() => service.close());
     assert.deepEqual(await service.consumeModalOpenRequests(), []);
+});
+
+test("modal activation fails closed without trusted route", async t => {
+    const home = await workDirectory("modal-activation-no-route");
+    t.after(() => cleanup(home));
+    const configPath = join(home, "config", "black-box.json");
+    await mkdir(join(home, "config"), { recursive: true });
+    await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
+    const service = await startBlackBoxService({
+        mode: "session",
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
+    });
+    t.after(() => service.close());
+    const result = await service.requestModalOpen({ timeoutMs: 25 });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "trusted-route-unavailable");
+    const stateDirectory = join(home, "extension-data", "black-box", "state");
+    await assert.rejects(readFile(join(stateDirectory, "modal-activation.jsonl"), "utf8"), /ENOENT/);
 });
 
 test("modal activation acknowledgement wakes without waiting for polling fallback", async t => {
@@ -103,7 +176,7 @@ test("modal activation acknowledgement wakes without waiting for polling fallbac
     await writeFile(configPath, JSON.stringify(completeConfig({ native: { enabled: false } })), "utf8");
     const service = await startBlackBoxService({
         mode: "session",
-        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath }
+        env: { AFTERBURNER_HOME: home, AFTERBURNER_BLACK_BOX_CONFIG: configPath, AFTERBURNER_SESSION_ROUTE: ROUTE_A }
     });
     t.after(() => service.close());
     const originalSetTimeout = globalThis.setTimeout;
@@ -112,8 +185,12 @@ test("modal activation acknowledgement wakes without waiting for polling fallbac
 
     const startedAt = Date.now();
     const pending = service.requestModalOpen({ timeoutMs: 2000 });
-    await delay(10);
-    const requests = await service.consumeModalOpenRequests();
+    const requestDeadline = Date.now() + 1000;
+    let requests = [];
+    while (requests.length === 0 && Date.now() < requestDeadline) {
+        requests = await service.consumeModalOpenRequests();
+        if (requests.length === 0) await delay(10);
+    }
     assert.equal(requests.length, 1);
     await service.completeModalOpenRequest(requests[0], { ok: true });
     assert.equal((await pending).ok, true);
@@ -194,10 +271,12 @@ async function configureRuntimeEnvironment(t, name) {
         openOnStart: process.env.AFTERBURNER_BLACK_BOX_OPEN_MODAL_ON_START,
         openSurfaceOnStart: process.env.AFTERBURNER_BLACK_BOX_OPEN_SURFACE_ON_START,
         sessionId: process.env.SESSION_ID,
-        copilotSessionId: process.env.COPILOT_AGENT_SESSION_ID
+        copilotSessionId: process.env.COPILOT_AGENT_SESSION_ID,
+        route: process.env.AFTERBURNER_SESSION_ROUTE
     };
     process.env.AFTERBURNER_HOME = home;
     process.env.AFTERBURNER_BLACK_BOX_CONFIG = configPath;
+    process.env.AFTERBURNER_SESSION_ROUTE = ROUTE_A;
     process.env.SESSION_ID = "session-one";
     delete process.env.COPILOT_AGENT_SESSION_ID;
     delete process.env.AFTERBURNER_BLACK_BOX_OPEN_MODAL_ON_START;
@@ -214,6 +293,8 @@ async function configureRuntimeEnvironment(t, name) {
         else process.env.SESSION_ID = previous.sessionId;
         if (previous.copilotSessionId === undefined) delete process.env.COPILOT_AGENT_SESSION_ID;
         else process.env.COPILOT_AGENT_SESSION_ID = previous.copilotSessionId;
+        if (previous.route === undefined) delete process.env.AFTERBURNER_SESSION_ROUTE;
+        else process.env.AFTERBURNER_SESSION_ROUTE = previous.route;
         await cleanup(home);
     });
 }

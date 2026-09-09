@@ -18,7 +18,7 @@ Inside the Copilot session, use the management command:
 /openai-server
 ```
 
-`/copilot-openai` remains as a deprecated compatibility alias for existing workflows. The command opens the interactive OpenAI Server management menu. The menu provides Start, Stop, Status, and Doctor actions and starts or reuses the localhost server when opened. The default URL is `http://127.0.0.1:41425`. Set `AFTERBURNER_OPENAI_SERVER_PORT` or create `~\.afterburner\config\openai-server.json` to choose another port. Legacy `AFTERBURNER_COPILOT_OPENAI_*` environment variables and `~\.afterburner\config\copilot-openai.json` are still honored when the canonical values are absent.
+`/copilot-openai` remains as a deprecated compatibility alias for existing workflows. The command opens the interactive OpenAI Server management menu. The menu provides Start, Stop, Status, and Doctor actions and starts or reuses the localhost server when opened. Menu activation, acknowledgements, actions, action acknowledgements, shared-port reuse, and bridge UI state require the host-issued `AFTERBURNER_SESSION_ROUTE` capability; commands without it fail closed with a local diagnostic instead of writing unscoped live IPC. The default URL is `http://127.0.0.1:41425`. Set `AFTERBURNER_OPENAI_SERVER_PORT` or create `~\.afterburner\config\openai-server.json` to choose another port. Legacy `AFTERBURNER_COPILOT_OPENAI_*` environment variables and `~\.afterburner\config\copilot-openai.json` are still honored when the canonical values are absent, but legacy unscoped modal/action/state files are ignored as live cross-session work.
 
 ## Config
 

@@ -45,4 +45,18 @@ Invoke-Checked -FilePath node -Arguments @("tests/native-signal-conpty.mjs", "ar
 Invoke-Checked -FilePath node -Arguments @("tests/native-modal-conpty.mjs", "artifacts/afterburn.exe", "artifacts/fakecopilot.exe")
 Invoke-Checked -FilePath node -Arguments @("tests/real-blackbox-modal-tui.mjs", "artifacts/afterburn.exe")
 Invoke-Checked -FilePath npm -Arguments @("run", "test:real-tui:openai-server")
+$previousRequireLive = $env:AFTERBURNER_REQUIRE_LIVE_EXTENSION_COMMANDS
+$previousRequirePackages = $env:AFTERBURNER_REQUIRE_RELEASE_PACKAGES
+try {
+    $env:AFTERBURNER_REQUIRE_LIVE_EXTENSION_COMMANDS = "1"
+    $env:AFTERBURNER_REQUIRE_RELEASE_PACKAGES = "1"
+    Invoke-Checked -FilePath node -Arguments @("tests/multi-session-extension-modal-conpty.mjs", "artifacts/afterburn.exe", "artifacts/multi-session-conpty")
+}
+finally {
+    if ($null -eq $previousRequireLive) { Remove-Item Env:AFTERBURNER_REQUIRE_LIVE_EXTENSION_COMMANDS -ErrorAction SilentlyContinue }
+    else { $env:AFTERBURNER_REQUIRE_LIVE_EXTENSION_COMMANDS = $previousRequireLive }
+    if ($null -eq $previousRequirePackages) { Remove-Item Env:AFTERBURNER_REQUIRE_RELEASE_PACKAGES -ErrorAction SilentlyContinue }
+    else { $env:AFTERBURNER_REQUIRE_RELEASE_PACKAGES = $previousRequirePackages }
+}
+Invoke-Checked -FilePath node -Arguments @("tests/multi-session-extension-modal-conpty.mjs", "artifacts/afterburn.exe", "artifacts/fakecopilot.exe", "artifacts/multi-session-conpty-fake")
 Invoke-Checked -FilePath git -Arguments @("diff", "--check")

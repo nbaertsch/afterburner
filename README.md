@@ -132,10 +132,15 @@ OpenAI Server exposes the active Copilot session through a localhost OpenAI-comp
 
 Interactive extension views use Afterburner's authenticated native terminal modal broker. Modal
 registration, documents, events, and actions remain scoped to the verified extension identity; no
-parallel browser, panel, or generic canvas host is required. Extensions declare local surface IDs
-under `ui.surfaces`, then register them through `api.ui.registerSurface`. The V1 API uses bounded,
-revisioned document snapshots with stable component IDs and native keyboard interaction for
-buttons, text fields, selections, toggles, sliders, and tabs.
+parallel browser, panel, or generic canvas host is required. Filesystem or other shared IPC used by
+session commands to ask a live runtime to open/update/ack/action a UI surface must also be scoped by
+the host-issued `AFTERBURNER_SESSION_ROUTE` capability. The route is an opaque per-launch value,
+Windows-safe for paths, redacted from user-facing diagnostics, and required on every queued request,
+acknowledgement, action, and route-owned state record; missing, stale, malformed, legacy-unscoped, or
+mismatched records fail closed and are never consumed as live cross-session work. Extensions declare
+local surface IDs under `ui.surfaces`, then register them through `api.ui.registerSurface`. The V1 API
+uses bounded, revisioned document snapshots with stable component IDs and native keyboard interaction
+for buttons, text fields, selections, toggles, sliders, and tabs.
 
 The zero-dependency author contract and TypeScript declarations are in
 [`sdk`](sdk/README.md). A complete arbitrary-extension example is in
