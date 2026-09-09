@@ -221,7 +221,19 @@ test("modal IPC routes modal opens, acknowledgements, and bridge state", async (
     const home = join(tmpdir(), `afterburner-openai-route-${process.pid}-${randomBytes(4).toString("hex")}`);
     await withRouteEnv(home, ROUTE_A, async () => {
         const pending = requestModalOpen({ timeoutMs: 2000 });
-        await new Promise(resolve => setTimeout(resolve, 50));
+        const queue = routeQueuePath(join(home, "state", "openai-server"), "modal-activation.jsonl", {
+            env: { AFTERBURNER_SESSION_ROUTE: ROUTE_A }
+        });
+        const queueDeadline = Date.now() + 2000;
+        while (true) {
+            const body = await readFile(queue, "utf8").catch(error => {
+                if (error?.code === "ENOENT") return "";
+                throw error;
+            });
+            if (body.includes('"surfaceId":"openai-server"')) break;
+            if (Date.now() >= queueDeadline) throw new Error("modal activation request was not queued");
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
         await withRouteEnv(home, ROUTE_B, async () => {
             assert.deepEqual(await consumeModalOpenRequests(), []);
         });

@@ -11,6 +11,7 @@ export const DEFAULT_LOCK_TIMEOUT_MS = 2_000;
 export const DEFAULT_ACK_SKEW_MS = 250;
 export const DEFAULT_OWNER_HEARTBEAT_MS = 500;
 export const DEFAULT_OWNER_STALE_MS = 5_000;
+export const DEFAULT_ATOMIC_RENAME_TIMEOUT_MS = 2_000;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const PROCESS_STARTED_AT = new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString();
@@ -83,7 +84,7 @@ async function fsyncDirectory(path) {
     }
 }
 
-export async function atomicWriteFile(path, data) {
+export async function atomicWriteFile(path, data, options = {}) {
     await mkdir(dirname(path), { recursive: true });
     const temporary = join(dirname(path), "." + process.pid + "-" + Date.now() + "-" + randomBytes(4).toString("hex") + ".tmp");
     const handle = await open(temporary, "wx");
@@ -93,7 +94,24 @@ export async function atomicWriteFile(path, data) {
     } finally {
         await handle.close();
     }
-    await rename(temporary, path);
+    const renameFile = options.renameFile ?? rename;
+    const deadline = Date.now() + (options.renameTimeoutMs ?? DEFAULT_ATOMIC_RENAME_TIMEOUT_MS);
+    const retryMs = options.renameRetryMs ?? 5;
+    let renamed = false;
+    try {
+        while (true) {
+            try {
+                await renameFile(temporary, path);
+                renamed = true;
+                break;
+            } catch (error) {
+                if (!["EPERM", "EACCES", "EBUSY"].includes(error?.code) || Date.now() >= deadline) throw error;
+                await sleep(retryMs);
+            }
+        }
+    } finally {
+        if (!renamed) await rm(temporary, { force: true }).catch(() => {});
+    }
     await fsyncDirectory(dirname(path));
 }
 

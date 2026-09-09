@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
@@ -59,6 +59,27 @@ test("route IPC helper copies stay identical", async () => {
   const blackBox = await readFile(new URL("../extensions/BlackBox/shared/route-ipc.mjs", import.meta.url), "utf8");
   const openAI = await readFile(new URL("../extensions/OpenAIServer/shared/route-ipc.mjs", import.meta.url), "utf8");
   assert.equal(openAI, blackBox);
+});
+
+test("atomic writes retry transient Windows rename contention", async () => {
+  const root = work("atomic-rename");
+  const path = join(root, "state.json");
+  let attempts = 0;
+  await atomicWriteFile(path, "ready\n", {
+    renameTimeoutMs: 100,
+    renameRetryMs: 1,
+    renameFile: async (source, target) => {
+      attempts++;
+      if (attempts < 3) {
+        const error = new Error("simulated Windows rename contention");
+        error.code = "EPERM";
+        throw error;
+      }
+      await rename(source, target);
+    }
+  });
+  assert.equal(attempts, 3);
+  assert.equal(await readFile(path, "utf8"), "ready\n");
 });
 
 test("stale claim and queue duplicate are emitted once while other routes survive", async () => {
