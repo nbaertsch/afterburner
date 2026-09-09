@@ -149,7 +149,9 @@ func TestBrokerFlushesLoneEscapeToModal(t *testing.T) {
 	if _, err := broker.WriteInput([]byte("\x1b")); err != nil {
 		t.Fatal(err)
 	}
-	waitUntil(t, 500*time.Millisecond, func() bool { return server.ActiveCount() == 0 })
+	waitUntil(t, 500*time.Millisecond, func() bool {
+		return server.ActiveCount() == 0 && broker.Owner() == OwnerCopilot && renderer.hidden == 1
+	})
 	if broker.Owner() != OwnerCopilot || renderer.hidden != 1 {
 		t.Fatalf("escape did not close modal: owner=%s hidden=%d active=%d", broker.Owner(), renderer.hidden, server.ActiveCount())
 	}

@@ -152,7 +152,7 @@ const prepareIsolatedEnvironment = () => {
       type: "azure",
       baseUrl: providerBaseUrl,
       wireApi: "responses",
-      requestCompatibility: { maxInputItemIdLength: 64, proxyPort: 0 }
+      requestCompatibility: { maxInputItemIdLength: 64 }
     }],
     models: [
       { provider: "colosseum-prod", id: "gpt-5-5", name: "Colosseum Prod GPT-5.5", modelId: "gpt-5.5", wireModel: "gpt-5-5" },

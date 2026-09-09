@@ -40,7 +40,7 @@ async function startBridge() {
             adapter: new CopilotSessionAdapter(session, config),
             config,
             logger: console,
-            identity: { sessionId: process.env.COPILOT_AGENT_SESSION_ID }
+            identity: { sessionId: process.env.COPILOT_AGENT_SESSION_ID, routeId: process.env.AFTERBURNER_SESSION_ROUTE }
         });
     }
     lastStart = await bridge.start();
@@ -90,8 +90,16 @@ function startActionPump() {
     actionPump = setInterval(() => { void pollBridgeActions(); }, 100);
 }
 
+function hasTrustedRoute() {
+    return /^[A-Za-z0-9_-]{32,128}$/.test(process.env.AFTERBURNER_SESSION_ROUTE ?? "");
+}
+
 async function handleMenuCommand(input = {}) {
     const invokedAs = typeof input === "string" ? input.trim() : (input?.name ?? input?.command ?? "openai-server");
+    if (!hasTrustedRoute()) {
+        await session.log("OpenAI Server native menu unavailable: trusted session route is not available in this Afterburner launch.");
+        return;
+    }
     const snapshot = await startBridge();
     await writeBridgeState(snapshot, "interactive menu open");
     const opened = await requestModalOpen({ openedFrom: invokedAs === "copilot-openai" ? "/copilot-openai" : "/openai-server" });

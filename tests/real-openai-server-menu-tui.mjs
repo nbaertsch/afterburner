@@ -64,6 +64,7 @@ const isolatedEnvironment = (extra = {}) => {
   environment.APPDATA = join(root, "appdata");
   environment.AFTERBURNER_HOME = afterburnerHome;
   environment.AFTERBURNER_NORMAL_COPILOT_HOME = normalCopilotHome;
+  environment.AFTERBURNER_ISOLATE_SESSION_STATE = "1";
   const packageRoots = discoverPackageRoots();
   if (packageRoots.length > 0) environment.AFTERBURNER_COPILOT_PACKAGE_ROOTS = packageRoots.join(delimiter);
   return { ...environment, ...extra };

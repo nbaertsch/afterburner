@@ -503,7 +503,7 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	traceStartup("home")
 	layout := baseLayout
 	cleanup := func() {}
-	if launchOptions.safeMode || len(launchOptions.disabledExtensions) > 0 {
+	if launchOptions.safeMode || len(launchOptions.disabledExtensions) > 0 || os.Getenv("AFTERBURNER_ISOLATE_SESSION_STATE") == "1" {
 		layout, cleanup, err = home.CreateLaunchHome(baseLayout)
 		if err != nil {
 			return 1, err

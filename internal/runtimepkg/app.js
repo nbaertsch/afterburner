@@ -322,6 +322,9 @@ function loadModalBrokerConfig() {
             const parsed = safeJSONParse(readFileSync(bootstrapPath, "utf8"));
             try { unlinkSync(bootstrapPath); } catch {}
             if (typeof parsed.pipe === "string" && parsed.pipe) legacyPipe = parsed.pipe;
+            if (typeof parsed.sessionRoute === "string" && /^[A-Za-z0-9_-]{32,128}$/.test(parsed.sessionRoute) && !process.env.AFTERBURNER_SESSION_ROUTE) {
+                process.env.AFTERBURNER_SESSION_ROUTE = parsed.sessionRoute;
+            }
             modalSurfaces.push(...normalizeModalBootstrapSurfaces(parsed.modalSurfaces, parsed.pipe));
             verifiedExtensions.push(...normalizeNativeIdentityAssertions(parsed.verifiedExtensions));
         } catch {}
@@ -408,6 +411,7 @@ function modalHasBroker() {
     seedModalNativeSurfaces(config);
     return [...modalNativeSurfaces.values()].some((surface) => typeof surface.pipe === "string" && surface.pipe);
 }
+
 
 function freezeModalValue(value) {
     if (value === null || typeof value !== "object") return value;
@@ -2341,6 +2345,10 @@ function runtimeExtensionApi(pluginRoot, options = {}) {
         runtime,
         pluginRoot,
         extensionId: context.extensionId,
+        sessionRoute: (() => {
+            const value = globalThis.process?.env?.AFTERBURNER_SESSION_ROUTE?.trim();
+            return typeof value === "string" && /^[A-Za-z0-9_-]{32,128}$/.test(value) ? value : undefined;
+        })(),
         ui,
         registerModelPickerAdapter,
         registerAppSourceTransform,

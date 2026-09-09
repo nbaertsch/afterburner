@@ -102,7 +102,7 @@ func TestRunDirectFallbackPreservesBytesEnvArgsAndExit(t *testing.T) {
 	if !reflect.DeepEqual(captured.Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", captured.Args, wantArgs)
 	}
-	for _, key := range []string{"AFTERBURNER_MODAL_PIPE", "AFTERBURNER_MODAL_SECRET", "AFTERBURNER_MODAL_BOOTSTRAP", "AFTERBURNER_MODAL_OWNER_EXTENSION_ID", "AFTERBURNER_MODAL_CANVAS_ID", "AFTERBURNER_MODAL_SURFACE_ID"} {
+	for _, key := range []string{"AFTERBURNER_MODAL_PIPE", "AFTERBURNER_MODAL_SECRET", "AFTERBURNER_MODAL_BOOTSTRAP", "AFTERBURNER_MODAL_OWNER_EXTENSION_ID", "AFTERBURNER_MODAL_CANVAS_ID", "AFTERBURNER_MODAL_SURFACE_ID", "AFTERBURNER_SESSION_ROUTE"} {
 		if captured.Env[key] != "" {
 			t.Fatalf("direct fallback leaked modal env: %#v", captured.Env)
 		}
@@ -161,7 +161,8 @@ func TestRunDirectProvidesNativeIdentityAssertionsWithoutModalTransport(t *testi
 	var captured struct {
 		Env             map[string]string `json:"env"`
 		NativeBootstrap struct {
-			ModalSurfaces      []any `json:"modalSurfaces"`
+			SessionRoute       string `json:"sessionRoute"`
+			ModalSurfaces      []any  `json:"modalSurfaces"`
 			VerifiedExtensions []struct {
 				ExtensionID    string `json:"extensionId"`
 				ActivePath     string `json:"activePath"`
@@ -178,6 +179,9 @@ func TestRunDirectProvidesNativeIdentityAssertionsWithoutModalTransport(t *testi
 	}
 	if captured.Env["AFTERBURNER_MODAL_BOOTSTRAP"] != "" || captured.Env["AFTERBURNER_MODAL_PIPE"] != "" {
 		t.Fatalf("direct mode exposed modal transport: %#v", captured.Env)
+	}
+	if captured.Env["AFTERBURNER_SESSION_ROUTE"] == "" || captured.Env["AFTERBURNER_SESSION_ROUTE"] != captured.NativeBootstrap.SessionRoute {
+		t.Fatalf("direct mode did not expose the host-issued session route: %#v", captured.Env)
 	}
 	if captured.Env["AFTERBURNER_NATIVE_BOOTSTRAP"] == "" || len(captured.NativeBootstrap.VerifiedExtensions) != 1 {
 		t.Fatalf("direct mode did not provide native identity assertion: %#v", captured)
@@ -241,6 +245,9 @@ func TestWriteNativeBootstrapContainsOnlyPreissuedSurfaces(t *testing.T) {
 	}
 	if payload["pipe"] != nil || payload["registrationToken"] != nil || payload["token"] != nil || payload["modalCapabilities"] != nil {
 		t.Fatalf("bootstrap payload leaked global transport or registration authority: %#v", payload)
+	}
+	if route, ok := payload["sessionRoute"].(string); !ok || len(route) < 32 || strings.ContainsAny(route, `\\/:*?"<>|`) {
+		t.Fatalf("bootstrap did not contain a Windows-safe session route: %#v", payload["sessionRoute"])
 	}
 	got, ok := payload["modalSurfaces"].([]any)
 	if !ok || len(got) != 1 {
@@ -549,6 +556,7 @@ func TestHelperProcess(t *testing.T) {
 			"AFTERBURNER_MODAL_OWNER_EXTENSION_ID": os.Getenv("AFTERBURNER_MODAL_OWNER_EXTENSION_ID"),
 			"AFTERBURNER_MODAL_CANVAS_ID":          os.Getenv("AFTERBURNER_MODAL_CANVAS_ID"),
 			"AFTERBURNER_MODAL_SURFACE_ID":         os.Getenv("AFTERBURNER_MODAL_SURFACE_ID"),
+			"AFTERBURNER_SESSION_ROUTE":            os.Getenv("AFTERBURNER_SESSION_ROUTE"),
 		},
 		NativeBootstrap: nativeBootstrap,
 	})
@@ -595,7 +603,8 @@ func withoutModalEnv(env []string) []string {
 	result := make([]string, 0, len(env))
 	for _, entry := range env {
 		name, _, ok := strings.Cut(entry, "=")
-		if ok && strings.HasPrefix(strings.ToUpper(name), "AFTERBURNER_MODAL_") {
+		upper := strings.ToUpper(name)
+		if ok && (strings.HasPrefix(upper, "AFTERBURNER_MODAL_") || upper == "AFTERBURNER_SESSION_ROUTE") {
 			continue
 		}
 		result = append(result, entry)

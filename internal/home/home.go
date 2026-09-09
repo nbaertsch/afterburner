@@ -166,6 +166,12 @@ func copyMissingFile(source, target string) error {
 func linkSessions(layout Layout) error {
 	source := filepath.Join(layout.NormalCopilotHome, "session-state")
 	target := filepath.Join(layout.CopilotHome, "session-state")
+	if os.Getenv("AFTERBURNER_ISOLATE_SESSION_STATE") == "1" {
+		if err := os.MkdirAll(target, 0o700); err != nil {
+			return fmt.Errorf("create isolated managed session state: %w", err)
+		}
+		return nil
+	}
 	if _, err := os.Stat(source); os.IsNotExist(err) {
 		return nil
 	} else if err != nil {

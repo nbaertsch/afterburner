@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { watch } from "node:fs";
-import { mkdir, open, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, open, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { appendRouteRecord, claimRouteRecords, cleanupRouteArtifacts, requireTrustedRoute, routeQueuePath, waitForRouteAck, writeRouteAck } from "../shared/route-ipc.mjs";
 import { TimelineAnalytics } from "./analytics.mjs";
 import { loadBlackBoxConfig, resolveDataRoot, resolveNativeEventsPath } from "./config.mjs";
 import { exportSanitizedBundle } from "./export.mjs";
@@ -64,6 +65,7 @@ async function waitForFileChange(directory, file, timeoutMs) {
                 if (!filename || String(filename) === file) finish();
             });
             watcher.unref?.();
+            void stat(join(watchDirectory, file)).then(finish, () => {});
         } catch {
             finish();
         }
@@ -99,10 +101,9 @@ export async function startBlackBoxService(options = {}) {
     const root = options.root ?? resolveDataRoot(env);
     const mode = options.mode ?? "session";
     const processId = options.processId ?? process.pid;
-    const serviceStartedAt = Date.now();
     const runId = options.runId ?? randomBytes(6).toString("hex");
     const configuredSessionId = env.SESSION_ID ?? env.COPILOT_AGENT_SESSION_ID;
-    const activationSessionId = configuredSessionId || "";
+    const activationRouteId = (() => { try { return requireTrustedRoute(env); } catch { return ""; } })();
     const runtimeSessionScope = new Set([configuredSessionId, opaqueSessionId(configuredSessionId)].filter(Boolean));
     const salt = options.salt ?? await loadOrCreateSalt(root);
     const reference = createReferenceFactory(salt);
@@ -211,8 +212,10 @@ export async function startBlackBoxService(options = {}) {
     }
 
     const activationStateDirectory = join(root, "state");
-    const activationPath = join(activationStateDirectory, "modal-activation.jsonl");
+    await cleanupRouteArtifacts(activationStateDirectory, { maxAgeMs: config.queue.maxRecordAgeMs ?? 86_400_000 }).catch(() => {});
     const activationAckDirectory = join(activationStateDirectory, "modal-activation-acks");
+    const activationPath = () => routeQueuePath(activationStateDirectory, "modal-activation.jsonl", { env });
+    const activationClaimDirectory = () => `${activationPath()}.claimed`;
     const service = {
         root,
         config,
@@ -284,68 +287,42 @@ export async function startBlackBoxService(options = {}) {
             return store.readRecent(limit, record => !kinds || kinds.has(record.kind));
         },
         async modalActivationWatch() {
-            await mkdir(activationStateDirectory, { recursive: true });
-            let directory = activationStateDirectory;
-            try { directory = await realpath(activationStateDirectory); } catch {}
+            const path = activationPath();
+            await mkdir(dirname(path), { recursive: true });
+            let directory = dirname(path);
+            try { directory = await realpath(directory); } catch {}
             return { directory, file: "modal-activation.jsonl" };
         },
         async requestModalOpen(input = {}) {
-            await mkdir(activationAckDirectory, { recursive: true });
-            const request = {
-                schemaVersion: 1,
-                requestId: randomBytes(12).toString("hex"),
-                ...(activationSessionId ? { sessionId: activationSessionId } : {}),
-                surfaceId: String(input.surfaceId ?? "afterburner-black-box-live"),
-                createdAt: new Date().toISOString(),
-                input: input.input && typeof input.input === "object" ? input.input : {}
-            };
-            await writeFile(activationPath, `${JSON.stringify(request)}\n`, { flag: "a" });
-            const ackFile = `${request.requestId}.json`;
-            const ackPath = join(activationAckDirectory, ackFile);
-            const deadline = Date.now() + safeLimit(input.timeoutMs, 3000, 10000);
-            while (Date.now() < deadline) {
-                try {
-                    const ack = JSON.parse(await readFile(ackPath, "utf8"));
-                    try { await unlink(ackPath); } catch {}
-                    return { ok: ack.ok === true, requestId: request.requestId, surfaceId: request.surfaceId, error: ack.error };
-                } catch (error) {
-                    if (error?.code !== "ENOENT") return { ok: false, requestId: request.requestId, surfaceId: request.surfaceId, error: "modal-activation-ack-invalid" };
-                }
-                await waitForFileChange(activationAckDirectory, ackFile, Math.min(100, Math.max(1, deadline - Date.now())));
+            if (!activationRouteId) {
+                return { ok: false, requestId: "", surfaceId: String(input.surfaceId ?? "afterburner-black-box-live"), error: "trusted-route-unavailable" };
             }
-            return { ok: false, requestId: request.requestId, surfaceId: request.surfaceId, error: "modal-activation-timeout" };
+            await mkdir(activationAckDirectory, { recursive: true });
+            const request = await appendRouteRecord(activationPath(), {
+                requestId: randomBytes(12).toString("hex"),
+                sessionId: configuredSessionId,
+                surfaceId: String(input.surfaceId ?? "afterburner-black-box-live"),
+                input: input.input && typeof input.input === "object" ? input.input : {}
+            }, { env });
+            const ack = await waitForRouteAck(activationAckDirectory, request, {
+                env,
+                timeoutMs: safeLimit(input.timeoutMs, 3000, 10000),
+                waitForChange: waitForFileChange
+            });
+            return { ok: ack.ok === true, requestId: request.requestId, surfaceId: request.surfaceId, error: ack.error };
         },
         async consumeModalOpenRequests() {
-            let body = "";
-            try { body = await readFile(activationPath, "utf8"); }
-            catch (error) {
-                if (error?.code === "ENOENT") return [];
-                throw error;
-            }
-            try { await unlink(activationPath); } catch {}
-            const now = Date.now();
-            return body.split(/\r?\n/).filter(Boolean).map(line => {
-                try { return JSON.parse(line); }
-                catch { return null; }
-            }).filter(request => {
-                if (request?.schemaVersion !== 1 || typeof request.surfaceId !== "string" || typeof request.requestId !== "string") return false;
-                if (activationSessionId && typeof request.sessionId === "string" && request.sessionId !== activationSessionId) return false;
-                const createdAt = Date.parse(request.createdAt ?? "");
-                return Number.isFinite(createdAt) && createdAt >= serviceStartedAt && now - createdAt <= MODAL_ACTIVATION_MAX_AGE_MS;
+            if (!activationRouteId) return [];
+            return claimRouteRecords(activationPath(), {
+                env,
+                claimDirectory: activationClaimDirectory(),
+                maxRecordAgeMs: MODAL_ACTIVATION_MAX_AGE_MS,
+                predicate: request => request.surfaceId === "afterburner-black-box-live"
             });
         },
         async completeModalOpenRequest(request, result = {}) {
-            if (!request?.requestId) return false;
-            await mkdir(activationAckDirectory, { recursive: true });
-            const ack = {
-                schemaVersion: 1,
-                requestId: request.requestId,
-                ok: result.ok === true,
-                error: result.error ? String(result.error).slice(0, 160) : undefined,
-                completedAt: new Date().toISOString()
-            };
-            await writeFile(join(activationAckDirectory, `${request.requestId}.json`), JSON.stringify(ack), "utf8");
-            return true;
+            if (!activationRouteId || !request?.requestId) return false;
+            return writeRouteAck(activationAckDirectory, request, result, { env, claimDirectory: activationClaimDirectory() });
         },
         async exportBundle(input = {}) {
             await store.flush();

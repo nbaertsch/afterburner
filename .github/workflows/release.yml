@@ -127,6 +127,9 @@ jobs:
             "$($builtin.sha256)  $($builtin.name)"
           }
           $checksums | Set-Content artifacts/checksums.txt -Encoding ascii
+          $env:GOOS = "windows"
+          $env:GOARCH = "amd64"
+          go build -trimpath -o artifacts/fakecopilot.exe ./internal/testutil/fakecopilot
           Remove-Item Env:GOOS -ErrorAction SilentlyContinue
           Remove-Item Env:GOARCH -ErrorAction SilentlyContinue
           $compatibility = go run ./internal/releaseinfo | ConvertFrom-Json
@@ -141,6 +144,17 @@ jobs:
             builtins = @($releaseBuiltins)
             compatibility = $compatibility
           } | ConvertTo-Json -Depth 6 | Set-Content artifacts/release-manifest.json -Encoding utf8
+
+      - name: Verify live multi-session extension modal isolation
+        shell: pwsh
+        env:
+          AFTERBURNER_REQUIRE_LIVE_EXTENSION_COMMANDS: "1"
+          AFTERBURNER_REQUIRE_RELEASE_PACKAGES: "1"
+        run: node tests/multi-session-extension-modal-conpty.mjs artifacts/afterburn-windows-amd64/afterburn.exe artifacts/multi-session-conpty
+
+      - name: Verify supplemental fake Copilot native modal isolation
+        shell: pwsh
+        run: node tests/multi-session-extension-modal-conpty.mjs artifacts/afterburn-windows-amd64/afterburn.exe artifacts/fakecopilot.exe artifacts/multi-session-conpty-fake
 
       - uses: actions/upload-artifact@v4
         with:

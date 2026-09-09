@@ -61,7 +61,8 @@ packageManifest.visibility = "private";
 writeFileSync(packageManifestPath, `${JSON.stringify(packageManifest, null, 2)}\n`, "utf8");
 const testEnvironment = {
   ...process.env,
-  AFTERBURNER_HOME: isolatedAfterburnerHome
+  AFTERBURNER_HOME: isolatedAfterburnerHome,
+  AFTERBURNER_ISOLATE_SESSION_STATE: "1"
 };
 const packResult = spawnSync(afterburn, ["extension", "pack", packageSource, packageArchive], {
   cwd: process.cwd(),
@@ -136,6 +137,7 @@ const env = {
   ...process.env,
   COPILOT_RUNTIME_EXTENSION_DEBUG: "1",
   AFTERBURNER_HOME: isolatedAfterburnerHome,
+  AFTERBURNER_ISOLATE_SESSION_STATE: "1",
   AFTERBURNER_SKIP_PREFLIGHT: "1"
 };
 delete env.COPILOT_AGENT_SESSION_ID;

@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { CANONICAL_HEALTH_MARKER, CANONICAL_HEALTH_PATH, CANONICAL_ID, LEGACY_HEALTH_MARKER, LEGACY_HEALTH_PATH, LEGACY_ID } from "./names.mjs";
 
 export const bridgeProtocolVersion = 1;
@@ -182,7 +182,9 @@ export function createBridge({ adapter, config = {}, logger = undefined, identit
             identity: {
                 extensionId: legacy ? LEGACY_ID : CANONICAL_ID,
                 canonicalExtensionId: CANONICAL_ID,
-                sessionId: identity.sessionId ? hashPublic(identity.sessionId) : null
+                sessionId: identity.sessionId ? hashPublic(identity.sessionId) : null,
+                routeFingerprint: identity.routeId ? hashPublic(identity.routeId) : null,
+                routeProof: identity.routeId ? routeProof(identity.routeId, legacy ? LEGACY_HEALTH_MARKER : CANONICAL_HEALTH_MARKER) : null
             }
         };
     }
@@ -210,7 +212,12 @@ export function createBridge({ adapter, config = {}, logger = undefined, identit
             } catch (error) {
                 server = undefined;
                 if (error?.code !== "EADDRINUSE" || effective.port === 0) throw error;
-                const shared = await verifySharedBridge(effective.host, effective.port);
+                const shared = await verifySharedBridge(
+                    effective.host,
+                    effective.port,
+                    identity.routeId,
+                    effective.requireApiKey ? effective.apiKey : undefined
+                );
                 if (!shared) throw error;
                 state.port = effective.port;
                 state.url = `http://${effective.host}:${effective.port}`;
@@ -237,13 +244,17 @@ export function createBridge({ adapter, config = {}, logger = undefined, identit
     };
 }
 
-async function verifySharedBridge(host, port) {
+async function verifySharedBridge(host, port, routeId, apiKey = undefined) {
+    if (!routeId) return undefined;
     for (const [path, marker] of [[CANONICAL_HEALTH_PATH, CANONICAL_HEALTH_MARKER], [LEGACY_HEALTH_PATH, LEGACY_HEALTH_MARKER]]) {
         try {
-            const response = await fetch(`http://${host}:${port}${path}`, { signal: AbortSignal.timeout(2000) });
+            const response = await fetch(`http://${host}:${port}${path}`, {
+                headers: apiKey ? { authorization: `Bearer ${apiKey}` } : undefined,
+                signal: AbortSignal.timeout(2000)
+            });
             if (!response.ok) continue;
             const body = await response.json();
-            if (body?.marker === marker && body?.protocolVersion === bridgeProtocolVersion) return body;
+            if (body?.marker === marker && body?.protocolVersion === bridgeProtocolVersion && body?.identity?.routeProof === routeProof(routeId, marker)) return body;
         } catch {}
     }
     return undefined;
@@ -348,4 +359,8 @@ function hashPublic(value) {
     let hash = 0;
     for (const char of String(value)) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
     return `session-${Math.abs(hash).toString(36)}`;
+}
+
+function routeProof(routeId, marker) {
+    return createHmac("sha256", String(routeId)).update(`${bridgeProtocolVersion}:${CANONICAL_ID}:${marker}`).digest("base64url");
 }
