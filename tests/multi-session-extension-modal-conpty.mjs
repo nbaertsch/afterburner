@@ -301,7 +301,19 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
       await waitFor(() => stripAnsi(b.raw).includes(`passive-${name}-before`), `${name} passive responsiveness before`, 10_000);
       send(b, "\x15", "clear passive input before");
       const command = `/${name === "blackbox" ? "black-box-modal" : "openai-server"}`;
-      send(a, `\x15${command}\r`, `open ${name} modal in A`);
+      const commandDescription = name === "blackbox"
+        ? /Open the registered Black Box live modal/i
+        : /Open the interactive OpenAI Server management menu/i;
+      let lastCommandProbe = 0;
+      await waitFor(() => {
+        if (commandDescription.test(stripAnsi(a.raw))) return true;
+        if (Date.now() - lastCommandProbe >= 2_000) {
+          send(a, `\x15${command}`, `probe ${name} command registration in A`);
+          lastCommandProbe = Date.now();
+        }
+        return false;
+      }, `${name} command registration`, 60_000);
+      send(a, "\r", `open ${name} modal in A`);
       await waitFor(() => activePattern.test(stripAnsi(a.raw)), `${name} modal in A`, 45_000);
       await waitFor(async () => {
         const entries = await readAuditEntries();
@@ -352,7 +364,7 @@ try {
   allSessions.push(...sessions);
   await terminateSessions(sessions);
   sessions = [];
-  const openai = await runPair("openai", maybeFake ? { AFTERBURNER_TEST_MODAL: "1", AFTERBURNER_TEST_MODAL_TITLE: "OpenAI Server", AFTERBURNER_TEST_MODAL_ACTIONS: "1" } : {}, /OpenAI Server/i, /OpenAI Server/i, "r", /status refreshed|OpenAI server listening|OpenAI server is not running|requests=/i);
+  const openai = await runPair("openai", maybeFake ? { AFTERBURNER_TEST_MODAL: "1", AFTERBURNER_TEST_MODAL_TITLE: "OpenAI Server", AFTERBURNER_TEST_MODAL_ACTIONS: "1" } : {}, /OpenAI Server/i, /OpenAI Server/i, maybeFake ? "r" : ["\t", "\t", "\r"], /status refreshed|OpenAI server listening|OpenAI server is not running|requests=/i);
   sessions.push(openai.a, openai.b);
   allSessions.push(...sessions);
   assertNoSessionPersistenceErrors(allSessions);
