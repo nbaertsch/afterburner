@@ -50,7 +50,10 @@ jobs:
 
       - run: npm ci
       - name: Install supported Copilot CLI
-        run: npm install --global @github/copilot@1.0.83-3 --no-audit --no-fund
+        shell: pwsh
+        run: |
+          npm install --global @github/copilot@1.0.83-3 --no-audit --no-fund
+          copilot --version
       - run: npm run check:runtime
       - run: git diff --exit-code -- src internal/runtimepkg/app.js internal/runtimepkg/runtime
       - run: go test ./...
