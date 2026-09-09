@@ -22,7 +22,7 @@ func TestDiscoverAndSelect(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	found, err := Discover(DiscoveryOptions{AdditionalRoots: []string{root}})
+	found, err := Discover(DiscoveryOptions{AdditionalRoots: []string{root}, OnlyAdditionalRoots: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nbaertsch/afterburner/internal/home"
 	"github.com/nbaertsch/afterburner/internal/registry"
@@ -31,7 +32,10 @@ func TestBuiltinLifecyclePreservesUserData(t *testing.T) {
 		}
 	}
 
-	manager := Manager{Layout: layout, Stdout: os.Stdout}
+	manager := Manager{
+		Layout: layout, Stdout: os.Stdout,
+		BuiltinFetcher: repositoryBuiltinFetcher("byo-models", "black-box"),
+	}
 	if err := manager.InstallBuiltins([]string{"byo-models", "black-box"}); err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +80,7 @@ func TestLocalUpdateAndRollbackPreserveEnablement(t *testing.T) {
 		Config:      filepath.Join(root, "home", "config"),
 		Extensions:  filepath.Join(root, "home", "extensions"),
 	}
+
 	if err := os.MkdirAll(source, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -113,19 +118,143 @@ func TestLocalUpdateAndRollbackPreserveEnablement(t *testing.T) {
 	}
 }
 
+func TestRollbackRejectsTamperedPreviousPackage(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	layout := home.Layout{
+		Root:        filepath.Join(root, "home"),
+		CopilotHome: filepath.Join(root, "home", "copilot-home"),
+		Config:      filepath.Join(root, "home", "config"),
+		Extensions:  filepath.Join(root, "home", "extensions"),
+	}
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExtensionFixture(t, source, "one")
+	manager := Manager{Layout: layout, Stdout: io.Discard}
+	if err := manager.Install(source); err != nil {
+		t.Fatal(err)
+	}
+	writeExtensionFixture(t, source, "two")
+	if err := manager.Update("fixture"); err != nil {
+		t.Fatal(err)
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := value.Extensions["fixture"].PreviousPackage
+	if previous == nil {
+		t.Fatal("update did not retain a verified rollback package")
+	}
+	if err := os.WriteFile(filepath.Join(previous.ActivePath, "runtime.mjs"), []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Rollback("fixture"); err == nil ||
+		!strings.Contains(err.Error(), "changed after installation") {
+		t.Fatalf("tampered rollback error = %v", err)
+	}
+}
+
+func TestCompatibilityEnforcedOnInstallAndEnable(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	layout := home.Layout{
+		Root:        filepath.Join(root, "home"),
+		CopilotHome: filepath.Join(root, "home", "copilot-home"),
+		Config:      filepath.Join(root, "home", "config"),
+		Extensions:  filepath.Join(root, "home", "extensions"),
+	}
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExtensionFixture(t, source, "one")
+	incompatible := Manager{Layout: layout, Stdout: io.Discard, CoreVersion: "1.0.0"}
+	if err := incompatible.Install(source); err == nil || !strings.Contains(err.Error(), "Afterburner") {
+		t.Fatalf("incompatible install error = %v", err)
+	}
+	compatible := Manager{Layout: layout, Stdout: io.Discard, CoreVersion: "0.2.106"}
+	if err := compatible.Install(source); err != nil {
+		t.Fatal(err)
+	}
+	incompatible.CopilotVersion = "1.0.0"
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := value.Extensions["fixture"]
+	entry.Manifest.Requires.CopilotCLI = []string{">=2.0.0"}
+	entry, err = registry.SealEntry(layout.Root, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Extensions["fixture"] = entry
+	if err := registry.Save(layout.Root, value); err != nil {
+		t.Fatal(err)
+	}
+	incompatible.CoreVersion = "0.2.106"
+	if err := incompatible.SetEnabled("fixture", true); err == nil ||
+		!strings.Contains(err.Error(), "Copilot CLI") {
+		t.Fatalf("incompatible enable error = %v", err)
+	}
+}
+
+func TestPrunePackageCachePreservesActiveAndRollbackPackages(t *testing.T) {
+	root := t.TempDir()
+	layout := home.Layout{Extensions: filepath.Join(root, "extensions")}
+	extensionRoot := filepath.Join(layout.Extensions, "fixture")
+	active := filepath.Join(extensionRoot, "active")
+	previous := filepath.Join(extensionRoot, "previous")
+	orphan := filepath.Join(extensionRoot, "orphan")
+	for _, path := range []string{active, previous, orphan} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	for _, path := range []string{active, previous, orphan} {
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	value := registry.Registry{Extensions: map[string]registry.Entry{
+		"fixture": {
+			ActivePath: active,
+			PreviousPackage: &registry.PackageReference{
+				ActivePath: previous,
+			},
+		},
+	}}
+	if err := prunePackageCache(layout, value, time.Now().Add(-24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{active, previous} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("retained package %s: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphan package still exists: %v", err)
+	}
+}
+
 func TestReinstallRejectsTamperedManagedPackage(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
 	layout := home.Layout{
-		Root:       filepath.Join(root, "home"),
-		Config:     filepath.Join(root, "home", "config"),
-		Extensions: filepath.Join(root, "home", "extensions"),
+		Root:        filepath.Join(root, "home"),
+		CopilotHome: filepath.Join(root, "home", "copilot-home"),
+		Config:      filepath.Join(root, "home", "config"),
+		Extensions:  filepath.Join(root, "home", "extensions"),
 	}
 	if err := os.MkdirAll(source, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeExtensionFixture(t, source, "original")
-	manager := Manager{Layout: layout, Stdout: io.Discard}
+	manager := Manager{
+		Layout: layout, Stdout: io.Discard,
+		BuiltinFetcher: repositoryBuiltinFetcher(registry.OpenAIServerID),
+	}
 	if err := manager.Install(source); err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +399,10 @@ func TestGenericInstallRejectsBuiltinVisibilitySpoof(t *testing.T) {
 	}
 	writeBuiltinFixture(t, source, "spoof", "one")
 	layout := home.Layout{Root: filepath.Join(root, "home"), CopilotHome: filepath.Join(root, "home", "copilot-home"), Config: filepath.Join(root, "home", "config"), Extensions: filepath.Join(root, "home", "extensions"), Staging: filepath.Join(root, "home", "staging")}
-	manager := Manager{Layout: layout, Stdout: io.Discard}
+	manager := Manager{
+		Layout: layout, Stdout: io.Discard,
+		BuiltinFetcher: repositoryBuiltinFetcher("black-box"),
+	}
 	if err := manager.Install(source); err == nil {
 		t.Fatal("expected local extension declaring builtin visibility to be rejected")
 	}
@@ -496,13 +628,8 @@ func writeBuiltinFixture(t *testing.T, root, id, marker string) {
 	}
 }
 
-func TestInstallBuiltinsRejectsUnverifiedDevelopmentSourceOverride(t *testing.T) {
+func TestInstallBuiltinsRequiresSignedReleaseSource(t *testing.T) {
 	root := t.TempDir()
-	source := filepath.Join(root, "override-source")
-	if err := os.MkdirAll(source, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeBuiltinFixture(t, source, "black-box", "one")
 	layout := home.Layout{
 		Root:            filepath.Join(root, "home"),
 		CopilotHome:     filepath.Join(root, "home", "copilot-home"),
@@ -517,26 +644,20 @@ func TestInstallBuiltinsRejectsUnverifiedDevelopmentSourceOverride(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	t.Setenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE", "black-box="+source)
 	manager := Manager{Layout: layout, Stdout: os.Stdout}
-	if err := manager.InstallBuiltins([]string{"black-box"}); err == nil {
-		t.Fatal("expected unverified development source override to be rejected for built-in trust")
-	}
-	value, err := registry.Load(layout.Root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := value.Extensions["black-box"]; ok {
-		t.Fatal("unverified development override was persisted as a built-in")
+	if err := manager.InstallBuiltins([]string{"black-box"}); err == nil ||
+		!strings.Contains(err.Error(), "requires a signed release source") {
+		t.Fatalf("missing source error = %v", err)
 	}
 }
 
-func TestInstallBuiltinsRejectsMismatchedSourceOverride(t *testing.T) {
+func TestInstallBuiltinsRejectsMismatchedFetchedManifest(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "override-source")
 	if err := os.MkdirAll(source, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	writeBuiltinFixture(t, source, "not-black-box", "one")
 	layout := home.Layout{
 		Root:        filepath.Join(root, "home"),
@@ -545,10 +666,12 @@ func TestInstallBuiltinsRejectsMismatchedSourceOverride(t *testing.T) {
 		Extensions:  filepath.Join(root, "home", "extensions"),
 		Staging:     filepath.Join(root, "home", "staging"),
 	}
-	t.Setenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE", "black-box="+source)
-	manager := Manager{Layout: layout, Stdout: os.Stdout}
+	manager := Manager{
+		Layout: layout, Stdout: os.Stdout,
+		BuiltinFetcher: fakeBuiltinFetcher{paths: map[string]string{"black-box": source}},
+	}
 	if err := manager.InstallBuiltins([]string{"black-box"}); err == nil {
-		t.Fatal("expected an error for a mismatched override manifest identity")
+		t.Fatal("expected an error for a mismatched fetched manifest identity")
 	}
 }
 
@@ -559,14 +682,39 @@ type fakeBuiltinFetcher struct {
 	errs  map[string]error
 }
 
-func (fetcher fakeBuiltinFetcher) FetchBuiltin(id string) (string, func(), error) {
+func (fetcher fakeBuiltinFetcher) FetchBuiltin(id string) (FetchedBuiltin, error) {
 	if err, ok := fetcher.errs[id]; ok {
-		return "", nil, err
+		return FetchedBuiltin{}, err
 	}
-	return fetcher.paths[id], func() {}, nil
+	return FetchedBuiltin{
+		Path: fetcher.paths[id],
+		Source: registry.Source{
+			Type:              "signed-release",
+			Value:             id,
+			Version:           "v1.0.0",
+			Commit:            strings.Repeat("a", 40),
+			Digest:            "sha256:" + strings.Repeat("b", 64),
+			ManifestDigest:    "sha256:" + strings.Repeat("c", 64),
+			SignerFingerprint: "sha256:" + strings.Repeat("d", 64),
+		},
+		Cleanup: func() {},
+	}, nil
 }
 
-func TestInstallBuiltinsPrefersFetcherOverEmbedded(t *testing.T) {
+func repositoryBuiltinFetcher(ids ...string) fakeBuiltinFetcher {
+	directories := map[string]string{
+		"black-box":     "BlackBox",
+		"byo-models":    "BYOModels",
+		"openai-server": "OpenAIServer",
+	}
+	paths := make(map[string]string, len(ids))
+	for _, id := range ids {
+		paths[id] = filepath.Join("..", "..", "extensions", directories[id])
+	}
+	return fakeBuiltinFetcher{paths: paths}
+}
+
+func TestInstallBuiltinsUsesSignedReleaseFetcher(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "fetched-source")
 	if err := os.MkdirAll(source, 0o755); err != nil {
@@ -607,11 +755,11 @@ func TestInstallBuiltinsPrefersFetcherOverEmbedded(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(content), "fetched") {
-		t.Fatalf("installed content = %q, expected fetched source to win over embedded", content)
+		t.Fatalf("installed content = %q, expected fetched source", content)
 	}
 }
 
-func TestInstallBuiltinsFallsBackToEmbeddedWhenFetcherFails(t *testing.T) {
+func TestInstallBuiltinsFailsClosedWhenFetcherFails(t *testing.T) {
 	root := t.TempDir()
 	layout := home.Layout{
 		Root:            filepath.Join(root, "home"),
@@ -622,6 +770,7 @@ func TestInstallBuiltinsFallsBackToEmbeddedWhenFetcherFails(t *testing.T) {
 		Staging:         filepath.Join(root, "home", "staging"),
 		BYOModelsConfig: filepath.Join(root, "home", "config", "byomodels.json"),
 	}
+
 	for _, path := range []string{layout.CopilotHome, layout.Config, layout.ExtensionData, layout.Extensions} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatal(err)
@@ -631,16 +780,9 @@ func TestInstallBuiltinsFallsBackToEmbeddedWhenFetcherFails(t *testing.T) {
 		Layout: layout, Stdout: os.Stdout,
 		BuiltinFetcher: fakeBuiltinFetcher{errs: map[string]error{"black-box": fmt.Errorf("network unavailable")}},
 	}
-	if err := manager.InstallBuiltins([]string{"black-box"}); err != nil {
-		t.Fatalf("expected fallback to the embedded built-in, got error: %v", err)
-	}
-	value, err := registry.Load(layout.Root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry := value.Extensions["black-box"]
-	if entry.Source.Type != "embedded" || !entry.Enabled || !entry.Identity.BuiltinSigned {
-		t.Fatalf("fallback entry = %#v", entry)
+	if err := manager.InstallBuiltins([]string{"black-box"}); err == nil ||
+		!strings.Contains(err.Error(), "network unavailable") {
+		t.Fatalf("fetch failure = %v", err)
 	}
 }
 
@@ -648,10 +790,14 @@ func TestUpdateAllReportsBuiltinLockstepWithoutFetcher(t *testing.T) {
 	root := t.TempDir()
 	layout := home.Layout{Root: filepath.Join(root, "home"), CopilotHome: filepath.Join(root, "home", "copilot-home"), Config: filepath.Join(root, "home", "config"), ExtensionData: filepath.Join(root, "home", "extension-data"), Extensions: filepath.Join(root, "home", "extensions"), Staging: filepath.Join(root, "home", "staging")}
 	var out strings.Builder
-	manager := Manager{Layout: layout, Stdout: &out}
+	manager := Manager{
+		Layout: layout, Stdout: &out,
+		BuiltinFetcher: repositoryBuiltinFetcher("black-box"),
+	}
 	if err := manager.InstallBuiltins([]string{"black-box"}); err != nil {
 		t.Fatal(err)
 	}
+	manager.BuiltinFetcher = nil
 	out.Reset()
 	if err := manager.UpdateAll(); err != nil {
 		t.Fatal(err)
@@ -667,9 +813,18 @@ func TestSyncBuiltinsRequiresPinnedFetcherAndPreservesLockstep(t *testing.T) {
 	if err := os.MkdirAll(newSource, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	writeBuiltinFixture(t, newSource, "black-box", "new")
 	layout := home.Layout{Root: filepath.Join(root, "home"), CopilotHome: filepath.Join(root, "home", "copilot-home"), Config: filepath.Join(root, "home", "config"), ExtensionData: filepath.Join(root, "home", "extension-data"), Extensions: filepath.Join(root, "home", "extensions"), Staging: filepath.Join(root, "home", "staging")}
-	manager := Manager{Layout: layout, Stdout: io.Discard}
+	oldSource := filepath.Join(root, "old")
+	if err := os.MkdirAll(oldSource, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeBuiltinFixture(t, oldSource, "black-box", "old")
+	manager := Manager{
+		Layout: layout, Stdout: io.Discard,
+		BuiltinFetcher: fakeBuiltinFetcher{paths: map[string]string{"black-box": oldSource}},
+	}
 	if err := manager.InstallBuiltins([]string{"black-box"}); err != nil {
 		t.Fatal(err)
 	}
@@ -735,12 +890,29 @@ func TestOpenAIServerBuiltinInstallsDisabledByDefaultAndMigratesLegacy(t *testin
 		t.Fatal("openai-server should install disabled by default")
 	}
 
-	legacy := value.Extensions[registry.OpenAIServerID]
-	legacy.Enabled = true
-	legacy.ActivePath = legacyActive
-	legacy.Manifest.ID = registry.LegacyOpenAIServerID
-	legacy.Manifest.DisplayName = "Copilot OpenAI Bridge"
-	legacy.Source = registry.Source{Type: "path", Value: legacyActive}
+	legacyManifestValue, err := readManifestWithCanonicalID(legacyActive, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyManifestHash, legacyTreeHash, err := registry.VerifyActivePackage(registry.Entry{ActivePath: legacyActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySource := registry.Source{Type: "path", Value: legacyActive, Version: "legacy"}
+	legacy := registry.Entry{
+		Enabled:    true,
+		ActivePath: legacyActive,
+		Manifest:   legacyManifestValue,
+		Source:     legacySource,
+		UpdatedAt:  "2026-01-01T00:00:00Z",
+	}
+	legacy.Identity = identityBinding(legacy.Manifest, legacy.Source,
+		strings.TrimPrefix(legacyManifestHash, "sha256:"),
+		strings.TrimPrefix(legacyTreeHash, "sha256:"), 1, legacy.UpdatedAt, false)
+	legacy, err = registry.SealEntry(layout.Root, legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
 	delete(value.Extensions, registry.OpenAIServerID)
 	value.Extensions[registry.LegacyOpenAIServerID] = legacy
 	if err := registry.Save(layout.Root, value); err != nil {
@@ -825,7 +997,10 @@ func TestOpenAIServerBuiltinManagementCollapsesDuplicateAliases(t *testing.T) {
 		Staging:         filepath.Join(root, "staging"),
 		BYOModelsConfig: filepath.Join(root, "config", "byomodels.json"),
 	}
-	manager := Manager{Layout: layout, Stdout: io.Discard}
+	manager := Manager{
+		Layout: layout, Stdout: io.Discard,
+		BuiltinFetcher: repositoryBuiltinFetcher(registry.OpenAIServerID),
+	}
 	if err := manager.InstallBuiltins([]string{registry.OpenAIServerID}); err != nil {
 		t.Fatal(err)
 	}
@@ -916,7 +1091,10 @@ func TestOpenAIServerReservedIDCannotBeClaimedByNamedLocalPath(t *testing.T) {
 		Extensions:    filepath.Join(root, "home", "extensions"),
 		Staging:       filepath.Join(root, "home", "staging"),
 	}
-	manager := Manager{Layout: layout, Stdout: io.Discard}
+	manager := Manager{
+		Layout: layout, Stdout: io.Discard,
+		BuiltinFetcher: repositoryBuiltinFetcher("black-box"),
+	}
 	if err := manager.Install(source); err == nil {
 		t.Fatal("expected local path to be rejected for the reserved openai-server ID")
 	}
@@ -952,7 +1130,10 @@ func TestInstallingOtherBuiltinDoesNotMigrateLegacyOpenAIServer(t *testing.T) {
 	if err := registry.Save(layout.Root, value); err != nil {
 		t.Fatal(err)
 	}
-	manager := Manager{Layout: layout, Stdout: io.Discard}
+	manager := Manager{
+		Layout: layout, Stdout: io.Discard,
+		BuiltinFetcher: repositoryBuiltinFetcher("black-box"),
+	}
 	if err := manager.InstallBuiltins([]string{"black-box"}); err != nil {
 		t.Fatal(err)
 	}

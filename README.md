@@ -38,24 +38,11 @@ example `black-box.zip`, `byo-models.zip`, and `openai-server.zip`) and re-syncs
 before staging the core replacement. If a pinned built-in cannot be fetched or verified, the update
 fails instead of leaving a core/extension mismatch.
 
-`afterburn install <id>` still works as a repair/bootstrap command. It fetches the latest signed
-built-in release asset when possible and falls back to the copy embedded in the running
-`afterburn.exe` binary via `go:embed` if the network fetch fails.
-
-Set `AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH=1` to force `afterburn install` to always use the
-embedded built-in and skip the network fetch entirely.
-
-For local development on a built-in extension's source (`extensions/BlackBox`,
-`extensions/BYOModels`), set `AFTERBURNER_BUILTIN_SOURCE_OVERRIDE=id=path[,id2=path2]` before
-running `afterburn install <id>` to materialize the extension directly from a local source
-directory instead of any release asset or embedded copy. This is a development-only escape hatch:
-it is never consulted for signature or trust decisions, and it still enforces that the source
-directory's `afterburner.json` manifest matches the requested `id` and has `"visibility": "builtin"`.
-
-```powershell
-$env:AFTERBURNER_BUILTIN_SOURCE_OVERRIDE = "black-box=C:\path\to\afterburner\extensions\BlackBox"
-afterburn install black-box
-```
+`afterburn install <id>` is a repair/bootstrap command backed exclusively by the latest signed
+release. Built-in extension payloads are never embedded in `afterburn.exe`, and installation fails
+closed if the matching signed release package cannot be downloaded and verified. When upgrading
+from a legacy embedded-package release, the first normal launch re-fetches the new core's exact
+signed built-ins and replaces the legacy authorization records before any extension can execute.
 
 ## Launch and passthrough
 
@@ -84,7 +71,7 @@ afterburn --disable-extension steward-burn
 
 ## Extensions
 
-Manage embedded built-ins:
+Manage signed release built-ins:
 
 ```powershell
 afterburn install
@@ -97,9 +84,11 @@ afterburn uninstall black-box
 
 OpenAI Server is installed disabled by default because it exposes a localhost API; enable it explicitly when needed. Uninstall removes managed package registration and immutable package caches while preserving configuration and extension data.
 
-Manage custom local or Git extensions:
+Manage custom local, packaged, or Git extensions:
 
 ```powershell
+afterburn extension pack .\my-extension .\dist\my-extension.zip
+afterburn extension install .\dist\my-extension.zip
 afterburn extension install nbaertsch/steward-burn@main
 afterburn extension enable steward-burn
 afterburn extension update steward-burn
@@ -110,8 +99,11 @@ afterburn extension list
 ```
 
 Git sources are resolved to immutable commits. Installation is disabled by default until explicitly
-enabled. Packages execute trusted JavaScript in the Copilot process and may optionally provide a
-session extension from the same immutable package.
+enabled. Local ZIP packages are bounded and safely extracted into the same immutable package store;
+the original archive path and SHA-256 digest are retained for updates. Packages execute trusted
+JavaScript in the Copilot process and may optionally provide a session extension from the same
+immutable package. Manifest `requires.afterburner` and `requires.copilotCli` ranges are enforced
+during installation, update, enablement, rollback, and launch.
 
 ## BYOModels
 
@@ -195,7 +187,10 @@ archive SHA-256, size, and built-in extension package checksums. It syncs built-
 release tag, verifies PE architecture and embedded version, then launches a detached replacement
 helper. The current core is retained, a bounded post-update doctor runs, and validation failure
 restores the previous binary automatically. If Windows reports the executable is locked, the helper
-records the failed transaction in `state\core-update-status.json`; subsequent `afterburn version`,
+switches the managed `bin` directory without terminating active sessions. Core rollback restores the
+matching extension registry and package set rather than mixing releases. Interrupted update
+transactions are journaled and recovered on the next command. Failures are recorded in
+`state\core-update-status.json`; subsequent `afterburn version`,
 `afterburn update`, `afterburn install`, and interactive launches print a warning so stale-core
 state is visible until the next successful replacement.
 
@@ -219,7 +214,6 @@ Afterburner never registers its extensions in normal Copilot configuration.
 ## Develop and test
 
 ```powershell
-go generate ./internal/assets
 go test ./...
 go vet -unsafeptr=false ./...
 npm test

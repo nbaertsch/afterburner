@@ -2,9 +2,13 @@ package extensions
 
 import (
 	"archive/zip"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nbaertsch/afterburner/internal/home"
+	"github.com/nbaertsch/afterburner/internal/registry"
 )
 
 func TestValidateAndPackNativeUIExample(t *testing.T) {
@@ -38,6 +42,64 @@ func TestValidateAndPackNativeUIExample(t *testing.T) {
 		if !names[name] {
 			t.Fatalf("archive missing %s: %#v", name, names)
 		}
+	}
+}
+
+func TestPackInstallUpdateAndRollbackArchive(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExtensionFixture(t, source, "one")
+	archivePath := filepath.Join(root, "fixture.zip")
+	if err := PackPackage(source, archivePath); err != nil {
+		t.Fatal(err)
+	}
+	layout := home.Layout{
+		Root:        filepath.Join(root, "home"),
+		CopilotHome: filepath.Join(root, "home", "copilot-home"),
+		Config:      filepath.Join(root, "home", "config"),
+		Extensions:  filepath.Join(root, "home", "extensions"),
+		Staging:     filepath.Join(root, "home", "staging"),
+	}
+	manager := Manager{Layout: layout, Stdout: io.Discard, CoreVersion: "0.2.106"}
+	if err := manager.Install(archivePath); err != nil {
+		t.Fatal(err)
+	}
+	first, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEntry := first.Extensions["fixture"]
+	if firstEntry.Source.Type != "archive" || firstEntry.Source.Digest == "" ||
+		firstEntry.Source.Value != archivePath {
+		t.Fatalf("archive source = %#v", firstEntry.Source)
+	}
+	writeExtensionFixture(t, source, "two")
+	if err := PackPackage(source, archivePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Update("fixture"); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Extensions["fixture"].ActivePath == firstEntry.ActivePath ||
+		updated.Extensions["fixture"].Source.Digest == firstEntry.Source.Digest {
+		t.Fatalf("archive update did not advance: %#v", updated.Extensions["fixture"])
+	}
+	if err := manager.Rollback("fixture"); err != nil {
+		t.Fatal(err)
+	}
+	rolledBack, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolledBack.Extensions["fixture"].ActivePath != firstEntry.ActivePath {
+		t.Fatalf("rollback path = %q, want %q", rolledBack.Extensions["fixture"].ActivePath, firstEntry.ActivePath)
 	}
 }
 

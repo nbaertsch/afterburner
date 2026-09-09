@@ -14,47 +14,31 @@ function Invoke-Checked {
     }
 }
 
-function Get-SHA256 {
-    param([Parameter(Mandatory = $true)][string] $Path)
-    $stream = [IO.File]::OpenRead($Path)
-    try {
-        $sha = [Security.Cryptography.SHA256]::Create()
-        try {
-            return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace("-", "")
-        }
-        finally {
-            $sha.Dispose()
-        }
-    }
-    finally {
-        $stream.Dispose()
-    }
-}
-
 Invoke-Checked -FilePath npm -Arguments @("run", "check:runtime")
-$generatedArchives = @(
-    "internal/assets/generated/black-box.zip",
-    "internal/assets/generated/byo-models.zip",
-    "internal/assets/generated/openai-server.zip"
-)
-$generatedHashes = @{}
-foreach ($archive in $generatedArchives) {
-    if (-not (Test-Path $archive)) {
-        throw "Missing generated archive: $archive"
-    }
-    $generatedHashes[$archive] = Get-SHA256 $archive
-}
-Invoke-Checked -FilePath go -Arguments @("generate", "./internal/assets")
-foreach ($archive in $generatedArchives) {
-    if ($generatedHashes[$archive] -ne (Get-SHA256 $archive)) {
-        throw "Generated archive is stale: $archive"
-    }
-}
 Invoke-Checked -FilePath go -Arguments @("test", "./...")
 Invoke-Checked -FilePath go -Arguments @("vet", "-unsafeptr=false", "./...")
 Invoke-Checked -FilePath npm -Arguments @("test")
 
 New-Item artifacts -ItemType Directory -Force | Out-Null
+$previousAfterburnerHome = $env:AFTERBURNER_HOME
+$packagingHome = Join-Path ([IO.Path]::GetTempPath()) ("afterburn-package-" + [Guid]::NewGuid().ToString("N"))
+try {
+    $env:AFTERBURNER_HOME = $packagingHome
+    Invoke-Checked -FilePath go -Arguments @("run", "./cmd/afterburn", "extension", "pack", "extensions/BlackBox", "artifacts/black-box.zip")
+    Invoke-Checked -FilePath go -Arguments @("run", "./cmd/afterburn", "extension", "pack", "extensions/BYOModels", "artifacts/byo-models.zip")
+    Invoke-Checked -FilePath go -Arguments @("run", "./cmd/afterburn", "extension", "pack", "extensions/OpenAIServer", "artifacts/openai-server.zip")
+}
+finally {
+    if ($null -eq $previousAfterburnerHome) {
+        Remove-Item Env:AFTERBURNER_HOME -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:AFTERBURNER_HOME = $previousAfterburnerHome
+    }
+    if (Test-Path $packagingHome) {
+        Remove-Item -LiteralPath $packagingHome -Recurse -Force
+    }
+}
 Invoke-Checked -FilePath go -Arguments @("build", "-trimpath", "-o", "artifacts/afterburn.exe", "./cmd/afterburn")
 Invoke-Checked -FilePath go -Arguments @("build", "-trimpath", "-o", "artifacts/fakecopilot.exe", "./internal/testutil/fakecopilot")
 Invoke-Checked -FilePath node -Arguments @("tests/native-signal-conpty.mjs", "artifacts/afterburn.exe", "artifacts/fakecopilot.exe")

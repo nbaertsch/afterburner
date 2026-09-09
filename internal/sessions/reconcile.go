@@ -55,7 +55,7 @@ func Reconcile(layout home.Layout, value registry.Registry) error {
 	sort.Strings(ids)
 	for _, id := range ids {
 		entry := value.Extensions[id]
-		if !entry.Enabled || entry.Manifest.SessionExtension == nil {
+		if !entry.Enabled || !entry.Verified || entry.Manifest.SessionExtension == nil {
 			continue
 		}
 		if !registry.Within(entry.ActivePath, layout.Extensions) {

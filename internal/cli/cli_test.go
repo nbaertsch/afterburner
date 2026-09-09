@@ -33,14 +33,18 @@ func TestClassify(t *testing.T) {
 
 func TestReplacementRegistrySnapshotAcceptsOldAndNewProtocols(t *testing.T) {
 	oldArgs := []string{"replace", "--parent", "1", "--source", "source", "--target", "target", "--previous", "previous"}
-	if snapshot, ok := replacementRegistrySnapshot(oldArgs); !ok || snapshot != "" {
-		t.Fatalf("old protocol = %q, %t", snapshot, ok)
+	if snapshot, success, ok := replacementRegistrySnapshots(oldArgs); !ok || snapshot != "" || success != "" {
+		t.Fatalf("old protocol = %q, %q, %t", snapshot, success, ok)
 	}
 	newArgs := append(append([]string(nil), oldArgs...), "--registry-snapshot", "snapshot")
-	if snapshot, ok := replacementRegistrySnapshot(newArgs); !ok || snapshot != "snapshot" {
-		t.Fatalf("new protocol = %q, %t", snapshot, ok)
+	if snapshot, success, ok := replacementRegistrySnapshots(newArgs); !ok || snapshot != "snapshot" || success != "" {
+		t.Fatalf("new protocol = %q, %q, %t", snapshot, success, ok)
 	}
-	if _, ok := replacementRegistrySnapshot(append(oldArgs, "--unknown", "value")); ok {
+	rollbackArgs := append(append([]string(nil), newArgs...), "--success-registry-snapshot", "rollback")
+	if snapshot, success, ok := replacementRegistrySnapshots(rollbackArgs); !ok || snapshot != "snapshot" || success != "rollback" {
+		t.Fatalf("rollback protocol = %q, %q, %t", snapshot, success, ok)
+	}
+	if _, _, ok := replacementRegistrySnapshots(append(oldArgs, "--unknown", "value")); ok {
 		t.Fatal("unknown replacement protocol was accepted")
 	}
 }

@@ -76,7 +76,10 @@ func (b IdentityBinding) validateFor(entry Entry, manifestHash, treeHash string)
 		if !IsTrustedBuiltinSourceType(entry.Source.Type) || !IsTrustedBuiltinSourceType(b.SourceType) || entry.Source.Value != entry.Manifest.ID || b.SourceValue != entry.Manifest.ID {
 			return fmt.Errorf("signed built-in identity must be bound to a verified built-in source")
 		}
-		if b.SignerID != "afterburner-core" || b.SignerFingerprint != "builtin:"+entry.Manifest.ID {
+		if b.SignerID != "afterburner-release" || b.SignerFingerprint == "" ||
+			b.SignerFingerprint != entry.Source.SignerFingerprint ||
+			entry.Source.Version == "" || entry.Source.Commit == "" ||
+			entry.Source.Digest == "" || entry.Source.ManifestDigest == "" {
 			return fmt.Errorf("signed built-in identity has an untrusted signer")
 		}
 	}
@@ -89,18 +92,19 @@ func (b IdentityBinding) validateFor(entry Entry, manifestHash, treeHash string)
 func (b IdentityBinding) IsTrustedBuiltinFor(id string) bool {
 	return b.ExtensionID == id && b.BuiltinSigned && b.ManifestHash != "" && b.TreeHash != "" &&
 		IsTrustedBuiltinSourceType(b.SourceType) && b.SourceValue == id &&
-		b.SignerID == "afterburner-core" && b.SignerFingerprint == "builtin:"+id && b.GrantEpoch > 0
+		b.SignerID == "afterburner-release" && b.SignerFingerprint != "" && b.GrantEpoch > 0
 }
 
 type registryMACPayload struct {
-	Enabled            bool            `json:"enabled"`
-	ActivePath         string          `json:"activePath"`
-	PreviousActivePath *string         `json:"previousActivePath,omitempty"`
-	PreviousSource     *Source         `json:"previousSource,omitempty"`
-	Manifest           Manifest        `json:"manifest"`
-	Source             Source          `json:"source"`
-	Identity           IdentityBinding `json:"identity"`
-	UpdatedAt          string          `json:"updatedAt"`
+	Enabled            bool              `json:"enabled"`
+	ActivePath         string            `json:"activePath"`
+	PreviousActivePath *string           `json:"previousActivePath,omitempty"`
+	PreviousSource     *Source           `json:"previousSource,omitempty"`
+	PreviousPackage    *PackageReference `json:"previousPackage,omitempty"`
+	Manifest           Manifest          `json:"manifest"`
+	Source             Source            `json:"source"`
+	Identity           IdentityBinding   `json:"identity"`
+	UpdatedAt          string            `json:"updatedAt"`
 }
 
 func RegistryMAC(root string, entry Entry) (string, error) {
@@ -114,6 +118,7 @@ func RegistryMAC(root string, entry Entry) (string, error) {
 		ActivePath:         entry.ActivePath,
 		PreviousActivePath: entry.PreviousActivePath,
 		PreviousSource:     entry.PreviousSource,
+		PreviousPackage:    entry.PreviousPackage,
 		Manifest:           entry.Manifest,
 		Source:             entry.Source,
 		Identity:           entry.Identity,
@@ -137,6 +142,7 @@ func SealEntry(root string, entry Entry) (Entry, error) {
 		ActivePath:         entry.ActivePath,
 		PreviousActivePath: entry.PreviousActivePath,
 		PreviousSource:     entry.PreviousSource,
+		PreviousPackage:    entry.PreviousPackage,
 		Manifest:           entry.Manifest,
 		Source:             entry.Source,
 		Identity:           entry.Identity,

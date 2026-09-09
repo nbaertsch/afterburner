@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/nbaertsch/afterburner/internal/extensions"
 )
 
 const (
@@ -105,7 +107,8 @@ func IsNewer(current, candidate string) bool {
 	if current == "" || current == "dev" {
 		return true
 	}
-	return compareVersion(candidate, current) > 0
+	comparison, err := extensions.CompareVersions(candidate, current)
+	return err == nil && comparison > 0
 }
 
 func resolveToken(ctx context.Context) string {
@@ -120,34 +123,4 @@ func resolveToken(ctx context.Context) string {
 		return ""
 	}
 	return strings.TrimSpace(string(output))
-}
-
-func compareVersion(left, right string) int {
-	normalize := func(value string) []int {
-		value = strings.TrimPrefix(strings.TrimSpace(value), "v")
-		var result []int
-		for _, field := range strings.FieldsFunc(value, func(r rune) bool { return r < '0' || r > '9' }) {
-			var number int
-			fmt.Sscanf(field, "%d", &number)
-			result = append(result, number)
-		}
-		return result
-	}
-	a, b := normalize(left), normalize(right)
-	for i := 0; i < len(a) || i < len(b); i++ {
-		var av, bv int
-		if i < len(a) {
-			av = a[i]
-		}
-		if i < len(b) {
-			bv = b[i]
-		}
-		if av > bv {
-			return 1
-		}
-		if av < bv {
-			return -1
-		}
-	}
-	return 0
 }

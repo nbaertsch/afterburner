@@ -54,23 +54,37 @@ type SessionExtension struct {
 }
 
 type Source struct {
-	Type    string  `json:"type"`
-	Value   string  `json:"value"`
-	Version string  `json:"version,omitempty"`
-	Ref     *string `json:"ref,omitempty"`
-	Commit  string  `json:"commit,omitempty"`
+	Type              string  `json:"type"`
+	Value             string  `json:"value"`
+	Version           string  `json:"version,omitempty"`
+	Ref               *string `json:"ref,omitempty"`
+	Commit            string  `json:"commit,omitempty"`
+	Digest            string  `json:"digest,omitempty"`
+	ManifestDigest    string  `json:"manifestDigest,omitempty"`
+	SignerFingerprint string  `json:"signerFingerprint,omitempty"`
 }
 
 type Entry struct {
-	Enabled            bool            `json:"enabled"`
-	ActivePath         string          `json:"activePath"`
-	PreviousActivePath *string         `json:"previousActivePath"`
-	PreviousSource     *Source         `json:"previousSource,omitempty"`
-	Manifest           Manifest        `json:"manifest"`
-	Source             Source          `json:"source"`
-	Identity           IdentityBinding `json:"identity,omitempty"`
-	UpdatedAt          string          `json:"updatedAt"`
-	Verified           bool            `json:"-"`
+	Enabled            bool              `json:"enabled"`
+	ActivePath         string            `json:"activePath"`
+	PreviousActivePath *string           `json:"previousActivePath"`
+	PreviousSource     *Source           `json:"previousSource,omitempty"`
+	PreviousPackage    *PackageReference `json:"previousPackage,omitempty"`
+	Manifest           Manifest          `json:"manifest"`
+	Source             Source            `json:"source"`
+	Identity           IdentityBinding   `json:"identity,omitempty"`
+	UpdatedAt          string            `json:"updatedAt"`
+	Verified           bool              `json:"-"`
+}
+
+type PackageReference struct {
+	ActivePath        string `json:"activePath"`
+	ManifestHash      string `json:"manifestHash"`
+	TreeHash          string `json:"treeHash"`
+	Source            Source `json:"source"`
+	BuiltinSigned     bool   `json:"builtinSigned,omitempty"`
+	SignerID          string `json:"signerId,omitempty"`
+	SignerFingerprint string `json:"signerFingerprint,omitempty"`
 }
 
 const (
@@ -255,12 +269,7 @@ func allowedReservedBuiltinEntry(id string, entry Entry) bool {
 }
 
 func IsTrustedBuiltinSourceType(sourceType string) bool {
-	switch sourceType {
-	case "embedded", "signed-release":
-		return true
-	default:
-		return false
-	}
+	return sourceType == "signed-release"
 }
 
 func IsTrustedBuiltinEntry(entry Entry) bool {

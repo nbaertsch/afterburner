@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -66,6 +67,17 @@ func Classify(args []string) Route {
 
 func Run(ctx context.Context, args []string, opts Options) (int, error) {
 	route := Classify(args)
+	if !(route.Command == "core" && len(route.Args) > 0 && route.Args[0] == "replace") {
+		if layout, resolveErr := home.Resolve(); resolveErr == nil {
+			recovered, recoverErr := updater.RecoverInterruptedCoreUpdate(layout.Root)
+			if recoverErr != nil {
+				return 1, recoverErr
+			}
+			if recovered && opts.Stderr != nil {
+				fmt.Fprintln(opts.Stderr, "Recovered an interrupted core update registry transaction.")
+			}
+		}
+	}
 	switch route.Command {
 	case "run":
 		return runCopilot(ctx, route.Args, route.ForcedPassthrough, opts)
@@ -138,7 +150,32 @@ func runRollback(args []string, opts Options) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if err := updater.BeginReplacement(candidate, target, previous, ""); err != nil {
+	currentRegistrySnapshot, err := updater.SnapshotRegistry(layout.Root)
+	if err != nil {
+		_ = os.RemoveAll(filepath.Dir(candidate))
+		return 1, err
+	}
+	rollbackRegistrySnapshot := updater.CoreRollbackRegistrySnapshot(layout.Root)
+	if _, err := os.Stat(rollbackRegistrySnapshot); err != nil {
+		_ = updater.DiscardRegistrySnapshot(layout.Root, currentRegistrySnapshot)
+		_ = os.RemoveAll(filepath.Dir(candidate))
+		if os.IsNotExist(err) {
+			return 1, fmt.Errorf("no matching extension registry is available for core rollback")
+		}
+		return 1, fmt.Errorf("inspect core rollback registry snapshot: %w", err)
+	}
+	if err := updater.BeginCoreUpdateTransaction(layout.Root, candidate, target, previous, currentRegistrySnapshot); err != nil {
+		_ = updater.DiscardRegistrySnapshot(layout.Root, currentRegistrySnapshot)
+		_ = os.RemoveAll(filepath.Dir(candidate))
+		return 1, err
+	}
+	if err := updater.SetCoreUpdateSuccessSnapshot(layout.Root, rollbackRegistrySnapshot); err != nil {
+		_ = updater.AbortCoreUpdateTransaction(layout.Root)
+		_ = os.RemoveAll(filepath.Dir(candidate))
+		return 1, err
+	}
+	if err := updater.BeginReplacement(candidate, target, previous, currentRegistrySnapshot, rollbackRegistrySnapshot); err != nil {
+		_ = updater.AbortCoreUpdateTransaction(layout.Root)
 		_ = os.RemoveAll(filepath.Dir(candidate))
 		return 1, err
 	}
@@ -186,7 +223,7 @@ func runUpdate(ctx context.Context, args []string, opts Options) (int, error) {
 	}
 	target := filepath.Join(layout.Root, "bin", "afterburn.exe")
 	previous := filepath.Join(layout.Root, "bin", "afterburn.previous.exe")
-	manager := extensions.Manager{Layout: layout, Stdout: opts.Stdout, BuiltinFetcher: updater.BuiltinReleaseFetcher{
+	manager := extensions.Manager{Layout: layout, Stdout: opts.Stdout, CoreVersion: release.TagName, BuiltinFetcher: updater.BuiltinReleaseFetcher{
 		Client:  client,
 		Root:    layout.Root,
 		Version: release.TagName,
@@ -196,15 +233,36 @@ func runUpdate(ctx context.Context, args []string, opts Options) (int, error) {
 		_ = os.RemoveAll(filepath.Dir(candidate))
 		return 1, err
 	}
-	if err := manager.SyncBuiltins(nil); err != nil {
-		_ = updater.RestoreRegistrySnapshot(layout.Root, registrySnapshot)
+	if err := updater.BeginCoreUpdateTransaction(layout.Root, candidate, target, previous, registrySnapshot); err != nil {
 		_ = updater.DiscardRegistrySnapshot(layout.Root, registrySnapshot)
+		_ = os.RemoveAll(filepath.Dir(candidate))
+		return 1, err
+	}
+	if err := manager.SyncBuiltins(nil); err != nil {
+		_ = updater.AbortCoreUpdateTransaction(layout.Root)
 		_ = os.RemoveAll(filepath.Dir(candidate))
 		return 1, fmt.Errorf("sync built-in extensions for %s: %w", release.TagName, err)
 	}
-	if err := updater.BeginReplacement(candidate, target, previous, registrySnapshot); err != nil {
-		_ = updater.RestoreRegistrySnapshot(layout.Root, registrySnapshot)
-		_ = updater.DiscardRegistrySnapshot(layout.Root, registrySnapshot)
+	successRegistrySnapshot, err := updater.SnapshotRegistry(layout.Root)
+	if err != nil {
+		_ = updater.AbortCoreUpdateTransaction(layout.Root)
+		_ = os.RemoveAll(filepath.Dir(candidate))
+		return 1, err
+	}
+	if err := updater.SetCoreUpdateSuccessSnapshot(layout.Root, successRegistrySnapshot); err != nil {
+		_ = updater.DiscardRegistrySnapshot(layout.Root, successRegistrySnapshot)
+		_ = updater.AbortCoreUpdateTransaction(layout.Root)
+		_ = os.RemoveAll(filepath.Dir(candidate))
+		return 1, err
+	}
+	if err := updater.RestoreRegistrySnapshot(layout.Root, registrySnapshot); err != nil {
+		_ = updater.AbortCoreUpdateTransaction(layout.Root)
+		_ = os.RemoveAll(filepath.Dir(candidate))
+		return 1, err
+	}
+	if err := updater.BeginReplacement(candidate, target, previous, registrySnapshot, successRegistrySnapshot); err != nil {
+		_ = updater.AbortCoreUpdateTransaction(layout.Root)
+		_ = os.RemoveAll(filepath.Dir(candidate))
 		return 1, err
 	}
 	fmt.Fprintf(opts.Stdout, "Afterburner %s and built-in extensions are staged; core replacement will complete after this process exits.\n", release.TagName)
@@ -226,7 +284,7 @@ func runCoreCommand(args []string, opts Options) (int, error) {
 		}
 		return 0, nil
 	}
-	registrySnapshot, replaceCommand := replacementRegistrySnapshot(args)
+	registrySnapshot, successRegistrySnapshot, replaceCommand := replacementRegistrySnapshots(args)
 	if replaceCommand {
 		parent, err := strconv.Atoi(args[2])
 		if err != nil || parent <= 0 {
@@ -241,10 +299,11 @@ func runCoreCommand(args []string, opts Options) (int, error) {
 		if !strings.EqualFold(filepath.Clean(args[6]), filepath.Clean(expectedTarget)) ||
 			!strings.EqualFold(filepath.Clean(args[8]), filepath.Clean(expectedPrevious)) ||
 			!registry.Within(args[4], filepath.Join(layout.Root, "update-staging")) ||
-			(registrySnapshot != "" && !registry.Within(registrySnapshot, filepath.Join(layout.Root, "state"))) {
+			(registrySnapshot != "" && !registry.Within(registrySnapshot, filepath.Join(layout.Root, "state"))) ||
+			(successRegistrySnapshot != "" && !registry.Within(successRegistrySnapshot, filepath.Join(layout.Root, "state"))) {
 			return 2, fmt.Errorf("replacement paths are outside the managed update transaction")
 		}
-		if err := updater.ApplyReplacement(parent, args[4], args[6], args[8], registrySnapshot); err != nil {
+		if err := updater.ApplyReplacement(parent, args[4], args[6], args[8], registrySnapshot, successRegistrySnapshot); err != nil {
 			return 1, err
 		}
 		return 0, nil
@@ -252,19 +311,22 @@ func runCoreCommand(args []string, opts Options) (int, error) {
 	return 2, fmt.Errorf("usage: afterburn core install")
 }
 
-func replacementRegistrySnapshot(args []string) (string, bool) {
+func replacementRegistrySnapshots(args []string) (string, string, bool) {
 	if len(args) < 9 || args[0] != "replace" ||
 		args[1] != "--parent" || args[3] != "--source" ||
 		args[5] != "--target" || args[7] != "--previous" {
-		return "", false
+		return "", "", false
 	}
 	if len(args) == 9 {
-		return "", true
+		return "", "", true
 	}
 	if len(args) == 11 && args[9] == "--registry-snapshot" {
-		return args[10], true
+		return args[10], "", true
 	}
-	return "", false
+	if len(args) == 13 && args[9] == "--registry-snapshot" && args[11] == "--success-registry-snapshot" {
+		return args[10], args[12], true
+	}
+	return "", "", false
 }
 
 func runExtensionCommand(route Route, opts Options) (int, error) {
@@ -273,13 +335,28 @@ func runExtensionCommand(route Route, opts Options) (int, error) {
 		return 1, err
 	}
 	warnCoreUpdateStatusForLayout(layout, opts)
-	manager := extensions.Manager{Layout: layout, Stdout: opts.Stdout}
-	if strings.TrimSpace(os.Getenv("AFTERBURNER_BUILTIN_SOURCE_OVERRIDE")) == "" &&
-		strings.TrimSpace(os.Getenv("AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH")) == "" {
-		manager.BuiltinFetcher = updater.BuiltinReleaseFetcher{
-			Client: updater.NewClient(context.Background()),
-			Root:   layout.Root,
+	manager := extensions.Manager{Layout: layout, Stdout: opts.Stdout, CoreVersion: opts.Version}
+	if commandNeedsCopilotCompatibility(route) {
+		executable, findErr := launch.FindCopilot()
+		if findErr == nil {
+			inventory, discoverErr := copilot.Discover(copilot.DiscoveryOptions{
+				ManagedHome:       layout.CopilotHome,
+				CopilotExecutable: executable,
+				HashCachePath:     filepath.Join(layout.Root, "state", "package-hashes.json"),
+			})
+			if discoverErr != nil {
+				return 1, discoverErr
+			}
+			selection, selectErr := compatibility.Select(inventory)
+			if selectErr != nil {
+				return 1, selectErr
+			}
+			manager.CopilotVersion = selection.Package.Version
 		}
+	}
+	manager.BuiltinFetcher = updater.BuiltinReleaseFetcher{
+		Client: updater.NewClient(context.Background()),
+		Root:   layout.Root,
 	}
 	switch route.Command {
 	case "install":
@@ -297,7 +374,7 @@ func runExtensionCommand(route Route, opts Options) (int, error) {
 		switch route.Args[0] {
 		case "install":
 			if len(route.Args) != 2 {
-				return 2, fmt.Errorf("usage: afterburn extension install <local-path>")
+				return 2, fmt.Errorf("usage: afterburn extension install <path|archive.zip|git-url|owner/repo[@ref]>")
 			}
 			err = manager.Install(route.Args[1])
 		case "enable":
@@ -385,6 +462,21 @@ func runExtensionCommand(route Route, opts Options) (int, error) {
 	return 0, nil
 }
 
+func commandNeedsCopilotCompatibility(route Route) bool {
+	if route.Command == "install" || route.Command == "enable" {
+		return true
+	}
+	if route.Command != "extension" || len(route.Args) == 0 {
+		return false
+	}
+	switch route.Args[0] {
+	case "install", "enable", "update", "rollback":
+		return true
+	default:
+		return false
+	}
+}
+
 func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts Options) (int, error) {
 	startupStarted := time.Now()
 	startupPhase := startupStarted
@@ -422,6 +514,28 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	if err != nil {
 		return 1, err
 	}
+	if !launchOptions.safeMode && opts.Version != "" && opts.Version != "dev" {
+		repairBuiltins := builtinRepairIDs(extensionRegistry)
+		if len(repairBuiltins) > 0 {
+			manager := extensions.Manager{
+				Layout:      baseLayout,
+				Stdout:      opts.Stdout,
+				CoreVersion: opts.Version,
+				BuiltinFetcher: updater.BuiltinReleaseFetcher{
+					Client:  updater.NewClient(ctx),
+					Root:    baseLayout.Root,
+					Version: opts.Version,
+				},
+			}
+			if err := manager.SyncBuiltins(repairBuiltins); err != nil {
+				return 1, fmt.Errorf("repair legacy built-in package authorization: %w", err)
+			}
+			extensionRegistry, err = registry.Load(baseLayout.Root)
+			if err != nil {
+				return 1, err
+			}
+		}
+	}
 	traceStartup("registry")
 	effectiveRegistry := extensionRegistry
 	disabledExtensionsForEnv := append([]string(nil), launchOptions.disabledExtensions...)
@@ -447,10 +561,17 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 			effectiveRegistry.Extensions[key] = entry
 		}
 	}
-	if err := sessions.Reconcile(layout, effectiveRegistry); err != nil {
-		return 1, err
+	for id, entry := range effectiveRegistry.Extensions {
+		if !entry.Enabled || entry.Verified {
+			continue
+		}
+		entry.Enabled = false
+		effectiveRegistry.Extensions[id] = entry
+		disabledExtensionsForEnv = append(disabledExtensionsForEnv, id)
+		if opts.Stderr != nil {
+			fmt.Fprintf(opts.Stderr, "Warning: disabled unverified extension %q; update or reinstall it before use.\n", id)
+		}
 	}
-	traceStartup("sessions")
 	executable, err := launch.FindCopilot()
 	if err != nil {
 		return 1, err
@@ -465,10 +586,28 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 		return 1, err
 	}
 	traceStartup("discovery")
-	selection, err := compatibility.Select(inventory)
+	compatibleInventory := inventory[:0]
+	var extensionCompatibilityErr error
+	for _, candidate := range inventory {
+		if err := validateEnabledExtensions(effectiveRegistry, opts.Version, candidate.Version); err != nil {
+			if extensionCompatibilityErr == nil {
+				extensionCompatibilityErr = err
+			}
+			continue
+		}
+		compatibleInventory = append(compatibleInventory, candidate)
+	}
+	if len(compatibleInventory) == 0 && extensionCompatibilityErr != nil {
+		return 1, extensionCompatibilityErr
+	}
+	selection, err := compatibility.Select(compatibleInventory)
 	if err != nil {
 		return 1, err
 	}
+	if err := sessions.Reconcile(layout, effectiveRegistry); err != nil {
+		return 1, err
+	}
+	traceStartup("sessions")
 	traceStartup("compatibility")
 	selected := selection.Package
 	prepared, err := runtimepkg.Prepare(layout, selected)
@@ -520,6 +659,9 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 		env = setEnv(env, "AFTERBURNER_BASE_RUNTIME_SHA256", selected.RuntimeSHA256)
 		env = setEnv(env, "AFTERBURNER_COMPATIBILITY_PROFILE", validated.Profile.ID)
 	}
+	if err := validateEnabledExtensions(effectiveRegistry, opts.Version, selected.Version); err != nil {
+		return 1, err
+	}
 	childArgs := append([]string{"--prefer-version", prepared.Version}, args...)
 	telemetry.Record(layout.Root, "launch.started", map[string]any{
 		"copilotVersion": selected.Version,
@@ -553,6 +695,29 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	}
 	telemetry.Record(layout.Root, "launch.completed", attributes)
 	return exitCode, launchErr
+}
+
+func builtinRepairIDs(value registry.Registry) []string {
+	var ids []string
+	for id, entry := range value.Extensions {
+		if registry.IsReservedBuiltinID(id) && entry.Manifest.Visibility == "builtin" && !entry.Verified {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func validateEnabledExtensions(value registry.Registry, coreVersion, copilotVersion string) error {
+	for id, entry := range value.Extensions {
+		if !entry.Enabled {
+			continue
+		}
+		if err := extensions.ValidateCompatibility(entry.Manifest, coreVersion, copilotVersion); err != nil {
+			return fmt.Errorf("enabled extension %q is incompatible: %w", id, err)
+		}
+	}
+	return nil
 }
 
 type nativeLaunchOptions struct {

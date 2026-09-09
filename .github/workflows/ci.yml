@@ -24,15 +24,20 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
-      - run: go generate ./internal/assets
-      - name: Verify generated assets are current
+      - name: Reject embedded or committed extension packages
         shell: pwsh
         run: |
-          if (git status --short -- internal/assets/generated) {
-            git diff -- internal/assets/generated
-            throw "Embedded built-in archives are stale. Run 'go generate ./internal/assets'."
+          if (Test-Path internal/assets/generated) {
+            throw "generated built-in package directory must not exist"
           }
+          if (Select-String -Path internal/assets/*.go -Pattern 'go:embed|\.zip' -Quiet) {
+            throw "built-in package payloads must not be embedded"
+          }
+          $trackedArchives = git ls-files '*.zip'
+          if ($trackedArchives) {
+            throw "extension package archives must not be committed: $trackedArchives"
+          }
+      - run: npm ci
       - name: Verify generated runtime copies are current
         run: npm run check:runtime
       - run: go test ./...
