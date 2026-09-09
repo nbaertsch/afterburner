@@ -16,6 +16,7 @@ jobs:
     runs-on: windows-latest
     env:
       RELEASE_TAG: ${{ inputs.tag }}
+      NPM_CONFIG_REGISTRY: https://packagefeedproxy.microsoft.io/npm/
     steps:
       - uses: actions/checkout@v4
         with:

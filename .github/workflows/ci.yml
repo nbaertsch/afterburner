@@ -11,6 +11,8 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      NPM_CONFIG_REGISTRY: https://packagefeedproxy.microsoft.io/npm/
     steps:
       - uses: actions/checkout@v4
 
