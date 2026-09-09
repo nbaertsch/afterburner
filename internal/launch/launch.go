@@ -49,14 +49,14 @@ func Run(ctx context.Context, opts Options) (int, error) {
 }
 
 func runDirect(ctx context.Context, opts Options) (int, error) {
-	bootstrapPath, cleanupBootstrap, err := writeNativeBootstrap(nil, nativeIdentityAssertions(opts.ExtensionRegistry))
+	childEnv, cleanupBootstrap, err := PrepareNativeEnvironment(opts.Env, opts.ExtensionRegistry)
 	if err != nil {
 		return 1, err
 	}
 	defer cleanupBootstrap()
 
 	cmd := exec.CommandContext(ctx, opts.Executable, opts.Args...)
-	cmd.Env = withNativeEnv(opts.Env, bootstrapPath)
+	cmd.Env = childEnv
 	cmd.Stdin = opts.Stdin
 	cmd.Stdout = opts.Stdout
 	cmd.Stderr = opts.Stderr
@@ -85,6 +85,17 @@ func runDirect(ctx context.Context, opts Options) (int, error) {
 		return 1, fmt.Errorf("wait for Copilot CLI: %w", err)
 	}
 	return 0, nil
+}
+
+func PrepareNativeEnvironment(env []string, extensionRegistry *registry.Registry) ([]string, func(), error) {
+	bootstrapPath, cleanupBootstrap, err := writeNativeBootstrap(
+		nil,
+		nativeIdentityAssertions(extensionRegistry),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return withNativeEnv(env, bootstrapPath), cleanupBootstrap, nil
 }
 
 func runWithBroker(ctx context.Context, opts Options) (int, error) {

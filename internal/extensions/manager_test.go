@@ -118,6 +118,157 @@ func TestLocalUpdateAndRollbackPreserveEnablement(t *testing.T) {
 	}
 }
 
+func TestRepairLegacyAuthorizationsRebindsContentAddressedExternalPackage(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	layout := home.Layout{
+		Root:        filepath.Join(root, "home"),
+		CopilotHome: filepath.Join(root, "home", "copilot-home"),
+		Extensions:  filepath.Join(root, "home", "extensions"),
+	}
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExtensionFixture(t, source, "one")
+	manager := Manager{Layout: layout, Stdout: io.Discard, CoreVersion: "0.2.107"}
+	if err := manager.Install(source); err != nil {
+		t.Fatal(err)
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := value.Extensions["fixture"]
+	entry.Enabled = true
+	entry.Identity = registry.IdentityBinding{}
+	value.Extensions["fixture"] = entry
+	if err := registry.Save(layout.Root, value); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := manager.RepairLegacyAuthorizations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want 1", repaired)
+	}
+	loaded, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry = loaded.Extensions["fixture"]
+	if !entry.Enabled || !entry.Verified || entry.Identity.IsZero() {
+		t.Fatalf("repaired entry = %#v", entry)
+	}
+}
+
+func TestRepairLegacyAuthorizationsRejectsNonContentAddressedPackage(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	layout := home.Layout{
+		Root:        filepath.Join(root, "home"),
+		CopilotHome: filepath.Join(root, "home", "copilot-home"),
+		Extensions:  filepath.Join(root, "home", "extensions"),
+	}
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExtensionFixture(t, source, "one")
+	manager := Manager{Layout: layout, Stdout: io.Discard, CoreVersion: "0.2.107"}
+	if err := manager.Install(source); err != nil {
+		t.Fatal(err)
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := value.Extensions["fixture"]
+	renamed := filepath.Join(filepath.Dir(entry.ActivePath), "legacy-package")
+	if err := os.Rename(entry.ActivePath, renamed); err != nil {
+		t.Fatal(err)
+	}
+	entry.ActivePath = renamed
+	entry.Identity = registry.IdentityBinding{}
+	entry.Source.Value = filepath.Join(root, "missing-source")
+	value.Extensions["fixture"] = entry
+	if err := registry.Save(layout.Root, value); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := manager.RepairLegacyAuthorizations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired != 0 {
+		t.Fatalf("repaired = %d, want 0", repaired)
+	}
+	loaded, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Extensions["fixture"].Verified {
+		t.Fatal("non-content-addressed legacy package was authorized")
+	}
+}
+
+func TestRepairLegacyAuthorizationsRefreshesMutatedPackageFromPathSource(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	layout := home.Layout{
+		Root:        filepath.Join(root, "home"),
+		CopilotHome: filepath.Join(root, "home", "copilot-home"),
+		Extensions:  filepath.Join(root, "home", "extensions"),
+	}
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExtensionFixture(t, source, "one")
+	manager := Manager{Layout: layout, Stdout: io.Discard, CoreVersion: "0.2.107"}
+	if err := manager.Install(source); err != nil {
+		t.Fatal(err)
+	}
+	value, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := value.Extensions["fixture"]
+	oldActive := entry.ActivePath
+	if err := os.WriteFile(filepath.Join(oldActive, "runtime.mjs"), []byte("legacy injected bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeExtensionFixture(t, source, "two")
+	entry.Enabled = true
+	entry.Identity = registry.IdentityBinding{}
+	value.Extensions["fixture"] = entry
+	if err := registry.Save(layout.Root, value); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := manager.RepairLegacyAuthorizations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want 1", repaired)
+	}
+	loaded, err := registry.Load(layout.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry = loaded.Extensions["fixture"]
+	if !entry.Enabled || !entry.Verified || entry.ActivePath == oldActive {
+		t.Fatalf("refreshed entry = %#v", entry)
+	}
+	runtimeData, err := os.ReadFile(filepath.Join(entry.ActivePath, "runtime.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(runtimeData) != "export default two" {
+		t.Fatalf("runtime = %q", runtimeData)
+	}
+}
+
 func TestRollbackRejectsTamperedPreviousPackage(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")

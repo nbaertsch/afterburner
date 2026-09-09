@@ -18,7 +18,9 @@ import (
 	"github.com/nbaertsch/afterburner/internal/compatibility"
 	"github.com/nbaertsch/afterburner/internal/copilot"
 	"github.com/nbaertsch/afterburner/internal/home"
+	"github.com/nbaertsch/afterburner/internal/launch"
 	"github.com/nbaertsch/afterburner/internal/platform"
+	"github.com/nbaertsch/afterburner/internal/registry"
 	"github.com/nbaertsch/afterburner/internal/runtimepkg"
 )
 
@@ -47,6 +49,7 @@ func Ensure(
 	selection compatibility.Selection,
 	prepared runtimepkg.Prepared,
 	env []string,
+	extensionRegistry *registry.Registry,
 	stderr io.Writer,
 ) (Result, error) {
 	fingerprint, err := registryFingerprint(layout.Root)
@@ -60,7 +63,7 @@ func Ensure(
 	if tupleMatches(state, selection, prepared, fingerprint) {
 		return Result{Package: selection.Package, Profile: selection.Profile, Prepared: prepared}, nil
 	}
-	if err := validate(ctx, executable, prepared.Version, env); err == nil {
+	if err := validate(ctx, executable, prepared.Version, env, extensionRegistry); err == nil {
 		tuple := Tuple{
 			SchemaVersion:       1,
 			Package:             selection.Package,
@@ -101,11 +104,22 @@ func Ensure(
 	}
 }
 
-func validate(ctx context.Context, executable, runtimeVersion string, env []string) error {
+func validate(
+	ctx context.Context,
+	executable,
+	runtimeVersion string,
+	env []string,
+	extensionRegistry *registry.Registry,
+) error {
 	testContext, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
+	childEnv, cleanupBootstrap, err := launch.PrepareNativeEnvironment(env, extensionRegistry)
+	if err != nil {
+		return err
+	}
+	defer cleanupBootstrap()
 	cmd := exec.CommandContext(testContext, executable, "--prefer-version", runtimeVersion, "--version")
-	cmd.Env = replaceEnv(env, "COPILOT_RUNTIME_EXTENSION_SELF_TEST", "1")
+	cmd.Env = replaceEnv(childEnv, "COPILOT_RUNTIME_EXTENSION_SELF_TEST", "1")
 	var stdout, stderr limitedBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

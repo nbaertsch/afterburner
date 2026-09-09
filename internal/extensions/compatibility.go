@@ -32,7 +32,7 @@ func CompareVersions(left, right string) (int, error) {
 }
 
 func ValidateCompatibility(manifest registry.Manifest, afterburnerVersion, copilotVersion string) error {
-	if afterburnerVersion != "" && afterburnerVersion != "dev" {
+	if afterburnerVersion != "" && afterburnerVersion != "dev" && manifest.Requires.Afterburner != "" {
 		ok, err := satisfiesVersion(afterburnerVersion, manifest.Requires.Afterburner)
 		if err != nil {
 			return fmt.Errorf("extension %q has invalid Afterburner requirement: %w", manifest.ID, err)
@@ -58,8 +58,10 @@ func ValidateCompatibility(manifest registry.Manifest, afterburnerVersion, copil
 }
 
 func validateCompatibilitySyntax(manifest registry.Manifest) error {
-	if _, err := satisfiesVersion("0.0.0", manifest.Requires.Afterburner); err != nil {
-		return err
+	if manifest.Requires.Afterburner != "" {
+		if _, err := satisfiesVersion("0.0.0", manifest.Requires.Afterburner); err != nil {
+			return err
+		}
 	}
 	for _, requirement := range manifest.Requires.CopilotCLI {
 		if _, err := satisfiesVersion("0.0.0", requirement); err != nil {

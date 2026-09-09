@@ -287,7 +287,12 @@ func (current *service) verifyShared() (bool, error) {
 	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&value); err != nil {
 		return false, err
 	}
-	return value == current.identity, nil
+	if value.Marker != current.identity.Marker ||
+		value.Provider != current.identity.Provider ||
+		value.Upstream != current.identity.Upstream {
+		return false, nil
+	}
+	return value.Configuration == "" || value.Configuration == current.identity.Configuration, nil
 }
 
 func (current *service) handle(response http.ResponseWriter, request *http.Request) {

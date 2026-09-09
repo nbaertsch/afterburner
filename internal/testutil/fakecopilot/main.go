@@ -230,6 +230,33 @@ func main() {
 		code, _ := strconv.Atoi(raw)
 		os.Exit(code)
 	}
+	if os.Getenv("COPILOT_RUNTIME_EXTENSION_SELF_TEST") == "1" {
+		bootstrapPath := os.Getenv("AFTERBURNER_NATIVE_BOOTSTRAP")
+		bootstrapData, err := os.ReadFile(bootstrapPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "verified extension bootstrap is unavailable")
+			os.Exit(44)
+		}
+		var bootstrap struct {
+			VerifiedExtensions []json.RawMessage `json:"verifiedExtensions"`
+		}
+		if json.Unmarshal(bootstrapData, &bootstrap) != nil || len(bootstrap.VerifiedExtensions) == 0 {
+			fmt.Fprintln(os.Stderr, "verified extension bootstrap is empty")
+			os.Exit(45)
+		}
+		fmt.Println(`{
+		  "projection": {"hasReasoningColumn": true, "hasContextColumn": true},
+		  "runtimeObservers": {"diagnostics": {}},
+		  "modal": {
+		    "fallbackAPIOK": true,
+		    "brokerExpected": false,
+		    "brokerTransportOK": false,
+		    "updateBeforeOpenRejected": true,
+		    "actionOK": true,
+		    "diagnostics": {"registered": 1, "closed": 1}
+		  }
+		}`)
+	}
 }
 
 func writeCapture(path string, value capture) {
