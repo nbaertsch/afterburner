@@ -293,21 +293,16 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
     } else {
       await waitFor(() => /activated.*black-box/i.test(stripAnsi(a.raw)) && /activated.*black-box/i.test(stripAnsi(b.raw)), "both runtimes loaded extensions");
       await waitFor(() => isReady(stripAnsi(a.raw)) && isReady(stripAnsi(b.raw)), "both terminals ready after startup dialogs", 30_000);
+      await Promise.all([
+        waitForOutputSettled(a, 1_000, 30_000),
+        waitForOutputSettled(b, 1_000, 30_000)
+      ]);
       send(b, `\x15passive-${name}-before`, "passive negative control before");
       await waitFor(() => stripAnsi(b.raw).includes(`passive-${name}-before`), `${name} passive responsiveness before`, 10_000);
       send(b, "\x15", "clear passive input before");
       const command = `/${name === "blackbox" ? "black-box-modal" : "openai-server"}`;
       send(a, `\x15${command}\r`, `open ${name} modal in A`);
-      let lastRetry = Date.now();
-      await waitFor(() => {
-        const activeText = stripAnsi(a.raw);
-        if (activePattern.test(activeText)) return true;
-        if (new RegExp(`Unknown command:\\s*${command.replaceAll("-", "\\-")}`, "i").test(activeText) && Date.now() - lastRetry > 2000) {
-          lastRetry = Date.now();
-          send(a, `\x15${command}\r`, `retry open ${name} modal in A`);
-        }
-        return false;
-      }, `${name} modal in A`, 45_000);
+      await waitFor(() => activePattern.test(stripAnsi(a.raw)), `${name} modal in A`, 45_000);
       await waitFor(async () => {
         const entries = await readAuditEntries();
         return entries.some(entry =>
