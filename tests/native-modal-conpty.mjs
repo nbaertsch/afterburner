@@ -22,17 +22,24 @@ const createPackage = root => {
   return packageRoot;
 };
 
-const createVerifiedBlackBoxRegistry = root => {
-  const home = join(root, "afterburner");
+const registryEnvironment = (root, packageRoot) => ({
+  ...process.env,
+  AFTERBURNER_HOME: join(root, "afterburner"),
+  AFTERBURNER_NORMAL_COPILOT_HOME: join(root, "normal"),
+  AFTERBURNER_COPILOT_EXECUTABLE: fakeCopilot,
+  AFTERBURNER_COPILOT_PACKAGE_ROOTS: packageRoot,
+  AFTERBURNER_ALLOW_UNPROFILED: "1",
+  AFTERBURNER_SKIP_PREFLIGHT: "1"
+});
+
+const createVerifiedBlackBoxRegistry = (root, packageRoot) => {
   const normal = join(root, "normal");
   mkdirSync(normal, { recursive: true });
   const result = spawnSync(afterburn, ["install", "black-box"], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
-      ...process.env,
-      AFTERBURNER_HOME: home,
-      AFTERBURNER_NORMAL_COPILOT_HOME: normal,
+      ...registryEnvironment(root, packageRoot),
       AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH: "1"
     }
   });
@@ -41,15 +48,10 @@ const createVerifiedBlackBoxRegistry = root => {
   }
 };
 
-const createVerifiedGenericRegistry = root => {
-  const home = join(root, "afterburner");
+const createVerifiedGenericRegistry = (root, packageRoot) => {
   const normal = join(root, "normal");
   mkdirSync(normal, { recursive: true });
-  const environment = {
-    ...process.env,
-    AFTERBURNER_HOME: home,
-    AFTERBURNER_NORMAL_COPILOT_HOME: normal
-  };
+  const environment = registryEnvironment(root, packageRoot);
   for (const args of [
     ["extension", "install", resolve("examples/native-ui-extension")],
     ["extension", "enable", "native-ui-example"]
@@ -243,8 +245,8 @@ const runScenario = ({
   const root = join(tmpdir(), `afterburn-modal-${name}-${process.pid}-${Date.now()}`);
   const capturePath = join(root, "capture.json");
   const packageRoot = createPackage(root);
-  if (genericExtension) createVerifiedGenericRegistry(root);
-  else createVerifiedBlackBoxRegistry(root);
+  if (genericExtension) createVerifiedGenericRegistry(root, packageRoot);
+  else createVerifiedBlackBoxRegistry(root, packageRoot);
   const child = pty.spawn(afterburn, ["--version"], {
     name: "xterm-256color",
     cols: 140,
