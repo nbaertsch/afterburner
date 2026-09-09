@@ -38,6 +38,8 @@ jobs:
             throw "extension package archives must not be committed: $trackedArchives"
           }
       - run: npm ci
+      - name: Install supported Copilot CLI
+        run: npm install --global @github/copilot@1.0.83-3 --no-audit --no-fund
       - name: Verify generated runtime copies are current
         run: npm run check:runtime
       - run: go test ./...
