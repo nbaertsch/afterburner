@@ -420,6 +420,44 @@ func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 	})
 }
 
+func TestSyncEmbeddedBuiltinsIncludesCopilotSDKShim(t *testing.T) {
+	root := t.TempDir()
+	normalCopilotHome := t.TempDir()
+	sdk := filepath.Join(normalCopilotHome, "pkg", "win32-x64", "1.0.83-3", "copilot-sdk")
+	if err := os.MkdirAll(sdk, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"index.js":     "export const sdk = true;\n",
+		"extension.js": "export const extension = true;\n",
+	} {
+		if err := os.WriteFile(filepath.Join(sdk, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("AFTERBURNER_NORMAL_COPILOT_HOME", normalCopilotHome)
+
+	if err := syncEmbeddedBuiltins(root); err != nil {
+		t.Fatal(err)
+	}
+	value, err := registry.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := value.Extensions["black-box"]
+	shim := filepath.Join(entry.ActivePath, "node_modules", "@github", "copilot-sdk", "index.js")
+	if _, err := os.Stat(shim); err != nil {
+		t.Fatalf("embedded built-in SDK shim was not installed: %v", err)
+	}
+	treeHash, err := registry.HashTree(entry.ActivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Identity.TreeHash != "sha256:"+treeHash {
+		t.Fatalf("registered tree hash = %q, package tree hash = %q", entry.Identity.TreeHash, treeHash)
+	}
+}
+
 func TestFailedReplacementRestoresRegistrySnapshot(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("replacement semantics are validated on Windows")

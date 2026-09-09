@@ -535,15 +535,17 @@ func ApplyReplacement(parentPID int, source, target, previous, registrySnapshot 
 }
 
 func syncEmbeddedBuiltins(root string) error {
-	layout := home.Layout{
-		Root:            root,
-		CopilotHome:     filepath.Join(root, "copilot-home"),
-		Config:          filepath.Join(root, "config"),
-		ExtensionData:   filepath.Join(root, "extension-data"),
-		Extensions:      filepath.Join(root, "extensions"),
-		Staging:         filepath.Join(root, "staging"),
-		BYOModelsConfig: filepath.Join(root, "config", "byomodels.json"),
+	layout, err := home.Resolve()
+	if err != nil {
+		return fmt.Errorf("resolve home for built-in synchronization: %w", err)
 	}
+	layout.Root = root
+	layout.CopilotHome = filepath.Join(root, "copilot-home")
+	layout.Config = filepath.Join(root, "config")
+	layout.ExtensionData = filepath.Join(root, "extension-data")
+	layout.Extensions = filepath.Join(root, "extensions")
+	layout.Staging = filepath.Join(root, "staging")
+	layout.BYOModelsConfig = filepath.Join(root, "config", "byomodels.json")
 	for _, path := range []string{
 		layout.Root,
 		layout.CopilotHome,
