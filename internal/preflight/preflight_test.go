@@ -13,6 +13,7 @@ import (
 	"github.com/nbaertsch/afterburner/internal/compatibility"
 	"github.com/nbaertsch/afterburner/internal/copilot"
 	"github.com/nbaertsch/afterburner/internal/home"
+	"github.com/nbaertsch/afterburner/internal/registry"
 	"github.com/nbaertsch/afterburner/internal/runtimepkg"
 )
 
@@ -127,6 +128,7 @@ func TestFailedPreflightUsesValidLastKnownGood(t *testing.T) {
 		current,
 		runtimepkg.Prepared{Version: "bad-runtime", Path: filepath.Join(root, "bad-wrapper")},
 		append(os.Environ(), "AFTERBURNER_TEST_EXIT_CODE=9"),
+		nil,
 		&stderr,
 	)
 	if err != nil {
@@ -137,5 +139,38 @@ func TestFailedPreflightUsesValidLastKnownGood(t *testing.T) {
 	}
 	if stderr.Len() == 0 {
 		t.Fatal("fallback warning was not emitted")
+	}
+}
+
+func TestValidateProvidesVerifiedExtensionBootstrap(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable fixture")
+	}
+	root := t.TempDir()
+	fake := filepath.Join(root, "fakecopilot.exe")
+	goExe := filepath.Join(runtime.GOROOT(), "bin", "go.exe")
+	command := exec.Command(goExe, "build", "-o", fake, "./testutil/fakecopilot")
+	command.Dir = filepath.Join("..")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build fake Copilot: %v\n%s", err, output)
+	}
+	value := registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{
+		"fixture": {
+			Enabled:    true,
+			Verified:   true,
+			ActivePath: filepath.Join(root, "extensions", "fixture", "local-test"),
+			Manifest: registry.Manifest{
+				ID:         "fixture",
+				Visibility: "private",
+			},
+			Source: registry.Source{Type: "path", Value: filepath.Join(root, "source")},
+			Identity: registry.IdentityBinding{
+				ManifestHash: "sha256:manifest",
+				TreeHash:     "sha256:tree",
+			},
+		},
+	}}
+	if err := validate(context.Background(), fake, "test-runtime", os.Environ(), &value); err != nil {
+		t.Fatal(err)
 	}
 }

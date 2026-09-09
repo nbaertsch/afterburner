@@ -516,20 +516,30 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	}
 	if !launchOptions.safeMode && opts.Version != "" && opts.Version != "dev" {
 		repairBuiltins := builtinRepairIDs(extensionRegistry)
+		manager := extensions.Manager{
+			Layout:      baseLayout,
+			Stdout:      opts.Stdout,
+			CoreVersion: opts.Version,
+			BuiltinFetcher: updater.BuiltinReleaseFetcher{
+				Client:  updater.NewClient(ctx),
+				Root:    baseLayout.Root,
+				Version: opts.Version,
+			},
+		}
 		if len(repairBuiltins) > 0 {
-			manager := extensions.Manager{
-				Layout:      baseLayout,
-				Stdout:      opts.Stdout,
-				CoreVersion: opts.Version,
-				BuiltinFetcher: updater.BuiltinReleaseFetcher{
-					Client:  updater.NewClient(ctx),
-					Root:    baseLayout.Root,
-					Version: opts.Version,
-				},
-			}
 			if err := manager.SyncBuiltins(repairBuiltins); err != nil {
 				return 1, fmt.Errorf("repair legacy built-in package authorization: %w", err)
 			}
+			extensionRegistry, err = registry.Load(baseLayout.Root)
+			if err != nil {
+				return 1, err
+			}
+		}
+		repairedLegacy, err := manager.RepairLegacyAuthorizations()
+		if err != nil {
+			return 1, fmt.Errorf("repair legacy extension authorization: %w", err)
+		}
+		if repairedLegacy > 0 {
 			extensionRegistry, err = registry.Load(baseLayout.Root)
 			if err != nil {
 				return 1, err
@@ -645,7 +655,16 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	traceStartup("byomodels-proxy")
 	validated := preflight.Result{Package: selected, Profile: selection.Profile, Prepared: prepared}
 	if !launchOptions.safeMode && len(launchOptions.disabledExtensions) == 0 {
-		validated, err = preflight.Ensure(ctx, layout, executable, selection, prepared, env, opts.Stderr)
+		validated, err = preflight.Ensure(
+			ctx,
+			layout,
+			executable,
+			selection,
+			prepared,
+			env,
+			&effectiveRegistry,
+			opts.Stderr,
+		)
 		if err != nil {
 			return 1, err
 		}

@@ -43,6 +43,21 @@ func TestValidateCompatibilityRejectsInvalidRanges(t *testing.T) {
 	}
 }
 
+func TestValidateCompatibilityAllowsUndeclaredAfterburnerRange(t *testing.T) {
+	manifest := registry.Manifest{
+		ID: "legacy-private-extension",
+		Requires: registry.Requirements{
+			Afterburner: "",
+		},
+	}
+	if err := validateCompatibilitySyntax(manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCompatibility(manifest, "v0.2.107", "1.0.83-3"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCompareVersionsHandlesCopilotBuildComponent(t *testing.T) {
 	left, err := parseVersion("1.0.83-3")
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -429,6 +430,100 @@ func (m Manager) List() error {
 		fmt.Fprintf(m.Stdout, "%s %s (%s) %s\n", state, id, entry.Manifest.Visibility, filepath.Base(entry.ActivePath))
 	}
 	return nil
+}
+
+func (m Manager) RepairLegacyAuthorizations() (int, error) {
+	if err := os.MkdirAll(m.Layout.Root, 0o700); err != nil {
+		return 0, fmt.Errorf("create Afterburner home: %w", err)
+	}
+	release, err := acquireLock(filepath.Join(m.Layout.Root, ".registry.lock"))
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	value, err := registry.Load(m.Layout.Root)
+	if err != nil {
+		return 0, err
+	}
+	repaired := 0
+	for _, id := range sortedKeys(value.Extensions) {
+		entry := value.Extensions[id]
+		if entry.Verified || !entry.Identity.IsZero() || registry.IsReservedBuiltinID(id) ||
+			entry.Manifest.Visibility == "builtin" {
+			continue
+		}
+		switch entry.Source.Type {
+		case "path", "git", "archive":
+		default:
+			continue
+		}
+		manifest, manifestErr := readManifestWithCanonicalID(entry.ActivePath, true)
+		manifestHash, treeHash, verifyErr := registry.VerifyActivePackage(entry)
+		treeDigest := strings.TrimPrefix(treeHash, "sha256:")
+		contentAddressed := manifestErr == nil && verifyErr == nil &&
+			reflect.DeepEqual(manifest, entry.Manifest) &&
+			len(treeDigest) >= 16 &&
+			filepath.Base(entry.ActivePath) == "local-"+treeDigest[:16]
+		if contentAddressed {
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			entry.UpdatedAt = now
+			entry.Identity = identityBinding(
+				manifest,
+				entry.Source,
+				strings.TrimPrefix(manifestHash, "sha256:"),
+				treeDigest,
+				entry.Identity.GrantEpoch,
+				now,
+				false,
+			)
+			entry, err = registry.SealEntry(m.Layout.Root, entry)
+			if err != nil {
+				return repaired, fmt.Errorf("authorize legacy extension %q: %w", id, err)
+			}
+		} else {
+			if entry.Source.Type != "path" {
+				continue
+			}
+			sourcePath, sourceMetadata, cleanup, resolveErr := m.resolveRegistrySource(entry.Source)
+			if resolveErr != nil {
+				continue
+			}
+			sourceManifest, sourceManifestErr := readManifestWithCanonicalID(sourcePath, true)
+			if sourceManifestErr != nil || sourceManifest.ID != id || sourceManifest.Visibility == "builtin" {
+				cleanup()
+				continue
+			}
+			refreshed, refreshErr := m.materialize(
+				sourcePath,
+				sourceMetadata,
+				entry,
+				entry.Enabled,
+				false,
+				false,
+			)
+			cleanup()
+			if refreshErr != nil {
+				continue
+			}
+			entry = refreshed
+		}
+		value.Extensions[id] = entry
+		repaired++
+	}
+	if repaired == 0 {
+		return 0, nil
+	}
+	if value.Epoch == 0 {
+		value.Epoch = 1
+	}
+	value.Epoch++
+	if err := registry.Save(m.Layout.Root, value); err != nil {
+		return 0, err
+	}
+	if err := sessions.Reconcile(m.Layout, value); err != nil {
+		return 0, err
+	}
+	return repaired, prunePackageCache(m.Layout, value, time.Now().UTC().Add(-packageCacheRetentionGrace))
 }
 
 func (m Manager) Inspect(id string) error {

@@ -86,6 +86,34 @@ func TestProxyRejectsUnrelatedListener(t *testing.T) {
 	}
 }
 
+func TestProxySharesLegacyOwnerWithoutConfigurationIdentity(t *testing.T) {
+	port := availablePort(t)
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != healthPath {
+			http.NotFound(response, request)
+			return
+		}
+		response.Header().Set("content-type", "application/json")
+		_ = json.NewEncoder(response).Encode(identity{
+			Marker:   healthMarker,
+			Provider: "test-provider",
+			Upstream: "https://example.invalid/",
+		})
+	})}
+	go server.Serve(listener)
+	defer server.Close()
+
+	manager, err := Start(writeConfig(t, "https://example.invalid", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+}
+
 func TestProxySurvivesOwnerHandoff(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("content-type", "application/json")
