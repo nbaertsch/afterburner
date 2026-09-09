@@ -5,6 +5,7 @@ import { inflateSync } from "node:zlib";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import pty from "node-pty";
+import { bootstrapExperimentalCopilotProfile } from "./copilot-experimental-profile.mjs";
 
 const stripAnsi = value => value
   .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
@@ -45,6 +46,9 @@ const latencyBudgets = {
 const scriptStartedAt = Date.now();
 mkdirSync(captureDirectory, { recursive: true });
 const isolatedAfterburnerHome = mkdtempSync(join(tmpdir(), "afterburner-blackbox-"));
+const normalCopilotHome = join(isolatedAfterburnerHome, "normal-copilot");
+mkdirSync(normalCopilotHome, { recursive: true });
+writeFileSync(join(normalCopilotHome, "settings.json"), `${JSON.stringify({ experimental: true }, null, 2)}\n`, "utf8");
 process.once("exit", () => {
   try { rmSync(isolatedAfterburnerHome, { recursive: true, force: true }); } catch {}
 });
@@ -62,6 +66,7 @@ writeFileSync(packageManifestPath, `${JSON.stringify(packageManifest, null, 2)}\
 const testEnvironment = {
   ...process.env,
   AFTERBURNER_HOME: isolatedAfterburnerHome,
+  AFTERBURNER_NORMAL_COPILOT_HOME: normalCopilotHome,
   AFTERBURNER_ISOLATE_SESSION_STATE: "1"
 };
 const packResult = spawnSync(afterburn, ["extension", "pack", packageSource, packageArchive], {
@@ -137,15 +142,30 @@ const env = {
   ...process.env,
   COPILOT_RUNTIME_EXTENSION_DEBUG: "1",
   AFTERBURNER_HOME: isolatedAfterburnerHome,
+  AFTERBURNER_NORMAL_COPILOT_HOME: normalCopilotHome,
   AFTERBURNER_ISOLATE_SESSION_STATE: "1",
   AFTERBURNER_SKIP_PREFLIGHT: "1"
 };
-delete env.COPILOT_AGENT_SESSION_ID;
-delete env.COPILOT_LOADER_PID;
-delete env.COPILOT_SUPERVISED;
+for (const key of [
+  "COPILOT_AGENT_SESSION_ID",
+  "COPILOT_CLI",
+  "COPILOT_CLI_BINARY_VERSION",
+  "COPILOT_CLI_RESOLVED_DIST_DIR",
+  "COPILOT_HOME",
+  "COPILOT_LOADER_PID",
+  "COPILOT_SUPERVISED"
+]) delete env[key];
 
 const terminalColumns = 140;
 const terminalRows = 40;
+
+await bootstrapExperimentalCopilotProfile({
+  afterburn,
+  cwd: process.cwd(),
+  env,
+  managedCopilotHome: join(isolatedAfterburnerHome, "copilot-home"),
+  label: "afterburn-blackbox-bootstrap"
+});
 
 const child = pty.spawn(afterburn, ["--name", `afterburn-blackbox-uat-${process.pid}-${Date.now()}`, "--no-remote"], {
   name: "xterm-256color",
@@ -189,6 +209,8 @@ let restoreDismissCount = 0;
 let lastRestoreDismissAt = 0;
 let approved = false;
 let terminalSetupDeclined = false;
+let nativeAppSelectionMoved = false;
+let nativeAppDeclined = false;
 let commandInputStartedAt = 0;
 let commandSentAt = 0;
 let commandSubmitRetryAt = 0;
@@ -917,6 +939,16 @@ child.onData(data => {
   if (!terminalSetupDeclined && /Set up terminal for multi-line input support/i.test(recent)) {
     terminalSetupDeclined = true;
     scheduleWrite("\x1b", 250, "dismiss terminal setup");
+    return;
+  }
+  if (!nativeAppSelectionMoved && /Yes, install[\s\S]{0,200}No, thanks/i.test(recent)) {
+    nativeAppSelectionMoved = true;
+    scheduleWrite("\x1b[C", 250, "select no native desktop app");
+    setTimeout(() => {
+      if (nativeAppDeclined) return;
+      nativeAppDeclined = true;
+      writeInput("\r", "decline native desktop app");
+    }, 1000).unref?.();
     return;
   }
 

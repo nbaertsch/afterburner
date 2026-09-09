@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, delimiter, join, resolve } from "node:path";
 import process from "node:process";
 import pty from "node-pty";
+import { bootstrapExperimentalCopilotProfile } from "./copilot-experimental-profile.mjs";
 
 const afterburn = resolve(process.argv[2] ?? process.env.AFTERBURNER_EXE ?? ".native-build/afterburn.exe");
 const captureDirectory = resolve(process.argv[3] ?? join(process.cwd(), "artifacts", "openai-server-menu-tui"));
@@ -56,7 +57,7 @@ const discoverPackageRoots = () => {
 const isolatedEnvironment = (extra = {}) => {
   const environment = { ...process.env };
   for (const key of Object.keys(environment)) {
-    if (/^(COPILOT_HOME|COPILOT_AGENT_SESSION_ID|COPILOT_LOADER_PID|COPILOT_SUPERVISED|AFTERBURNER_HOME|AFTERBURNER_NORMAL_COPILOT_HOME|AFTERBURNER_OPENAI_SERVER_CONFIG|AFTERBURNER_COPILOT_OPENAI_CONFIG|AFTERBURNER_DISABLED_EXTENSIONS|AFTERBURNER_COPILOT_EXECUTABLE)$/i.test(key)) delete environment[key];
+    if (/^(COPILOT_HOME|COPILOT_AGENT_SESSION_ID|COPILOT_CLI|COPILOT_CLI_BINARY_VERSION|COPILOT_CLI_RESOLVED_DIST_DIR|COPILOT_LOADER_PID|COPILOT_SUPERVISED|AFTERBURNER_HOME|AFTERBURNER_NORMAL_COPILOT_HOME|AFTERBURNER_OPENAI_SERVER_CONFIG|AFTERBURNER_COPILOT_OPENAI_CONFIG|AFTERBURNER_DISABLED_EXTENSIONS)$/i.test(key)) delete environment[key];
   }
   environment.USERPROFILE = isolatedUserHome;
   environment.HOME = isolatedUserHome;
@@ -131,6 +132,13 @@ const env = isolatedEnvironment({
   AFTERBURNER_OPENAI_SERVER_CONFIG: bridgeConfigPath,
   AFTERBURNER_SKIP_PREFLIGHT: "1"
 });
+await bootstrapExperimentalCopilotProfile({
+  afterburn,
+  cwd: workspace,
+  env,
+  managedCopilotHome: join(afterburnerHome, "copilot-home"),
+  label: "afterburn-openai-bootstrap"
+});
 const child = pty.spawn(afterburn, ["--name", `afterburn-openai-menu-uat-${process.pid}-${Date.now()}`, "--no-remote"], {
   name: "xterm-256color",
   cols: terminalColumns,
@@ -146,6 +154,8 @@ let trusted = false;
 let restored = false;
 let approved = false;
 let terminalSetupDeclined = false;
+let nativeAppSelectionMoved = false;
+let nativeAppDeclined = false;
 let commandInputStartedAt = 0;
 let commandSentAt = 0;
 let commandSubmitRetryAt = 0;
@@ -324,6 +334,16 @@ child.onData(data => {
   if (!restored && /Restore interrupted sessions/i.test(recent)) { restored = true; scheduleWrite("\x1b", 250, "dismiss restore sessions"); return; }
   if (!approved && /wants elevated permissions/i.test(recent)) { approved = true; scheduleWrite("\r", 250, "approve elevated permissions"); return; }
   if (!terminalSetupDeclined && /Set up terminal for multi-line input support/i.test(recent)) { terminalSetupDeclined = true; scheduleWrite("\x1b", 250, "dismiss terminal setup"); return; }
+  if (!nativeAppSelectionMoved && /Yes, install[\s\S]{0,200}No, thanks/i.test(recent)) {
+    nativeAppSelectionMoved = true;
+    scheduleWrite("\x1b[C", 250, "select no native desktop app");
+    setTimeout(() => {
+      if (nativeAppDeclined) return;
+      nativeAppDeclined = true;
+      writeInput("\r", "decline native desktop app");
+    }, 1000).unref?.();
+    return;
+  }
 
   const runtimeReady = /activated Afterburner extension 'openai-server-uat'/i.test(text) && /runtime-extension-host/i.test(text);
   const promptReady = /\/ commands|tab next tab|\? help|@ files · # issues|Tip:\s*\/usage/i.test(recent);
