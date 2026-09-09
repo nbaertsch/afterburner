@@ -55,6 +55,11 @@ jobs:
         run: |
           npm install --global @github/copilot@1.0.83-3 --no-audit --no-fund
           copilot --version
+          $native = Join-Path (npm root --global) "@github\copilot\node_modules\@github\copilot-win32-x64\copilot.exe"
+          if (-not (Test-Path -LiteralPath $native)) {
+            throw "Pinned Copilot native executable was not installed at $native"
+          }
+          "AFTERBURNER_COPILOT_EXECUTABLE=$native" | Add-Content $env:GITHUB_ENV
       - run: npm run check:runtime
       - run: git diff --exit-code -- src internal/runtimepkg/app.js internal/runtimepkg/runtime
       - run: go test ./...

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -22,6 +22,9 @@ const home = join(root, "afterburner");
 const normal = join(root, "normal");
 mkdirSync(captureDirectory, { recursive: true });
 mkdirSync(normal, { recursive: true });
+writeFileSync(join(normal, "settings.json"), `${JSON.stringify({
+  experimental: true
+}, null, 2)}\n`, "utf8");
 const packages = join(root, "packages");
 const auditDirectory = join(captureDirectory, "route-ipc-audit");
 mkdirSync(packages, { recursive: true });
@@ -97,7 +100,16 @@ const baseEnv = {
   AFTERBURNER_TERMINAL_BROKER: "1",
   ...(maybeFake ? { AFTERBURNER_COPILOT_EXECUTABLE: maybeFake } : {})
 };
-for (const key of ["COPILOT_AGENT_SESSION_ID", "COPILOT_LOADER_PID", "COPILOT_SUPERVISED", "AFTERBURNER_SESSION_ROUTE"]) delete baseEnv[key];
+for (const key of [
+  "COPILOT_AGENT_SESSION_ID",
+  "COPILOT_CLI",
+  "COPILOT_CLI_BINARY_VERSION",
+  "COPILOT_CLI_RESOLVED_DIST_DIR",
+  "COPILOT_HOME",
+  "COPILOT_LOADER_PID",
+  "COPILOT_SUPERVISED",
+  "AFTERBURNER_SESSION_ROUTE"
+]) delete baseEnv[key];
 
 function launch(label, extraEnv = {}) {
   const child = pty.spawn(afterburn, ["--name", `afterburn-${label}-${process.pid}-${Date.now()}`, "--no-remote"], {
@@ -116,7 +128,9 @@ function launch(label, extraEnv = {}) {
     approvedTrust: false,
     approvedElevation: false,
     dismissedRestore: false,
-    dismissedTerminalSetup: false
+    dismissedTerminalSetup: false,
+    nativeAppSelectionMovedAt: 0,
+    declinedNativeApp: false
   };
   child.onData(data => {
     state.raw += data;
@@ -146,6 +160,13 @@ async function waitFor(predicate, description, ms = timeoutMs) {
       if (!session.dismissedTerminalSetup && /Set up terminal for multi-line input support|Would you like to add this key binding/i.test(recent)) {
         session.dismissedTerminalSetup = true;
         send(session, "\x1b", "dismiss terminal setup");
+      }
+      if (!session.nativeAppSelectionMovedAt && /Yes, install[\s\S]{0,200}No, thanks/i.test(recent)) {
+        session.nativeAppSelectionMovedAt = Date.now();
+        send(session, "\x1b[C", "select no native desktop app");
+      } else if (!session.declinedNativeApp && session.nativeAppSelectionMovedAt && Date.now() - session.nativeAppSelectionMovedAt >= 500) {
+        session.declinedNativeApp = true;
+        send(session, "\r", "decline native desktop app");
       }
       if (!session.approvedTrust && /Confirm folder trust|Do you trust the files in this folder/i.test(recent)) {
         session.approvedTrust = true;
@@ -283,6 +304,28 @@ async function terminateSessions(list) {
   }
 }
 
+async function bootstrapExperimentalProfile() {
+  const session = launch("bootstrap");
+  currentSessions.splice(0, currentSessions.length, session);
+  try {
+    await waitFor(() => {
+      const text = stripAnsi(session.raw);
+      return isReady(text) && (/Staff mode activated/i.test(text) || /activated.*black-box/i.test(text));
+    }, "experimental profile bootstrap");
+    await waitForOutputSettled(session, 1_000, 30_000);
+    const launchHomes = join(home, "launch-homes");
+    const launchHome = readdirSync(launchHomes, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => join(launchHomes, entry.name))
+      .find(path => existsSync(join(path, "config.json")));
+    if (!launchHome) throw new Error("experimental profile bootstrap did not produce config.json");
+    mkdirSync(join(home, "copilot-home"), { recursive: true });
+    cpSync(join(launchHome, "config.json"), join(home, "copilot-home", "config.json"));
+  } finally {
+    await terminateSessions([session]);
+  }
+}
+
 async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPattern, action, actionPattern) {
   const a = launch(`${name}-A`, activeExtraEnv);
   const b = launch(`${name}-B`);
@@ -359,12 +402,13 @@ const allSessions = [];
 const startedAt = Date.now();
 let evidence;
 try {
+  if (!maybeFake) await bootstrapExperimentalProfile();
   const blackbox = await runPair("blackbox", maybeFake ? { AFTERBURNER_TEST_MODAL: "1", AFTERBURNER_TEST_MODAL_TITLE: "Afterburner Black Box Live" } : {}, /Afterburner Black Box Live/i, /Afterburner Black Box Live/i, "\x1b");
   sessions.push(blackbox.a, blackbox.b);
   allSessions.push(...sessions);
   await terminateSessions(sessions);
   sessions = [];
-  const openai = await runPair("openai", maybeFake ? { AFTERBURNER_TEST_MODAL: "1", AFTERBURNER_TEST_MODAL_TITLE: "OpenAI Server", AFTERBURNER_TEST_MODAL_ACTIONS: "1" } : {}, /OpenAI Server/i, /OpenAI Server/i, maybeFake ? "r" : ["\t", "\t", "\r"], /status refreshed|OpenAI server listening|OpenAI server is not running|requests=/i);
+  const openai = await runPair("openai", maybeFake ? { AFTERBURNER_TEST_MODAL: "1", AFTERBURNER_TEST_MODAL_TITLE: "OpenAI Server", AFTERBURNER_TEST_MODAL_ACTIONS: "1" } : {}, /OpenAI Server/i, /OpenAI Server/i, maybeFake ? "r" : ["\t", "\t", " "], /status refreshed|OpenAI server listening|OpenAI server is not running|requests=/i);
   sessions.push(openai.a, openai.b);
   allSessions.push(...sessions);
   assertNoSessionPersistenceErrors(allSessions);
