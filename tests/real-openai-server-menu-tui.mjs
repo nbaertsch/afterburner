@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, delimiter, join, resolve } from "node:path";
 import process from "node:process";
@@ -24,6 +24,9 @@ mkdirSync(join(afterburnerHome, "copilot-home"), { recursive: true });
 mkdirSync(normalCopilotHome, { recursive: true });
 mkdirSync(isolatedUserHome, { recursive: true });
 mkdirSync(workspace, { recursive: true });
+process.once("exit", () => {
+  try { rmSync(root, { recursive: true, force: true }); } catch {}
+});
 
 const stripAnsi = value => value
   .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
@@ -50,31 +53,6 @@ const discoverPackageRoots = () => {
   }
   return [...roots];
 };
-const findCopilotSdk = () => {
-  for (const packageRoot of discoverPackageRoots()) {
-    let versions;
-    try { versions = [...new Set(readdirSync(packageRoot))]; } catch { continue; }
-    for (const version of versions.sort().reverse()) {
-      const sdkPath = join(packageRoot, version, "copilot-sdk");
-      if (existingDirectory(sdkPath)) return sdkPath;
-    }
-  }
-  return undefined;
-};
-const installCopilotSdkShim = activePath => {
-  const sdkSource = findCopilotSdk();
-  if (!sdkSource) return false;
-  const sdkTarget = join(activePath, "node_modules", "@github", "copilot-sdk");
-  mkdirSync(sdkTarget, { recursive: true });
-  cpSync(sdkSource, sdkTarget, { recursive: true });
-  writeJson(join(sdkTarget, "package.json"), {
-    name: "@github/copilot-sdk",
-    type: "module",
-    exports: { ".": "./index.js", "./extension": "./extension.js" }
-  });
-  return true;
-};
-
 const isolatedEnvironment = (extra = {}) => {
   const environment = { ...process.env };
   for (const key of Object.keys(environment)) {
@@ -93,8 +71,27 @@ const isolatedEnvironment = (extra = {}) => {
 mkdirSync(join(root, "localappdata"), { recursive: true });
 mkdirSync(join(root, "appdata"), { recursive: true });
 
-const installEnv = isolatedEnvironment({ AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH: "1" });
-const installResult = spawnSync(afterburn, ["install", "openai-server"], {
+const installEnv = isolatedEnvironment();
+const packageSource = join(root, "package-source");
+const packageArchive = join(root, "openai-server-uat.zip");
+cpSync(join(repoRoot, "extensions", "OpenAIServer"), packageSource, {
+  recursive: true,
+  filter: path => ![".test-work", "node_modules"].includes(path.split(/[\\/]/).at(-1))
+});
+const packageManifestPath = join(packageSource, "afterburner.json");
+const packageManifest = JSON.parse(readFileSync(packageManifestPath, "utf8"));
+packageManifest.id = "openai-server-uat";
+packageManifest.visibility = "private";
+writeJson(packageManifestPath, packageManifest);
+const packResult = spawnSync(afterburn, ["extension", "pack", packageSource, packageArchive], {
+  cwd: repoRoot,
+  encoding: "utf8",
+  env: installEnv
+});
+if (packResult.status !== 0) {
+  throw new Error(`failed to pack OpenAI Server UAT package: status=${packResult.status} stdout=${packResult.stdout} stderr=${packResult.stderr}`);
+}
+const installResult = spawnSync(afterburn, ["extension", "install", packageArchive], {
   cwd: repoRoot,
   encoding: "utf8",
   env: installEnv
@@ -102,28 +99,29 @@ const installResult = spawnSync(afterburn, ["install", "openai-server"], {
 if (installResult.status !== 0) {
   throw new Error(`failed to install OpenAI Server built-in extension: status=${installResult.status} stdout=${installResult.stdout} stderr=${installResult.stderr}`);
 }
-const enableResult = spawnSync(afterburn, ["enable", "openai-server"], {
+const enableResult = spawnSync(afterburn, ["extension", "enable", "openai-server-uat"], {
   cwd: repoRoot,
   encoding: "utf8",
   env: installEnv
 });
 if (enableResult.status !== 0) {
-  throw new Error(`failed to enable OpenAIServer local extension: status=${enableResult.status} stdout=${enableResult.stdout} stderr=${enableResult.stderr}`);
+  throw new Error(`failed to enable OpenAI Server UAT package: status=${enableResult.status} stdout=${enableResult.stdout} stderr=${enableResult.stderr}`);
 }
 const registry = JSON.parse(readFileSync(join(afterburnerHome, "registry.json"), "utf8"));
-const entry = registry.extensions?.["openai-server"];
+const entry = registry.extensions?.["openai-server-uat"];
 const activePath = entry?.activePath;
 if (!activePath) throw new Error("OpenAIServer extension did not install into registry");
-const sdkShimInstalled = installCopilotSdkShim(activePath);
+const sdkShimInstalled = false;
 writeJson(join(afterburnerHome, "copilot-home", "settings.json"), {
   experimental: true,
   enabledPlugins: { "afterburner-openai-server": true },
   extensions: { disabledExtensions: [] }
 });
-writeJson(join(afterburnerHome, "copilot-home", "config.json"), {
-  appTipShown: true,
-  askedSetupTerminals: ["windows-terminal"]
-});
+const copilotConfigPath = join(afterburnerHome, "copilot-home", "config.json");
+const copilotConfig = JSON.parse(readFileSync(copilotConfigPath, "utf8"));
+copilotConfig.appTipShown = true;
+copilotConfig.askedSetupTerminals = ["windows-terminal"];
+writeJson(copilotConfigPath, copilotConfig);
 const bridgeConfigPath = join(afterburnerHome, "config", "openai-server.json");
 writeJson(bridgeConfigPath, { enabled: false, port: 0, requireApiKey: false });
 
@@ -271,7 +269,8 @@ const finish = (exitCode, message) => {
     },
     assertions: {
       oneSlashCommandMenuVisible: ioEvents.some(event => event.type === "input" && event.display.includes("/openai-server")),
-      nativeModalRendered: /OpenAI Server[\s\S]*Endpoint:\s*(?:127\.0\.0\.1:\d+|not allocated)/i.test(plain),
+      nativeModalRendered: operatorSteps.some(step =>
+        /OpenAI Server[\s\S]*Endpoint:\s*(?:127\.0\.0\.1:\d+|not allocated)/i.test(step.viewportText)),
       noCanvasOnlyFallback: !/Canvas opened:\s*OpenAI Server/i.test(plain),
       noTextFallback: !/interactive menu could not open|native menu unavailable/i.test(plain),
       everyAdvertisedActionExercised: actionSteps.every(step => Boolean(actionSeenAt[step.name])) && Boolean(closeSeenAt),
@@ -308,10 +307,10 @@ const finish = (exitCode, message) => {
   writeFileSync(result.artifacts.operatorMarkdown, [`# OpenAI Server menu UAT`, "", `Result: ${result.status}`, `Message: ${message}`, "", ...operatorSteps.map(step => `## ${step.name}\n- Key/input: ${step.key}\n- Latency: ${step.latencyMs}ms\n- Assertions: ${step.assertions.join("; ")}\n\n\`\`\`text\n${step.viewportText}\n\`\`\``)].join("\n"), "utf8");
   writePngReport(result);
   writeJson(artifactPath("openai-server-menu-result.json"), result);
-  try { child.kill(); } catch {}
+  try { process.kill(child.pid); } catch {}
   if (exitCode === 0) process.stdout.write(`${message}\n`);
   else process.stderr.write(`${message}\n--- tail ---\n${plain.slice(-6000)}\n`);
-  process.exit(exitCode);
+  setTimeout(() => process.exit(exitCode), 500);
 };
 
 child.onData(data => {
@@ -325,19 +324,24 @@ child.onData(data => {
   if (!approved && /wants elevated permissions/i.test(recent)) { approved = true; scheduleWrite("\r", 250, "approve elevated permissions"); return; }
   if (!terminalSetupDeclined && /Set up terminal for multi-line input support/i.test(recent)) { terminalSetupDeclined = true; scheduleWrite("\x1b", 250, "dismiss terminal setup"); return; }
 
-  const runtimeReady = /activated Afterburner extension 'openai-server'/i.test(text) && /runtime-extension-host/i.test(text);
-  const promptReady = /\/ commands|tab next tab|\? help|@ files · # issues/i.test(recent);
+  const runtimeReady = /activated Afterburner extension 'openai-server-uat'/i.test(text) && /runtime-extension-host/i.test(text);
+  const promptReady = /\/ commands|tab next tab|\? help|@ files · # issues|Tip:\s*\/usage/i.test(recent);
   if (flushPendingCommandIfReady(promptReady)) return;
   if (!commandInputStartedAt && runtimeReady && promptReady) {
     commandInputStartedAt = Date.now();
-    scheduleCommand("/openai-server", 1000, () => { commandSentAt = Date.now(); }, "submit /openai-server");
+    scheduleCommand("/openai-server", 20000, () => { commandSentAt = Date.now(); }, "submit /openai-server");
     return;
   }
-  if (commandSentAt && !menuSeenAt && /\/openai-server/i.test(recent) && Date.now() - commandSubmitRetryAt > 4000) {
-    commandSubmitRetryAt = Date.now();
-    writeInput("\r\n", "retry /openai-server submit");
+  if (commandSentAt && !menuSeenAt &&
+      !/OpenAI Server[\s\S]*Endpoint:/i.test(text) &&
+      /Unknown command:\s*\/openai-server/i.test(recent)) {
+    if (Date.now() - commandSentAt > 30_000) return finish(1, "Copilot never registered /openai-server after runtime startup");
+    if (Date.now() - commandSubmitRetryAt > 5000) {
+      commandSubmitRetryAt = Date.now();
+      scheduleCommand("/openai-server", 250, () => {}, "retry /openai-server");
+    }
+    return;
   }
-  if (commandSentAt && !menuSeenAt && /Unknown command:\s*\/openai-server/i.test(recent)) return finish(1, "Copilot rejected /openai-server as an unknown command");
   if (commandSentAt && !menuSeenAt && /native menu unavailable|interactive menu could not open/i.test(recent)) return finish(1, "OpenAIServer reported that the native interactive menu could not open");
   if (/Canvas opened:\s*OpenAI Server/i.test(recent)) return finish(1, "OpenAIServer fell back to generic canvas-open text instead of native rendered UI");
 

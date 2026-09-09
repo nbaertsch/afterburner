@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	regpkg "github.com/nbaertsch/afterburner/internal/registry"
@@ -127,8 +128,17 @@ func TestNativeProxyStartsBeforeCopilot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry := regpkg.Entry{Enabled: true, ActivePath: activePath, Manifest: manifest, Source: regpkg.Source{Type: "embedded", Value: "byo-models"}, UpdatedAt: "2026-09-03T00:00:00Z"}
-	entry.Identity = regpkg.IdentityBinding{ExtensionID: "byo-models", ManifestHash: manifestHash, TreeHash: treeHash, SourceType: "embedded", SourceValue: "byo-models", SignerID: "afterburner-core", SignerFingerprint: "builtin:byo-models", BuiltinSigned: true, RegistryEpoch: 1, GrantEpoch: 1, BoundAt: "2026-09-03T00:00:00Z"}
+	source := regpkg.Source{
+		Type:              "signed-release",
+		Value:             "byo-models",
+		Version:           "v0.2.106",
+		Commit:            strings.Repeat("a", 40),
+		Digest:            "sha256:" + strings.Repeat("b", 64),
+		ManifestDigest:    "sha256:" + strings.Repeat("c", 64),
+		SignerFingerprint: "sha256:" + strings.Repeat("d", 64),
+	}
+	entry := regpkg.Entry{Enabled: true, ActivePath: activePath, Manifest: manifest, Source: source, UpdatedAt: "2026-09-03T00:00:00Z"}
+	entry.Identity = regpkg.IdentityBinding{ExtensionID: "byo-models", ManifestHash: manifestHash, TreeHash: treeHash, SourceType: "signed-release", SourceValue: "byo-models", SourceVersion: source.Version, SourceCommit: source.Commit, SignerID: "afterburner-release", SignerFingerprint: source.SignerFingerprint, BuiltinSigned: true, RegistryEpoch: 1, GrantEpoch: 1, BoundAt: "2026-09-03T00:00:00Z"}
 	entry, err = regpkg.SealEntry(afterburnerHome, entry)
 	if err != nil {
 		t.Fatal(err)

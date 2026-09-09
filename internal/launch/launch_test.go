@@ -131,8 +131,9 @@ func TestRunDirectProvidesNativeIdentityAssertionsWithoutModalTransport(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry := registry.Entry{Enabled: true, ActivePath: activePath, Manifest: manifest, Source: registry.Source{Type: "embedded", Value: "black-box"}, UpdatedAt: "2026-09-05T00:00:00Z"}
-	entry.Identity = registry.IdentityBinding{ExtensionID: "black-box", ManifestHash: manifestHash, TreeHash: treeHash, SourceType: "embedded", SourceValue: "black-box", SignerID: "afterburner-core", SignerFingerprint: "builtin:black-box", BuiltinSigned: true, RegistryEpoch: 1, GrantEpoch: 1, BoundAt: entry.UpdatedAt}
+	source := registry.Source{Type: "signed-release", Value: "black-box", Version: "v1.0.0", Commit: strings.Repeat("a", 40), Digest: "sha256:" + strings.Repeat("b", 64), ManifestDigest: "sha256:" + strings.Repeat("c", 64), SignerFingerprint: "sha256:" + strings.Repeat("d", 64)}
+	entry := registry.Entry{Enabled: true, ActivePath: activePath, Manifest: manifest, Source: source, UpdatedAt: "2026-09-05T00:00:00Z"}
+	entry.Identity = registry.IdentityBinding{ExtensionID: "black-box", ManifestHash: manifestHash, TreeHash: treeHash, SourceType: source.Type, SourceValue: source.Value, SourceVersion: source.Version, SourceCommit: source.Commit, SignerID: "afterburner-release", SignerFingerprint: source.SignerFingerprint, BuiltinSigned: true, RegistryEpoch: 1, GrantEpoch: 1, BoundAt: entry.UpdatedAt}
 	entry, err = registry.SealEntry(afterburnerHome, entry)
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +226,7 @@ func TestWithModalEnvUsesPerLaunchValuesAndCopies(t *testing.T) {
 
 func TestWriteNativeBootstrapContainsOnlyPreissuedSurfaces(t *testing.T) {
 	surfaces := []terminal.ModalCapability{{OwnerExtensionID: "black-box", CanvasID: "black-box", SurfaceID: "black-box", Pipe: `\\.\pipe\test`}}
-	path, cleanup, err := writeNativeBootstrap(surfaces, []nativeIdentityAssertion{{ExtensionID: "black-box", ActivePath: `C:\tmp\black-box`, ManifestHash: "sha256:m", TreeHash: "sha256:t", SourceType: "embedded", SourceValue: "black-box", TrustedBuiltin: true}})
+	path, cleanup, err := writeNativeBootstrap(surfaces, []nativeIdentityAssertion{{ExtensionID: "black-box", ActivePath: `C:\tmp\black-box`, ManifestHash: "sha256:m", TreeHash: "sha256:t", SourceType: "signed-release", SourceValue: "black-box", TrustedBuiltin: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,8 +301,8 @@ func TestPreissueModalCapabilitiesRequiresVerifiedModalCapability(t *testing.T) 
 	}
 
 	verified := registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{
-		"black-box":     verifiedEntry("black-box", "builtin", "embedded", "black-box", true, []string{"modal-canvas"}),
-		"openai-server": verifiedEntry("openai-server", "builtin", "embedded", "openai-server", true, []string{"modal-canvas"}),
+		"black-box":     verifiedEntry("black-box", "builtin", "signed-release", "black-box", true, []string{"modal-canvas"}),
+		"openai-server": verifiedEntry("openai-server", "builtin", "signed-release", "openai-server", true, []string{"modal-canvas"}),
 		"no-modal":      verifiedEntry("no-modal", "private", "path", `C:\\repo\\extensions\\NoModal`, false, []string{"session-command"}),
 	}}
 	verified.Extensions["black-box"] = withUISurfaces(verified.Extensions["black-box"], "afterburner-black-box-live", "black-box")
@@ -351,11 +352,23 @@ func withUISurfaces(entry registry.Entry, ids ...string) registry.Entry {
 }
 
 func verifiedEntry(id, visibility, sourceType, sourceValue string, builtinSigned bool, capabilities []string) registry.Entry {
+	source := registry.Source{Type: sourceType, Value: sourceValue}
+	signerID := ""
+	signerFingerprint := ""
+	if builtinSigned {
+		source.Version = "v1.0.0"
+		source.Commit = strings.Repeat("a", 40)
+		source.Digest = "sha256:" + strings.Repeat("b", 64)
+		source.ManifestDigest = "sha256:" + strings.Repeat("c", 64)
+		source.SignerFingerprint = "sha256:" + strings.Repeat("d", 64)
+		signerID = "afterburner-release"
+		signerFingerprint = source.SignerFingerprint
+	}
 	return registry.Entry{
 		Enabled:  true,
 		Manifest: registry.Manifest{ID: id, Visibility: visibility, Capabilities: capabilities},
-		Source:   registry.Source{Type: sourceType, Value: sourceValue},
-		Identity: registry.IdentityBinding{ExtensionID: id, ManifestHash: "sha256:m", TreeHash: "sha256:t", SourceType: sourceType, SourceValue: sourceValue, SignerID: "afterburner-core", SignerFingerprint: "builtin:" + id, BuiltinSigned: builtinSigned, RegistryEpoch: 1, GrantEpoch: 1},
+		Source:   source,
+		Identity: registry.IdentityBinding{ExtensionID: id, ManifestHash: "sha256:m", TreeHash: "sha256:t", SourceType: sourceType, SourceValue: sourceValue, SourceVersion: source.Version, SourceCommit: source.Commit, SignerID: signerID, SignerFingerprint: signerFingerprint, BuiltinSigned: builtinSigned, RegistryEpoch: 1, GrantEpoch: 1},
 		Verified: true,
 	}
 }

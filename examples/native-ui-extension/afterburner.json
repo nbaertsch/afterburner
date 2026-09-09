@@ -5,7 +5,7 @@
   "displayName": "Native UI Example",
   "visibility": "private",
   "requires": {
-    "afterburner": ">=0.3.0 <1.0.0"
+    "afterburner": ">=0.2.0 <1.0.0"
   },
   "capabilities": [
     "modal-canvas"

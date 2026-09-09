@@ -37,6 +37,7 @@ func TestReconcilePreservesOrdinaryPluginsAndRemovesStaleManaged(t *testing.T) {
 	value := registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{
 		"example": {
 			Enabled:    true,
+			Verified:   true,
 			ActivePath: active,
 			Manifest: registry.Manifest{
 				ID: "example", SessionExtension: &registry.SessionExtension{Entrypoint: "extension.mjs"},
@@ -97,6 +98,7 @@ func TestReconcileMigratesOpenAIServerPluginState(t *testing.T) {
 	value := registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{
 		"openai-server": {
 			Enabled:    true,
+			Verified:   true,
 			ActivePath: active,
 			Manifest: registry.Manifest{
 				ID: "openai-server", SessionExtension: &registry.SessionExtension{Entrypoint: "extension.mjs"},
@@ -147,6 +149,7 @@ func TestReconcilePreservesLegacyOpenAIServerIdentityUntilInstallation(t *testin
 	value := registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{
 		registry.LegacyOpenAIServerID: {
 			Enabled:    true,
+			Verified:   true,
 			ActivePath: active,
 			Manifest: registry.Manifest{
 				ID: registry.LegacyOpenAIServerID, SessionExtension: &registry.SessionExtension{Entrypoint: "extension.mjs"},

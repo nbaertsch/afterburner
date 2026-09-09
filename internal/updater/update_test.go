@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nbaertsch/afterburner/internal/registry"
+	"github.com/nbaertsch/afterburner/internal/extensions"
 )
 
 func TestChecksumAndArchiveExtraction(t *testing.T) {
@@ -243,12 +243,18 @@ func TestStageBuiltinExtractsVerifiedArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := os.ReadFile(filepath.Join(staged, "lib", "session-extension.mjs"))
+	defer staged.Cleanup()
+	content, err := os.ReadFile(filepath.Join(staged.Path, "lib", "session-extension.mjs"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(content), "fixture") {
 		t.Fatalf("extracted content = %q", content)
+	}
+	if staged.Source.Version != "v1.2.3" || staged.Source.Commit != "fixture" ||
+		staged.Source.Digest == "" || staged.Source.ManifestDigest == "" ||
+		staged.Source.SignerFingerprint == "" {
+		t.Fatalf("source provenance = %#v", staged.Source)
 	}
 }
 
@@ -309,7 +315,7 @@ func TestExtractBuiltinArchiveRejectsPathTraversal(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := extractBuiltinArchive(archiveBuffer.Bytes(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "escapes the extraction root") {
+	if err := extensions.ExtractPackageArchive(archiveBuffer.Bytes(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "escapes the extraction root") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -372,18 +378,11 @@ func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 		source := filepath.Join(root, "update-staging", "fixture", "afterburn.exe")
 		copyFile(t, buildFixtureExecutable(t, "old", true), target)
 		copyFile(t, buildFixtureExecutable(t, "new", true), source)
-		if err := ApplyReplacement(0, source, target, previous, ""); err != nil {
+		if err := ApplyReplacement(0, source, target, previous, "", ""); err != nil {
 			t.Fatal(err)
 		}
 		assertVersion(t, target, "new")
 		assertVersion(t, previous, "old")
-		value, err := registry.Load(root)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := value.Extensions[registry.OpenAIServerID]; !ok {
-			t.Fatal("replacement core did not bootstrap its embedded OpenAI Server built-in")
-		}
 	})
 	t.Run("running old executable", func(t *testing.T) {
 		root := t.TempDir()
@@ -400,7 +399,7 @@ func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 			_ = running.Process.Kill()
 			_, _ = running.Process.Wait()
 		}()
-		if err := ApplyReplacement(0, source, target, previous, ""); err != nil {
+		if err := ApplyReplacement(0, source, target, previous, "", ""); err != nil {
 			t.Fatal(err)
 		}
 		assertVersion(t, target, "new")
@@ -413,49 +412,11 @@ func TestApplyReplacementAndAutomaticRollback(t *testing.T) {
 		source := filepath.Join(root, "update-staging", "fixture", "afterburn.exe")
 		copyFile(t, buildFixtureExecutable(t, "old", true), target)
 		copyFile(t, buildFixtureExecutable(t, "bad", false), source)
-		if err := ApplyReplacement(0, source, target, previous, ""); err == nil {
+		if err := ApplyReplacement(0, source, target, previous, "", ""); err == nil {
 			t.Fatal("expected post-update validation failure")
 		}
 		assertVersion(t, target, "old")
 	})
-}
-
-func TestSyncEmbeddedBuiltinsIncludesCopilotSDKShim(t *testing.T) {
-	root := t.TempDir()
-	normalCopilotHome := t.TempDir()
-	sdk := filepath.Join(normalCopilotHome, "pkg", "win32-x64", "1.0.83-3", "copilot-sdk")
-	if err := os.MkdirAll(sdk, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range map[string]string{
-		"index.js":     "export const sdk = true;\n",
-		"extension.js": "export const extension = true;\n",
-	} {
-		if err := os.WriteFile(filepath.Join(sdk, name), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Setenv("AFTERBURNER_NORMAL_COPILOT_HOME", normalCopilotHome)
-
-	if err := syncEmbeddedBuiltins(root); err != nil {
-		t.Fatal(err)
-	}
-	value, err := registry.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry := value.Extensions["black-box"]
-	shim := filepath.Join(entry.ActivePath, "node_modules", "@github", "copilot-sdk", "index.js")
-	if _, err := os.Stat(shim); err != nil {
-		t.Fatalf("embedded built-in SDK shim was not installed: %v", err)
-	}
-	treeHash, err := registry.HashTree(entry.ActivePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if entry.Identity.TreeHash != "sha256:"+treeHash {
-		t.Fatalf("registered tree hash = %q, package tree hash = %q", entry.Identity.TreeHash, treeHash)
-	}
 }
 
 func TestFailedReplacementRestoresRegistrySnapshot(t *testing.T) {
@@ -468,6 +429,7 @@ func TestFailedReplacementRestoresRegistrySnapshot(t *testing.T) {
 	source := filepath.Join(root, "update-staging", "fixture", "afterburn.exe")
 	registryPath := filepath.Join(root, "registry.json")
 	copyFile(t, buildFixtureExecutable(t, "old", true), target)
+	copyFile(t, buildFixtureExecutable(t, "older", true), previous)
 	copyFile(t, buildFixtureExecutable(t, "bad", false), source)
 	if err := os.WriteFile(registryPath, []byte("old-registry\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -476,10 +438,13 @@ func TestFailedReplacementRestoresRegistrySnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := BeginCoreUpdateTransaction(root, source, target, previous, snapshot); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(registryPath, []byte("new-registry\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ApplyReplacement(0, source, target, previous, snapshot); err == nil {
+	if err := ApplyReplacement(0, source, target, previous, snapshot, ""); err == nil {
 		t.Fatal("expected post-update validation failure")
 	}
 	data, err := os.ReadFile(registryPath)
@@ -489,6 +454,7 @@ func TestFailedReplacementRestoresRegistrySnapshot(t *testing.T) {
 	if string(data) != "old-registry\n" {
 		t.Fatalf("registry = %q", data)
 	}
+	assertVersion(t, previous, "older")
 }
 
 func TestRegistrySnapshotsUseUniqueTransactionPaths(t *testing.T) {

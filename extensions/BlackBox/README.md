@@ -94,5 +94,5 @@ npm test --prefix extensions\BlackBox
 
 ## Packaging note
 
-The generated built-in ZIP is produced from this directory by `go generate ./internal/assets` and
-is checked by CI for deterministic freshness.
+Release packages are produced directly from this source directory during the signed release
+workflow. No built-in package archive is committed to the repository or embedded in the core.

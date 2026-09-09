@@ -4,8 +4,21 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func signedReleaseSource(id string) Source {
+	return Source{
+		Type:              "signed-release",
+		Value:             id,
+		Version:           "v1.0.0",
+		Commit:            strings.Repeat("a", 40),
+		Digest:            "sha256:" + strings.Repeat("b", 64),
+		ManifestDigest:    "sha256:" + strings.Repeat("c", 64),
+		SignerFingerprint: "sha256:" + strings.Repeat("d", 64),
+	}
+}
 
 func TestHashTreeIncludesExecutableDependencyDirectories(t *testing.T) {
 	root := t.TempDir()
@@ -140,7 +153,15 @@ func TestLoadMergesDuplicateLegacyOpenAIServerAlias(t *testing.T) {
 	}
 	value := Registry{SchemaVersion: 1, Extensions: map[string]Entry{
 		LegacyOpenAIServerID: {Enabled: true, ActivePath: legacyActive, Manifest: Manifest{ID: LegacyOpenAIServerID, DisplayName: "Copilot OpenAI Bridge", Visibility: "private"}, Source: Source{Type: "path", Value: legacyActive}},
-		OpenAIServerID:       {Enabled: false, ActivePath: currentActive, Manifest: Manifest{ID: OpenAIServerID, DisplayName: OpenAIServerName, Visibility: "builtin"}, Source: Source{Type: "embedded", Value: OpenAIServerID}},
+		OpenAIServerID: {Enabled: false, ActivePath: currentActive, Manifest: Manifest{ID: OpenAIServerID, DisplayName: OpenAIServerName, Visibility: "builtin"}, Source: Source{
+			Type:              "signed-release",
+			Value:             OpenAIServerID,
+			Version:           "v1.0.0",
+			Commit:            strings.Repeat("a", 40),
+			Digest:            "sha256:" + strings.Repeat("b", 64),
+			ManifestDigest:    "sha256:" + strings.Repeat("c", 64),
+			SignerFingerprint: "sha256:" + strings.Repeat("d", 64),
+		}},
 	}}
 	if err := Save(root, value); err != nil {
 		t.Fatal(err)
@@ -238,19 +259,19 @@ func TestLoadRejectsReservedBuiltinIDFromGenericSource(t *testing.T) {
 	}
 }
 
-func TestLoadAcceptsReservedBuiltinIDWithVerifiedEmbeddedIdentity(t *testing.T) {
+func TestLoadAcceptsReservedBuiltinIDWithVerifiedReleaseIdentity(t *testing.T) {
 	root := t.TempDir()
 	active := filepath.Join(root, "extensions", "black-box", "v1")
 	manifest := Manifest{SchemaVersion: 1, ID: "black-box", DisplayName: "Black Box", Visibility: "builtin", Requires: Requirements{Afterburner: ">=0.1.0 <1.0.0"}, Runtime: RuntimeManifest{Execution: "in-process", Entrypoint: "runtime.mjs"}}
 	writeRegistryPackage(t, active, manifest, "export default {}")
-	entry := signedTestEntry(t, active, manifest, Source{Type: "embedded", Value: "black-box"})
+	entry := signedTestEntry(t, active, manifest, signedReleaseSource("black-box"))
 	value := Registry{SchemaVersion: 1, Extensions: map[string]Entry{"black-box": entry}}
 	if err := Save(root, value); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := Load(root)
 	if err != nil {
-		t.Fatalf("expected verified embedded built-in to load: %v", err)
+		t.Fatalf("expected verified release built-in to load: %v", err)
 	}
 	if !loaded.Extensions["black-box"].Verified {
 		t.Fatal("content-bound built-in identity was not verified")
@@ -312,7 +333,7 @@ func signedTestEntry(t *testing.T, active string, manifest Manifest, source Sour
 	}
 	root := filepath.Dir(filepath.Dir(filepath.Dir(active)))
 	entry := Entry{Enabled: true, ActivePath: active, Manifest: manifest, Source: source, UpdatedAt: "2026-01-01T00:00:00Z"}
-	entry.Identity = IdentityBinding{ExtensionID: manifest.ID, ManifestHash: manifestHash, TreeHash: treeHash, SourceType: source.Type, SourceValue: source.Value, SignerID: "afterburner-core", SignerFingerprint: "builtin:" + manifest.ID, BuiltinSigned: true, RegistryEpoch: 1, GrantEpoch: 1, BoundAt: entry.UpdatedAt}
+	entry.Identity = IdentityBinding{ExtensionID: manifest.ID, ManifestHash: manifestHash, TreeHash: treeHash, SourceType: source.Type, SourceValue: source.Value, SourceVersion: source.Version, SourceCommit: source.Commit, SignerID: "afterburner-release", SignerFingerprint: source.SignerFingerprint, BuiltinSigned: true, RegistryEpoch: 1, GrantEpoch: 1, BoundAt: entry.UpdatedAt}
 	entry, err = SealEntry(root, entry)
 	if err != nil {
 		t.Fatal(err)
@@ -328,8 +349,8 @@ func TestRegistryMACUsesPerInstallKey(t *testing.T) {
 	manifest := Manifest{SchemaVersion: 1, ID: "black-box", DisplayName: "Black Box", Visibility: "builtin", Requires: Requirements{Afterburner: ">=0.1.0 <1.0.0"}, Runtime: RuntimeManifest{Execution: "in-process", Entrypoint: "runtime.mjs"}}
 	writeRegistryPackage(t, activeA, manifest, "export default {}")
 	writeRegistryPackage(t, activeB, manifest, "export default {}")
-	entryA := signedTestEntry(t, activeA, manifest, Source{Type: "embedded", Value: "black-box"})
-	entryB := signedTestEntry(t, activeB, manifest, Source{Type: "embedded", Value: "black-box"})
+	entryA := signedTestEntry(t, activeA, manifest, signedReleaseSource("black-box"))
+	entryB := signedTestEntry(t, activeB, manifest, signedReleaseSource("black-box"))
 	if entryA.Identity.RegistryMAC == "" || entryB.Identity.RegistryMAC == "" {
 		t.Fatal("registry MAC was not populated")
 	}

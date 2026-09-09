@@ -34,10 +34,11 @@ type Package struct {
 }
 
 type DiscoveryOptions struct {
-	ManagedHome       string
-	CopilotExecutable string
-	AdditionalRoots   []string
-	HashCachePath     string
+	ManagedHome         string
+	CopilotExecutable   string
+	AdditionalRoots     []string
+	HashCachePath       string
+	OnlyAdditionalRoots bool
 }
 
 type fileHashCache struct {
@@ -64,20 +65,23 @@ func Discover(opts DiscoveryOptions) ([]Package, error) {
 	nextCache := hashCache{SchemaVersion: 1, Packages: map[string]packageHashCache{}}
 	platform := "win32-" + mapArch(runtime.GOARCH)
 	userHome, _ := os.UserHomeDir()
-	roots := []string{
-		filepath.Join(userHome, ".copilot", "pkg", platform),
-		filepath.Join(os.Getenv("LOCALAPPDATA"), "copilot", "pkg", platform),
-		filepath.Join(opts.ManagedHome, "pkg", platform),
-	}
-	if opts.CopilotExecutable != "" {
-		executableDir := filepath.Dir(opts.CopilotExecutable)
+	var roots []string
+	if !opts.OnlyAdditionalRoots {
 		roots = append(roots,
-			filepath.Join(executableDir, "pkg", platform),
-			filepath.Join(filepath.Dir(executableDir), "pkg", platform),
+			filepath.Join(userHome, ".copilot", "pkg", platform),
+			filepath.Join(os.Getenv("LOCALAPPDATA"), "copilot", "pkg", platform),
+			filepath.Join(opts.ManagedHome, "pkg", platform),
 		)
-	}
-	if value := os.Getenv("AFTERBURNER_COPILOT_PACKAGE_ROOTS"); value != "" {
-		roots = append(roots, filepath.SplitList(value)...)
+		if opts.CopilotExecutable != "" {
+			executableDir := filepath.Dir(opts.CopilotExecutable)
+			roots = append(roots,
+				filepath.Join(executableDir, "pkg", platform),
+				filepath.Join(filepath.Dir(executableDir), "pkg", platform),
+			)
+		}
+		if value := os.Getenv("AFTERBURNER_COPILOT_PACKAGE_ROOTS"); value != "" {
+			roots = append(roots, filepath.SplitList(value)...)
+		}
 	}
 	roots = append(roots, opts.AdditionalRoots...)
 	seenRoots := map[string]bool{}

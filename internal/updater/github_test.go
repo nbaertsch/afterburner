@@ -30,4 +30,7 @@ func TestVersionComparison(t *testing.T) {
 	if !IsNewer("v1.2.3", "v1.3.0") || IsNewer("v1.3.0", "v1.2.9") {
 		t.Fatal("version comparison is incorrect")
 	}
+	if !IsNewer("v1.0.0-rc.1", "v1.0.0") || IsNewer("v1.0.0", "v1.0.0-rc.1") {
+		t.Fatal("prerelease precedence is incorrect")
+	}
 }

@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"github.com/nbaertsch/afterburner/internal/extensions"
-	"github.com/nbaertsch/afterburner/internal/home"
 	"github.com/nbaertsch/afterburner/internal/platform"
+	"github.com/nbaertsch/afterburner/internal/registry"
 	"github.com/nbaertsch/afterburner/internal/releasesign"
 )
 
@@ -225,81 +225,81 @@ func (client Client) Stage(ctx context.Context, release Release, root string) (s
 // the same manifest signature verification as Stage, but validates the
 // archive against the release manifest's Builtins entries (which are not
 // bound to an OS/architecture) rather than its Assets entries.
-func (client Client) StageBuiltin(ctx context.Context, release Release, root, id string) (string, error) {
+func (client Client) StageBuiltin(ctx context.Context, release Release, root, id string) (extensions.FetchedBuiltin, error) {
 	archiveName := id + ".zip"
 	archiveAsset, ok := findAsset(release, archiveName)
 	if !ok {
-		return "", fmt.Errorf("release %s is missing %s", release.TagName, archiveName)
+		return extensions.FetchedBuiltin{}, fmt.Errorf("release %s is missing %s", release.TagName, archiveName)
 	}
 	checksumAsset, ok := findAsset(release, "checksums.txt")
 	if !ok {
-		return "", fmt.Errorf("release %s is missing checksums.txt", release.TagName)
+		return extensions.FetchedBuiltin{}, fmt.Errorf("release %s is missing checksums.txt", release.TagName)
 	}
 	manifestAsset, ok := findAsset(release, "release-manifest.json")
 	if !ok {
-		return "", fmt.Errorf("release %s is missing release-manifest.json", release.TagName)
+		return extensions.FetchedBuiltin{}, fmt.Errorf("release %s is missing release-manifest.json", release.TagName)
 	}
 	signatureAsset, ok := findAsset(release, "release-manifest.sig")
 	if !ok {
-		return "", fmt.Errorf("release %s is missing release-manifest.sig", release.TagName)
+		return extensions.FetchedBuiltin{}, fmt.Errorf("release %s is missing release-manifest.sig", release.TagName)
 	}
 	checksums, err := client.download(ctx, checksumAsset, 1<<20)
 	if err != nil {
-		return "", err
+		return extensions.FetchedBuiltin{}, err
 	}
 	expected, err := checksumFor(checksums, archiveName)
 	if err != nil {
-		return "", err
+		return extensions.FetchedBuiltin{}, err
 	}
 	manifestData, err := client.download(ctx, manifestAsset, 1<<20)
 	if err != nil {
-		return "", err
+		return extensions.FetchedBuiltin{}, err
 	}
 	signatureData, err := client.download(ctx, signatureAsset, 4096)
 	if err != nil {
-		return "", err
+		return extensions.FetchedBuiltin{}, err
 	}
 	publicKey := ed25519.PublicKey(client.ManifestPublicKey)
 	if len(publicKey) == 0 {
 		publicKey, err = releasesign.PublicKey()
 		if err != nil {
-			return "", err
+			return extensions.FetchedBuiltin{}, err
 		}
 	}
 	if err := releasesign.Verify(publicKey, manifestData, signatureData); err != nil {
-		return "", err
+		return extensions.FetchedBuiltin{}, err
 	}
 	var manifest Manifest
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return "", fmt.Errorf("parse release manifest: %w", err)
+		return extensions.FetchedBuiltin{}, fmt.Errorf("parse release manifest: %w", err)
 	}
 	builtinEntry, ok := builtinManifestEntry(manifest, id)
 	if err := validateManifest(manifest); err != nil {
-		return "", err
+		return extensions.FetchedBuiltin{}, err
 	}
 	if manifest.Repository != repository ||
 		manifest.Version != release.TagName || manifest.Commit == "" || !ok ||
 		!strings.EqualFold(builtinEntry.SHA256, expected) {
-		return "", fmt.Errorf("release manifest does not authorize %s for built-in %q", archiveName, id)
+		return extensions.FetchedBuiltin{}, fmt.Errorf("release manifest does not authorize %s for built-in %q", archiveName, id)
 	}
 	archive, err := client.download(ctx, archiveAsset, 64<<20)
 	if err != nil {
-		return "", err
+		return extensions.FetchedBuiltin{}, err
 	}
 	if builtinEntry.Size != int64(len(archive)) {
-		return "", fmt.Errorf("release archive size does not match the manifest")
+		return extensions.FetchedBuiltin{}, fmt.Errorf("release archive size does not match the manifest")
 	}
 	sum := sha256.Sum256(archive)
 	if !strings.EqualFold(hex.EncodeToString(sum[:]), expected) {
-		return "", fmt.Errorf("release archive checksum mismatch")
+		return extensions.FetchedBuiltin{}, fmt.Errorf("release archive checksum mismatch")
 	}
 	stagingRoot := filepath.Join(root, "update-staging")
 	if err := os.MkdirAll(stagingRoot, 0o700); err != nil {
-		return "", err
+		return extensions.FetchedBuiltin{}, err
 	}
 	staging, err := os.MkdirTemp(stagingRoot, sanitizeTag(release.TagName)+"-"+id+"-")
 	if err != nil {
-		return "", err
+		return extensions.FetchedBuiltin{}, err
 	}
 	success := false
 	defer func() {
@@ -307,51 +307,25 @@ func (client Client) StageBuiltin(ctx context.Context, release Release, root, id
 			_ = os.RemoveAll(staging)
 		}
 	}()
-	if err := extractBuiltinArchive(archive, staging); err != nil {
-		return "", err
+	if err := extensions.ExtractPackageArchive(archive, staging); err != nil {
+		return extensions.FetchedBuiltin{}, err
 	}
 	success = true
-	return staging, nil
-}
-
-// extractBuiltinArchive extracts a zip archive into destination, rejecting
-// any entry that would escape destination via path traversal or an absolute
-// path. Unlike extractExecutable (which reads a single named file from an
-// archive), this extracts an entire directory tree.
-func extractBuiltinArchive(data []byte, destination string) error {
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return fmt.Errorf("open built-in archive: %w", err)
-	}
-	for _, file := range reader.File {
-		cleaned := filepath.Clean(file.Name)
-		if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") || strings.Contains(cleaned, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("built-in archive entry %q escapes the extraction root", file.Name)
-		}
-		target := filepath.Join(destination, cleaned)
-		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o700); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return err
-		}
-		input, err := file.Open()
-		if err != nil {
-			return err
-		}
-		content, readErr := io.ReadAll(io.LimitReader(input, 32<<20))
-		closeErr := input.Close()
-		if readErr != nil || closeErr != nil {
-			return fmt.Errorf("read built-in archive entry %q", file.Name)
-		}
-		if err := os.WriteFile(target, content, 0o600); err != nil {
-			return err
-		}
-	}
-	return nil
+	manifestSum := sha256.Sum256(manifestData)
+	keySum := sha256.Sum256(publicKey)
+	return extensions.FetchedBuiltin{
+		Path: staging,
+		Source: registry.Source{
+			Type:              "signed-release",
+			Value:             id,
+			Version:           release.TagName,
+			Commit:            manifest.Commit,
+			Digest:            "sha256:" + expected,
+			ManifestDigest:    "sha256:" + hex.EncodeToString(manifestSum[:]),
+			SignerFingerprint: "sha256:" + hex.EncodeToString(keySum[:]),
+		},
+		Cleanup: func() { _ = os.RemoveAll(staging) },
+	}, nil
 }
 
 // BuiltinReleaseFetcher resolves built-in extension IDs to their signed
@@ -366,7 +340,7 @@ type BuiltinReleaseFetcher struct {
 	Version string
 }
 
-func (fetcher BuiltinReleaseFetcher) FetchBuiltin(id string) (string, func(), error) {
+func (fetcher BuiltinReleaseFetcher) FetchBuiltin(id string) (extensions.FetchedBuiltin, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var release Release
@@ -377,16 +351,16 @@ func (fetcher BuiltinReleaseFetcher) FetchBuiltin(id string) (string, func(), er
 		release, err = fetcher.Client.Latest(ctx)
 	}
 	if err != nil {
-		return "", nil, fmt.Errorf("resolve release for built-in %q: %w", id, err)
+		return extensions.FetchedBuiltin{}, fmt.Errorf("resolve release for built-in %q: %w", id, err)
 	}
-	staging, err := fetcher.Client.StageBuiltin(ctx, release, fetcher.Root, id)
+	staged, err := fetcher.Client.StageBuiltin(ctx, release, fetcher.Root, id)
 	if err != nil {
-		return "", nil, err
+		return extensions.FetchedBuiltin{}, err
 	}
-	return staging, func() { _ = os.RemoveAll(staging) }, nil
+	return staged, nil
 }
 
-func BeginReplacement(candidate, target, previous, registrySnapshot string) error {
+func BeginReplacement(candidate, target, previous, registrySnapshot, successRegistrySnapshot string) error {
 	args := []string{
 		"core", "replace",
 		"--parent", strconv.Itoa(os.Getpid()),
@@ -396,6 +370,9 @@ func BeginReplacement(candidate, target, previous, registrySnapshot string) erro
 	}
 	if registrySnapshot != "" {
 		args = append(args, "--registry-snapshot", registrySnapshot)
+	}
+	if successRegistrySnapshot != "" {
+		args = append(args, "--success-registry-snapshot", successRegistrySnapshot)
 	}
 	command := exec.Command(candidate, args...)
 	return platform.StartDetached(command)
@@ -441,19 +418,33 @@ func StageRollback(root, previous string) (string, error) {
 	return candidate, nil
 }
 
-func ApplyReplacement(parentPID int, source, target, previous, registrySnapshot string) (resultErr error) {
+func ApplyReplacement(parentPID int, source, target, previous, registrySnapshot, successRegistrySnapshot string) (resultErr error) {
 	root := filepath.Dir(filepath.Dir(target))
+	replacementCommitted := false
 	defer func() {
-		if resultErr != nil && registrySnapshot != "" {
-			if restoreErr := RestoreRegistrySnapshot(root, registrySnapshot); restoreErr != nil {
-				resultErr = fmt.Errorf("%v; restore extension registry: %w", resultErr, restoreErr)
+		if resultErr != nil && !replacementCommitted {
+			if _, journalErr := loadCoreUpdateTransaction(root); journalErr == nil {
+				if abortErr := AbortCoreUpdateTransaction(root); abortErr != nil {
+					resultErr = fmt.Errorf("%v; abort core update transaction: %w", resultErr, abortErr)
+				}
+			} else {
+				if registrySnapshot != "" {
+					if restoreErr := RestoreRegistrySnapshot(root, registrySnapshot); restoreErr != nil {
+						resultErr = fmt.Errorf("%v; restore extension registry: %w", resultErr, restoreErr)
+					}
+				}
+				_ = DiscardRegistrySnapshot(root, registrySnapshot)
+				if successRegistrySnapshot != "" &&
+					!sameFilePath(successRegistrySnapshot, CoreRollbackRegistrySnapshot(root)) {
+					_ = DiscardRegistrySnapshot(root, successRegistrySnapshot)
+				}
 			}
-		}
-		if discardErr := DiscardRegistrySnapshot(root, registrySnapshot); discardErr != nil && resultErr == nil {
-			resultErr = discardErr
 		}
 		_ = writeStatus(root, resultErr)
 	}()
+	if err := ClaimCoreUpdateTransaction(root, parentPID, source, target, previous, registrySnapshot, successRegistrySnapshot); err != nil {
+		return err
+	}
 	if err := platform.WaitForPID(parentPID, 2*time.Minute); err != nil {
 		return fmt.Errorf("wait for updater parent PID %d: %w", parentPID, err)
 	}
@@ -474,8 +465,10 @@ func ApplyReplacement(parentPID int, source, target, previous, registrySnapshot 
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return err
 	}
+	var currentExecutable []byte
 	if current, err := os.ReadFile(target); err == nil {
-		if err := os.WriteFile(previous, current, 0o700); err != nil {
+		currentExecutable = current
+		if err := os.WriteFile(previous, currentExecutable, 0o700); err != nil {
 			return fmt.Errorf("retain previous executable: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
@@ -499,70 +492,141 @@ func ApplyReplacement(parentPID int, source, target, previous, registrySnapshot 
 		return err
 	}
 	if err := platform.ReplaceFile(incomingPath, target); err != nil {
-		return fmt.Errorf("replace installed executable: %w. Latest core remains staged at %s; close running Afterburner terminals/sessions, including this one if it launched from %s, then retry `afterburn update --version <tag>`", err, source, target)
+		if len(currentExecutable) == 0 {
+			return fmt.Errorf("replace installed executable: %w", err)
+		}
+		binDirectory := filepath.Dir(target)
+		preparedDirectory, prepareErr := os.MkdirTemp(root, ".replacement-bin-")
+		if prepareErr != nil {
+			return fmt.Errorf("replace installed executable: %w; prepare directory-swap fallback: %v", err, prepareErr)
+		}
+		defer os.RemoveAll(preparedDirectory)
+		retiredDirectory, retireErr := os.MkdirTemp(root, ".retired-bin-")
+		if retireErr == nil {
+			retireErr = os.Remove(retiredDirectory)
+		}
+		if retireErr == nil {
+			retireErr = SetCoreUpdateSwapPaths(root, preparedDirectory, retiredDirectory)
+		}
+		if retireErr == nil {
+			retireErr = copyDirectory(binDirectory, preparedDirectory)
+		}
+		if retireErr == nil {
+			retireErr = os.WriteFile(filepath.Join(preparedDirectory, filepath.Base(target)), data, 0o700)
+		}
+		if retireErr == nil {
+			retireErr = os.WriteFile(filepath.Join(preparedDirectory, filepath.Base(previous)), currentExecutable, 0o700)
+		}
+		if retireErr == nil {
+			retireErr = os.Rename(binDirectory, retiredDirectory)
+		}
+		if retireErr == nil {
+			retireErr = os.Rename(preparedDirectory, binDirectory)
+		}
+		if retireErr != nil {
+			if _, statErr := os.Stat(binDirectory); os.IsNotExist(statErr) {
+				_ = os.Rename(retiredDirectory, binDirectory)
+			}
+			return fmt.Errorf("replace installed executable: %w; directory-swap fallback failed: %v. Latest core remains staged at %s", err, retireErr, source)
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	validationErr := syncEmbeddedBuiltins(root)
-	if validationErr == nil {
-		doctor := exec.CommandContext(ctx, target, "doctor", "--json")
-		validationErr = doctor.Run()
-	}
-	if validationErr != nil {
+	rollbackExecutable := func(cause error) error {
 		rollbackData, readErr := os.ReadFile(previous)
 		if readErr != nil {
-			return fmt.Errorf("post-update validation failed and rollback binary is unavailable: %w", validationErr)
+			return fmt.Errorf("%v; rollback binary is unavailable: %w", cause, readErr)
 		}
 		rollback, createErr := os.CreateTemp(filepath.Dir(target), ".afterburn-rollback-*.exe")
 		if createErr != nil {
-			return createErr
+			return fmt.Errorf("%v; create rollback executable: %w", cause, createErr)
 		}
 		rollbackPath := rollback.Name()
 		defer os.Remove(rollbackPath)
 		if _, createErr = rollback.Write(rollbackData); createErr != nil {
 			rollback.Close()
-			return createErr
+			return fmt.Errorf("%v; write rollback executable: %w", cause, createErr)
 		}
 		if createErr = rollback.Close(); createErr != nil {
-			return createErr
+			return fmt.Errorf("%v; close rollback executable: %w", cause, createErr)
 		}
 		if replaceErr := platform.ReplaceFile(rollbackPath, target); replaceErr != nil {
-			return fmt.Errorf("post-update validation failed and automatic rollback failed: %w", replaceErr)
+			return fmt.Errorf("%v; automatic executable rollback failed: %w", cause, replaceErr)
 		}
-		return fmt.Errorf("post-update validation failed; previous executable restored: %w", validationErr)
+		return cause
+	}
+	if successRegistrySnapshot != "" {
+		if err := RestoreRegistrySnapshot(root, successRegistrySnapshot); err != nil {
+			return rollbackExecutable(fmt.Errorf("restore matching extension registry: %w", err))
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	doctor := exec.CommandContext(ctx, target, "doctor", "--json")
+	validationErr := doctor.Run()
+	if validationErr != nil {
+		return rollbackExecutable(fmt.Errorf("post-update validation failed; previous executable restored: %w", validationErr))
+	}
+	if err := PreserveCoreRollbackRegistrySnapshot(root, registrySnapshot); err != nil {
+		return rollbackExecutable(err)
+	}
+	if successRegistrySnapshot != "" &&
+		!sameFilePath(successRegistrySnapshot, CoreRollbackRegistrySnapshot(root)) {
+		if err := DiscardRegistrySnapshot(root, successRegistrySnapshot); err != nil {
+			return rollbackExecutable(err)
+		}
+	}
+	if err := DiscardRegistrySnapshot(root, registrySnapshot); err != nil {
+		return rollbackExecutable(err)
+	}
+	replacementCommitted = true
+	if err := CompleteCoreUpdateTransaction(root); err != nil {
+		return err
 	}
 	return nil
 }
 
-func syncEmbeddedBuiltins(root string) error {
-	layout, err := home.Resolve()
-	if err != nil {
-		return fmt.Errorf("resolve home for built-in synchronization: %w", err)
-	}
-	layout.Root = root
-	layout.CopilotHome = filepath.Join(root, "copilot-home")
-	layout.Config = filepath.Join(root, "config")
-	layout.ExtensionData = filepath.Join(root, "extension-data")
-	layout.Extensions = filepath.Join(root, "extensions")
-	layout.Staging = filepath.Join(root, "staging")
-	layout.BYOModelsConfig = filepath.Join(root, "config", "byomodels.json")
-	for _, path := range []string{
-		layout.Root,
-		layout.CopilotHome,
-		layout.Config,
-		layout.ExtensionData,
-		layout.Extensions,
-		layout.Staging,
-	} {
-		if err := os.MkdirAll(path, 0o700); err != nil {
-			return fmt.Errorf("prepare built-in synchronization: %w", err)
+func copyDirectory(source, destination string) error {
+	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-	}
-	manager := extensions.Manager{Layout: layout, Stdout: io.Discard}
-	if err := manager.InstallBuiltins(nil); err != nil {
-		return fmt.Errorf("sync built-ins embedded in replacement core: %w", err)
-	}
-	return nil
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." {
+			return nil
+		}
+		target := filepath.Join(destination, relative)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("unsupported file in managed bin directory: %s", relative)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		input, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+		if err != nil {
+			input.Close()
+			return err
+		}
+		_, copyErr := io.Copy(output, input)
+		closeErr := output.Close()
+		inputErr := input.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		return inputErr
+	})
 }
 
 type Status struct {

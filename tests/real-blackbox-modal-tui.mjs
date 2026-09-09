@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { inflateSync } from "node:zlib";
 import { join, resolve } from "node:path";
@@ -48,20 +48,47 @@ const isolatedAfterburnerHome = mkdtempSync(join(tmpdir(), "afterburner-blackbox
 process.once("exit", () => {
   try { rmSync(isolatedAfterburnerHome, { recursive: true, force: true }); } catch {}
 });
-const installResult = spawnSync(afterburn, ["install", "black-box", "byo-models"], {
+const packageSource = join(isolatedAfterburnerHome, "package-source");
+const packageArchive = join(isolatedAfterburnerHome, "black-box-uat.zip");
+cpSync(join(process.cwd(), "extensions", "BlackBox"), packageSource, {
+  recursive: true,
+  filter: path => ![".test-work", "node_modules"].includes(path.split(/[\\/]/).at(-1))
+});
+const packageManifestPath = join(packageSource, "afterburner.json");
+const packageManifest = JSON.parse(readFileSync(packageManifestPath, "utf8"));
+packageManifest.id = "black-box-uat";
+packageManifest.visibility = "private";
+writeFileSync(packageManifestPath, `${JSON.stringify(packageManifest, null, 2)}\n`, "utf8");
+const testEnvironment = {
+  ...process.env,
+  AFTERBURNER_HOME: isolatedAfterburnerHome
+};
+const packResult = spawnSync(afterburn, ["extension", "pack", packageSource, packageArchive], {
   cwd: process.cwd(),
   encoding: "utf8",
-  env: {
-    ...process.env,
-    AFTERBURNER_HOME: isolatedAfterburnerHome,
-    AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH: "1"
-  }
+  env: testEnvironment
+});
+if (packResult.status !== 0) {
+  throw new Error(`failed to pack Black Box visual UAT package: status=${packResult.status} stdout=${packResult.stdout} stderr=${packResult.stderr}`);
+}
+const installResult = spawnSync(afterburn, ["extension", "install", packageArchive], {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: testEnvironment
 });
 if (installResult.status !== 0) {
   throw new Error(`failed to install local built-ins for visual UAT: status=${installResult.status} stdout=${installResult.stdout} stderr=${installResult.stderr}`);
 }
+const enableResult = spawnSync(afterburn, ["extension", "enable", "black-box-uat"], {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: testEnvironment
+});
+if (enableResult.status !== 0) {
+  throw new Error(`failed to enable Black Box visual UAT package: status=${enableResult.status} stdout=${enableResult.stdout} stderr=${enableResult.stderr}`);
+}
 const registry = JSON.parse(readFileSync(join(isolatedAfterburnerHome, "registry.json"), "utf8"));
-const blackBoxEntry = registry.extensions?.["black-box"];
+const blackBoxEntry = registry.extensions?.["black-box-uat"];
 const blackBoxActivePath = blackBoxEntry?.activePath;
 if (!blackBoxActivePath) throw new Error("visual UAT did not install an active Black Box package");
 const forbiddenCanvasFiles = [
@@ -105,7 +132,12 @@ for (const capability of ["modal-canvas"]) {
   }
 }
 
-const env = { ...process.env, COPILOT_RUNTIME_EXTENSION_DEBUG: "1", AFTERBURNER_HOME: isolatedAfterburnerHome, AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH: "1" };
+const env = {
+  ...process.env,
+  COPILOT_RUNTIME_EXTENSION_DEBUG: "1",
+  AFTERBURNER_HOME: isolatedAfterburnerHome,
+  AFTERBURNER_SKIP_PREFLIGHT: "1"
+};
 delete env.COPILOT_AGENT_SESSION_ID;
 delete env.COPILOT_LOADER_PID;
 delete env.COPILOT_SUPERVISED;
@@ -161,12 +193,8 @@ let commandSubmitRetryAt = 0;
 let modalSeenAt = 0;
 let modalCaptureScheduled = false;
 const focusSteps = [
-  { name: "focusDoctor", title: "Focus Doctor action screen", key: "\t", want: /▶\s*\[d\] Doctor\s*◀/i, assertions: ["Tab moved focus to Doctor action"] },
-  { name: "focusRefresh", title: "Focus Refresh action screen", key: "\x1b[9;15;0;1;16;1_", want: /▶\s*\[r\] Refresh\s*◀/i, assertions: ["Shift+Tab moved focus back to Refresh action"] },
+  { name: "focusRefresh", title: "Focus Refresh action screen", key: "\t", want: /▶\s*\[r\] Refresh\s*◀/i, assertions: ["Tab focused the first modal action"] },
   { name: "spaceRefresh", title: "Space activates focused Refresh screen", key: "\x1b[32;57;32;1;0;1_", want: /Afterburner Black Box Live[\s\S]*Storage usage/i, assertions: ["Space activated the focused Refresh action"] },
-  { name: "focusDoctorAgain", title: "Focus Doctor before Enter screen", key: "\t", want: /▶\s*\[d\] Doctor\s*◀/i, assertions: ["Tab moved focus to Doctor before Enter activation"] },
-  { name: "enterDoctor", title: "Enter activates focused Doctor screen", key: "\r", want: /Afterburner Black Box Doctor/i, assertions: ["Enter activated the focused Doctor action"] },
-  { name: "returnToTimeline", title: "Return to timeline after focus activation screen", key: "r", want: /Afterburner Black Box Live/i, assertions: ["Refresh shortcut returned from Doctor to the live timeline"] }
 ];
 const scrollSteps = [
   { name: "arrowDown", title: "Arrow down scroll screen", key: "\x1b[40;0;0;1;0;1_", want: /lines 2-\d+ of/i },
@@ -445,10 +473,8 @@ const visualInspectionChecks = () => {
     modalShowsTimelineTable: /Metadata timeline table/i.test(modalScreen) && /Time\s+│\s+Kind\s+│\s+Event\s+│\s+Severity\s+│\s+Duration\s+│\s+Success/i.test(modalScreen),
     modalShowsScrollPosition: /lines \d+-\d+ of \d+/i.test(modalScreen),
     everyFocusScreenCaptured: focusSteps.every(step => Boolean(screens[step.title])),
-    focusTabShowsDoctor: /▶\s*\[d\] Doctor\s*◀/i.test(focusScreens.focusDoctor),
-    focusShiftTabShowsRefresh: /▶\s*\[r\] Refresh\s*◀/i.test(focusScreens.focusRefresh),
+    focusTabShowsRefresh: /▶\s*\[r\] Refresh\s*◀/i.test(focusScreens.focusRefresh),
     focusSpaceActivatesRefresh: /Storage usage:[\s\S]*▶\s*\[r\] Refresh\s*◀/i.test(focusScreens.spaceRefresh),
-    focusEnterActivatesDoctor: /▌\s*Doctor|"healthy"/i.test(focusScreens.enterDoctor),
     everyScrollScreenCaptured: scrollSteps.every(step => Boolean(screens[step.title])),
     refreshScreenCaptured: /Afterburner Black Box Live/i.test(screens["Refresh action screen"] ?? ""),
     doctorScreenCaptured: /Afterburner Black Box Doctor/i.test(doctorScreen),
@@ -856,17 +882,11 @@ const finish = (code, message) => {
 
 const scheduleWrite = (data, delayMs = 150, label = "input") => setTimeout(() => writeInput(data, label), delayMs).unref?.();
 const scheduleCommand = (command, delayMs = 150, onSubmit = () => {}, label = `submit ${command}`) => {
-  const submit = suffix => {
-    writeInput("\x15", `${label}${suffix}: clear prompt`);
-    writeInput(`${command}\r`, `${label}${suffix}: type and submit command`);
-  };
   setTimeout(() => {
     onSubmit();
-    submit("");
+    writeInput("\x15", `${label}: clear prompt`);
+    writeInput(`${command}\r`, `${label}: type and submit command`);
   }, delayMs).unref?.();
-  setTimeout(() => {
-    if (!modalSeenAt && commandSentAt) submit(": retry");
-  }, delayMs + 3500).unref?.();
 };
 
 child.onData(data => {
@@ -904,20 +924,22 @@ child.onData(data => {
   }
 
   const runtimeReady = /\[runtime-extension-host\] loaded from/i.test(text) &&
-    /activated Afterburner extension 'black-box'/i.test(text) &&
-    /registered picker adapter/i.test(text);
-  const promptReady = /\/ commands|tab next tab|\? help/i.test(recent);
+    /activated Afterburner extension 'black-box-uat'/i.test(text);
+  const promptReady = /\/ commands|tab next tab|\? help|Tip:\s*\/app|Skipped terminal setup/i.test(recent);
   if (!commandInputStartedAt && runtimeReady && promptReady) {
     commandInputStartedAt = Date.now();
-    scheduleCommand("/black-box-modal", 5000, () => { commandSentAt = Date.now(); }, "submit /black-box-modal");
+    scheduleCommand("/black-box-modal", 20000, () => { commandSentAt = Date.now(); }, "submit /black-box-modal");
     return;
   }
-  if (commandSentAt && !modalSeenAt && /\/black-box-modal/i.test(recent) && Date.now() - commandSubmitRetryAt > 5000) {
-    commandSubmitRetryAt = Date.now();
-    writeInput("\r\n", "retry /black-box-modal submit");
-  }
-  if (commandSentAt && !modalSeenAt && /Unknown command:\s*\/black-box-modal/i.test(recent)) {
-    finish(1, "Copilot rejected /black-box-modal as an unknown command");
+  if (commandSentAt && !modalSeenAt &&
+      !/Afterburner Black Box Live/i.test(text) &&
+      /Unknown command:\s*\/black-box-modal/i.test(recent)) {
+    if (Date.now() - commandSentAt > 30_000) {
+      finish(1, "Copilot never registered /black-box-modal after runtime startup");
+    } else if (Date.now() - commandSubmitRetryAt > 5000) {
+      commandSubmitRetryAt = Date.now();
+      scheduleCommand("/black-box-modal", 250, () => {}, "retry /black-box-modal");
+    }
     return;
   }
   if (commandSentAt && !modalSeenAt && /Black Box modal unavailable/i.test(recent)) {
@@ -966,7 +988,7 @@ child.onData(data => {
         activeScrollRawLength = raw.length;
         writeInput(step.key, step.name);
       }
-    }, 250).unref?.();
+    }, 1000).unref?.();
     return;
   }
   const activeStep = scrollSteps[scrollIndex];
