@@ -57,14 +57,19 @@ jobs:
           node tests/native-signal-conpty.mjs artifacts/afterburn.exe artifacts/fakecopilot.exe
       - name: Validate native modal ConPTY broker
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: node tests/native-modal-conpty.mjs artifacts/afterburn.exe artifacts/fakecopilot.exe
       - name: Validate live multi-session extension modal isolation
         shell: pwsh
         env:
           AFTERBURNER_REQUIRE_LIVE_EXTENSION_COMMANDS: "1"
+          GITHUB_TOKEN: ${{ github.token }}
         run: node tests/multi-session-extension-modal-conpty.mjs artifacts/afterburn.exe artifacts/multi-session-conpty
       - name: Validate supplemental fake Copilot native modal isolation
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: node tests/multi-session-extension-modal-conpty.mjs artifacts/afterburn.exe artifacts/fakecopilot.exe artifacts/multi-session-conpty-fake
       - name: Build Windows binaries
         shell: pwsh
