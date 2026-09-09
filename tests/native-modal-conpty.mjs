@@ -67,6 +67,16 @@ const createVerifiedGenericRegistry = (root, packageRoot) => {
   }
 };
 
+const registryFixtureRoot = join(tmpdir(), `afterburn-modal-registries-${process.pid}-${Date.now()}`);
+const registryFixtures = Object.fromEntries(["black-box", "generic"].map(kind => {
+  const root = join(registryFixtureRoot, kind);
+  const packageRoot = createPackage(root);
+  if (kind === "generic") createVerifiedGenericRegistry(root, packageRoot);
+  else createVerifiedBlackBoxRegistry(root, packageRoot);
+  return [kind, join(root, "afterburner")];
+}));
+process.once("exit", () => rmSync(registryFixtureRoot, { recursive: true, force: true }));
+
 const lastRestoredScreen = raw => {
   const repaintPrefix = "\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
   const index = raw.lastIndexOf(repaintPrefix);
@@ -245,8 +255,7 @@ const runScenario = ({
   const root = join(tmpdir(), `afterburn-modal-${name}-${process.pid}-${Date.now()}`);
   const capturePath = join(root, "capture.json");
   const packageRoot = createPackage(root);
-  if (genericExtension) createVerifiedGenericRegistry(root, packageRoot);
-  else createVerifiedBlackBoxRegistry(root, packageRoot);
+  const managedHome = registryFixtures[genericExtension ? "generic" : "black-box"];
   const child = pty.spawn(afterburn, ["--version"], {
     name: "xterm-256color",
     cols: 140,
@@ -259,6 +268,7 @@ const runScenario = ({
       AFTERBURNER_TEST_MODAL_CANVAS: modalId,
       AFTERBURNER_TEST_MODAL_SURFACE: modalId,
       AFTERBURNER_TEST_MODAL_TITLE: modalTitle,
+      AFTERBURNER_HOME: managedHome,
       ...extraEnv
     })
   });
