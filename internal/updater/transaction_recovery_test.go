@@ -13,6 +13,7 @@ func TestRecoverInterruptedCoreUpdateRestoresRegistry(t *testing.T) {
 	if err := os.WriteFile(registryPath, []byte("old\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+
 	snapshot, err := SnapshotRegistry(root)
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +50,55 @@ func TestRecoverInterruptedCoreUpdateRestoresRegistry(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("transaction artifact still exists at %s: %v", path, err)
 		}
+	}
+}
+
+func TestAbortCoreUpdateRestoresRegistryWhenExecutableSnapshotIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	source, target, previous := transactionExecutablePaths(t, root, "new", "old")
+	registryPath := filepath.Join(root, "registry.json")
+	if err := os.WriteFile(registryPath, []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := SnapshotRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := BeginCoreUpdateTransaction(root, source, target, previous, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := loadCoreUpdateTransaction(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, candidate, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(transaction.OriginalTargetSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(registryPath, []byte("new\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := AbortCoreUpdateTransaction(root); err == nil {
+		t.Fatal("expected executable rollback failure")
+	}
+	data, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "old\n" {
+		t.Fatalf("registry = %q", data)
+	}
+	if _, err := os.Stat(coreUpdateTransactionPath(root)); err != nil {
+		t.Fatalf("failed rollback discarded recovery journal: %v", err)
+	}
+	if _, err := os.Stat(snapshot); err != nil {
+		t.Fatalf("failed rollback discarded registry snapshot: %v", err)
 	}
 }
 

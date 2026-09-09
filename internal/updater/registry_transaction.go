@@ -3,6 +3,7 @@ package updater
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -326,14 +327,18 @@ func AbortCoreUpdateTransaction(root string) error {
 	if err != nil {
 		return err
 	}
+	var rollbackErr error
 	if err := restoreOriginalTarget(root, transaction); err != nil {
-		return err
+		rollbackErr = errors.Join(rollbackErr, err)
 	}
 	if err := RestoreRegistrySnapshot(root, transaction.FailureSnapshot); err != nil {
-		return err
+		rollbackErr = errors.Join(rollbackErr, err)
 	}
 	if err := restorePreviousExecutable(root, transaction); err != nil {
-		return err
+		rollbackErr = errors.Join(rollbackErr, err)
+	}
+	if rollbackErr != nil {
+		return rollbackErr
 	}
 	if err := DiscardRegistrySnapshot(root, transaction.FailureSnapshot); err != nil {
 		return err
@@ -558,6 +563,13 @@ func restorePreviousExecutable(root string, transaction coreUpdateTransaction) e
 func restoreOriginalTarget(root string, transaction coreUpdateTransaction) error {
 	if !registrySnapshotWithinRoot(root, transaction.OriginalTargetSnapshot) {
 		return fmt.Errorf("installed executable snapshot is outside the managed state root")
+	}
+	if digest, err := fileSHA256(transaction.TargetPath); err == nil {
+		if digest == transaction.OriginalTargetSHA256 {
+			return nil
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect installed executable before rollback: %w", err)
 	}
 	data, err := os.ReadFile(transaction.OriginalTargetSnapshot)
 	if err != nil {

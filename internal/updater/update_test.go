@@ -444,7 +444,8 @@ func TestFailedReplacementRestoresRegistrySnapshot(t *testing.T) {
 	if err := os.WriteFile(registryPath, []byte("new-registry\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ApplyReplacement(0, source, target, previous, snapshot, ""); err == nil {
+	replacementErr := ApplyReplacement(0, source, target, previous, snapshot, "")
+	if replacementErr == nil {
 		t.Fatal("expected post-update validation failure")
 	}
 	data, err := os.ReadFile(registryPath)
@@ -452,7 +453,7 @@ func TestFailedReplacementRestoresRegistrySnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(data) != "old-registry\n" {
-		t.Fatalf("registry = %q", data)
+		t.Fatalf("registry = %q after replacement error: %v", data, replacementErr)
 	}
 	assertVersion(t, previous, "older")
 }
