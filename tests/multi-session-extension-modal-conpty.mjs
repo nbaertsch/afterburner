@@ -70,11 +70,19 @@ if (maybeFake) {
     }
   } else {
     for (const [id, source] of [["black-box", join(process.cwd(), "extensions", "BlackBox")], ["openai-server", join(process.cwd(), "extensions", "OpenAIServer")]]) {
-      const archive = join(packages, `${id}.zip`);
-      run(["extension", "pack", source, archive], `pack ${id}`);
-      run(["extension", "install", archive], `install ${id}`);
-      run(["extension", "enable", id], `enable ${id}`);
-      packageEvidence.push({ id, archive: archive.replace(root, "%TEMP%"), sha256: sha256File(archive), mode: "canonical-zip-built-by-harness" });
+      const uatId = `${id}-uat`;
+      const packageSource = join(packages, uatId);
+      cpSync(source, packageSource, { recursive: true });
+      const manifestPath = join(packageSource, "afterburner.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      manifest.id = uatId;
+      manifest.visibility = "private";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      const archive = join(packages, `${uatId}.zip`);
+      run(["extension", "pack", packageSource, archive], `pack ${uatId}`);
+      run(["extension", "install", archive], `install ${uatId}`);
+      run(["extension", "enable", uatId], `enable ${uatId}`);
+      packageEvidence.push({ id: uatId, archive: archive.replace(root, "%TEMP%"), sha256: sha256File(archive), transformation: "afterburner.json id -> *-uat and visibility -> private only", mode: "source-manifest-id-transform" });
     }
   }
 }
@@ -306,8 +314,14 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
     }
     let actionInputs = [];
     let lastActionAttempt = 0;
+    let actionRequestIdsBefore = new Set();
     if (action) {
       actionInputs = Array.isArray(action) ? action : [action];
+      if (!maybeFake) {
+        actionRequestIdsBefore = new Set((await readAuditEntries())
+          .filter(entry => entry.operation === "queue-append" && entry.action)
+          .map(entry => entry.requestId));
+      }
       if (!maybeFake) await waitForOutputSettled(a);
       for (const [index, input] of actionInputs.entries()) {
         const outputLength = a.raw.length;
@@ -320,9 +334,14 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
       }
     }
     if (actionPattern && !maybeFake) {
-      await waitFor(() => {
+      await waitFor(async () => {
         if (actionPattern.test(stripAnsi(a.raw))) return true;
-        if (actionInputs.length === 1 && Date.now() - lastActionAttempt >= 2_000) {
+        const actionPublished = (await readAuditEntries()).some(entry =>
+          entry.operation === "queue-append" &&
+          entry.action &&
+          /-A$/.test(entry.ownerLabel ?? "") &&
+          !actionRequestIdsBefore.has(entry.requestId));
+        if (!actionPublished && actionInputs.length === 1 && Date.now() - lastActionAttempt >= 2_000) {
           send(a, actionInputs[0], `${name} action retry in A`);
           lastActionAttempt = Date.now();
         }
