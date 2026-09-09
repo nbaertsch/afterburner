@@ -158,7 +158,11 @@ async function waitFor(predicate, description, ms = timeoutMs) {
     if (await predicate()) return;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error(`timed out waiting for ${description}`);
+  const sessionState = currentSessions.map(session => {
+    const tail = stripAnsi(session.raw).replace(/\s+/g, " ").trim().slice(-1200);
+    return `${session.label} closed=${session.closed} tail=${JSON.stringify(tail)}`;
+  }).join("; ");
+  throw new Error(`timed out waiting for ${description}${sessionState ? `; ${sessionState}` : ""}`);
 }
 
 async function waitForOutputSettled(session, quietMs = 500, maxWaitMs = 3_000) {
@@ -286,7 +290,7 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
     if (maybeFake) {
       await waitFor(() => activePattern.test(stripAnsi(a.raw)), `${name} modal in A`, 20_000);
     } else {
-      await waitFor(() => /activated.*black-box/i.test(stripAnsi(a.raw)) && /activated.*black-box/i.test(stripAnsi(b.raw)), "both runtimes loaded extensions", 45_000);
+      await waitFor(() => /activated.*black-box/i.test(stripAnsi(a.raw)) && /activated.*black-box/i.test(stripAnsi(b.raw)), "both runtimes loaded extensions");
       await waitFor(() => isReady(stripAnsi(a.raw)) && isReady(stripAnsi(b.raw)), "both terminals ready after startup dialogs", 30_000);
       send(b, `\x15passive-${name}-before`, "passive negative control before");
       await waitFor(() => stripAnsi(b.raw).includes(`passive-${name}-before`), `${name} passive responsiveness before`, 10_000);
