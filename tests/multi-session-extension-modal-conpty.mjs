@@ -91,6 +91,7 @@ const baseEnv = {
   ...process.env,
   COPILOT_RUNTIME_EXTENSION_DEBUG: "1",
   AFTERBURNER_HOME: home,
+  AFTERBURNER_NORMAL_COPILOT_HOME: normal,
   AFTERBURNER_ISOLATE_SESSION_STATE: "1",
   AFTERBURNER_SKIP_PREFLIGHT: "1",
   AFTERBURNER_TERMINAL_BROKER: "1",
@@ -317,20 +318,12 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
       }, `${name} modal acknowledgement in A`, 10_000);
     }
     let actionInputs = [];
-    let lastActionAttempt = 0;
-    let actionRequestIdsBefore = new Set();
     if (action) {
       actionInputs = Array.isArray(action) ? action : [action];
-      if (!maybeFake) {
-        actionRequestIdsBefore = new Set((await readAuditEntries())
-          .filter(entry => entry.operation === "queue-append" && entry.action)
-          .map(entry => entry.requestId));
-      }
       if (!maybeFake) await waitForOutputSettled(a);
       for (const [index, input] of actionInputs.entries()) {
         const outputLength = a.raw.length;
         send(a, input, `${name} action ${index + 1}/${actionInputs.length} in A`);
-        lastActionAttempt = Date.now();
         if (!maybeFake && index < actionInputs.length - 1) {
           await waitFor(() => a.raw.length > outputLength, `${name} action ${index + 1} repaint in A`, 3_000);
           await waitForOutputSettled(a);
@@ -338,19 +331,7 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
       }
     }
     if (actionPattern && !maybeFake) {
-      await waitFor(async () => {
-        if (actionPattern.test(stripAnsi(a.raw))) return true;
-        const actionPublished = (await readAuditEntries()).some(entry =>
-          entry.operation === "queue-append" &&
-          entry.action &&
-          /-A$/.test(entry.ownerLabel ?? "") &&
-          !actionRequestIdsBefore.has(entry.requestId));
-        if (!actionPublished && actionInputs.length === 1 && Date.now() - lastActionAttempt >= 2_000) {
-          send(a, actionInputs[0], `${name} action retry in A`);
-          lastActionAttempt = Date.now();
-        }
-        return false;
-      }, `${name} action output in A`, 20_000);
+      await waitFor(() => actionPattern.test(stripAnsi(a.raw)), `${name} action output in A`, 20_000);
     }
     await new Promise(resolve => setTimeout(resolve, 1500));
     if (passiveForbiddenPattern.test(stripAnsi(b.raw))) throw new Error(`${name} modal rendered in passive session B`);

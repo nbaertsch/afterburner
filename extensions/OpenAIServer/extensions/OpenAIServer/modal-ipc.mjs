@@ -6,6 +6,7 @@ import { appendRouteRecord, claimRouteRecords, cleanupRouteArtifacts, newRequest
 const MAX_REQUEST_AGE_MS = 30_000;
 const CLEANUP_MAX_AGE_MS = 86_400_000;
 const DEFAULT_TIMEOUT_MS = 3_000;
+const DEFAULT_ACTION_TIMEOUT_MS = 10_000;
 const stateDirectory = (id = CANONICAL_ID) => join(afterburnerHome(), "state", id);
 const modalActivationPath = (id = CANONICAL_ID) => routeQueuePath(stateDirectory(id), "modal-activation.jsonl");
 const modalAckDirectory = (id = CANONICAL_ID) => join(stateDirectory(id), "modal-activation-acks");
@@ -73,7 +74,7 @@ export async function requestBridgeAction(action, input = {}) {
         action,
         input
     });
-    const ack = await waitForRouteAck(actionAckDirectory(), request, { timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS });
+    const ack = await waitForRouteAck(actionAckDirectory(), request, { timeoutMs: input.timeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS });
     return { ok: ack.ok === true, state: ack.state, error: ack.error };
 }
 
