@@ -315,6 +315,47 @@ func TestRecoverInterruptedCoreUpdatePublishesPreparedBinDirectory(t *testing.T)
 	}
 }
 
+func TestRecoverInterruptedCoreUpdateRestoresRetiredExecutable(t *testing.T) {
+	root := t.TempDir()
+	source, target, previous := transactionExecutablePaths(t, root, "new", "old")
+	failureSnapshot, err := SnapshotRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := BeginCoreUpdateTransaction(root, source, target, previous, failureSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	retired := filepath.Join(filepath.Dir(target), ".afterburn.exe.retired-test")
+	if err := SetCoreUpdateRetiredExecutable(root, retired); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(target, retired); err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := loadCoreUpdateTransaction(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction.OwnerPID = 1<<30 - 1
+	if err := saveCoreUpdateTransaction(root, transaction); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := RecoverInterruptedCoreUpdate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recovered {
+		t.Fatal("retired executable transaction was not recovered")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "old" {
+		t.Fatalf("restored executable = %q", data)
+	}
+}
+
 func TestBeginCoreUpdateTransactionRejectsConcurrentTransaction(t *testing.T) {
 	root := t.TempDir()
 	source, target, previous := transactionExecutablePaths(t, root, "new", "old")

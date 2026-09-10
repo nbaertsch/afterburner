@@ -38,6 +38,7 @@ type coreUpdateTransaction struct {
 	OriginalTargetSnapshot string `json:"originalTargetSnapshot"`
 	PreparedBinPath        string `json:"preparedBinPath,omitempty"`
 	RetiredBinPath         string `json:"retiredBinPath,omitempty"`
+	RetiredExecutablePath  string `json:"retiredExecutablePath,omitempty"`
 	OriginalTargetSHA256   string `json:"originalTargetSha256"`
 	CandidateSHA256        string `json:"candidateSha256"`
 	FailureSnapshot        string `json:"failureSnapshot"`
@@ -252,6 +253,21 @@ func SetCoreUpdateSwapPaths(root, preparedBinPath, retiredBinPath string) error 
 	return saveCoreUpdateTransaction(root, transaction)
 }
 
+func SetCoreUpdateRetiredExecutable(root, retiredExecutablePath string) error {
+	transaction, err := loadCoreUpdateTransaction(root)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !registry.Within(retiredExecutablePath, filepath.Join(root, "bin")) {
+		return fmt.Errorf("retired executable path is outside the managed bin directory")
+	}
+	transaction.RetiredExecutablePath = filepath.Clean(retiredExecutablePath)
+	return saveCoreUpdateTransaction(root, transaction)
+}
+
 func SetCoreUpdateSuccessSnapshot(root, successSnapshot string) error {
 	transaction, err := loadCoreUpdateTransaction(root)
 	if err != nil {
@@ -311,6 +327,9 @@ func CompleteCoreUpdateTransaction(root string) error {
 		if transaction.RetiredBinPath != "" {
 			_ = os.RemoveAll(transaction.RetiredBinPath)
 		}
+		if transaction.RetiredExecutablePath != "" {
+			_ = os.Remove(transaction.RetiredExecutablePath)
+		}
 	}
 	path := coreUpdateTransactionPath(root)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -354,6 +373,9 @@ func AbortCoreUpdateTransaction(root string) error {
 			return fmt.Errorf("remove prepared bin directory: %w", err)
 		}
 	}
+	if transaction.RetiredExecutablePath != "" {
+		_ = os.Remove(transaction.RetiredExecutablePath)
+	}
 	return CompleteCoreUpdateTransaction(root)
 }
 
@@ -373,6 +395,10 @@ func RecoverInterruptedCoreUpdate(root string) (bool, error) {
 	}
 	if _, err := os.Stat(transaction.TargetPath); os.IsNotExist(err) {
 		switch {
+		case fileExists(transaction.RetiredExecutablePath):
+			if err := os.Rename(transaction.RetiredExecutablePath, transaction.TargetPath); err != nil {
+				return false, fmt.Errorf("restore retired executable during recovery: %w", err)
+			}
 		case directoryExists(transaction.PreparedBinPath):
 			if err := os.Rename(transaction.PreparedBinPath, filepath.Dir(transaction.TargetPath)); err != nil {
 				return false, fmt.Errorf("publish prepared bin directory during recovery: %w", err)
@@ -472,6 +498,7 @@ func loadCoreUpdateTransaction(root string) (coreUpdateTransaction, error) {
 		!registrySnapshotWithinRoot(root, transaction.OriginalTargetSnapshot) ||
 		(transaction.PreparedBinPath != "" && !registry.Within(transaction.PreparedBinPath, root)) ||
 		(transaction.RetiredBinPath != "" && !registry.Within(transaction.RetiredBinPath, root)) ||
+		(transaction.RetiredExecutablePath != "" && !registry.Within(transaction.RetiredExecutablePath, filepath.Join(root, "bin"))) ||
 		len(transaction.OriginalTargetSHA256) != 64 ||
 		len(transaction.CandidateSHA256) != 64 ||
 		func() bool {
@@ -607,6 +634,14 @@ func directoryExists(path string) bool {
 	}
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+func fileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func pruneRetiredBinDirectories(root string) {

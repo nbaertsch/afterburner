@@ -491,44 +491,15 @@ func ApplyReplacement(parentPID int, source, target, previous, registrySnapshot,
 	if err := incoming.Close(); err != nil {
 		return err
 	}
-	if err := platform.ReplaceFile(incomingPath, target); err != nil {
-		if len(currentExecutable) == 0 {
-			return fmt.Errorf("replace installed executable: %w", err)
-		}
-		binDirectory := filepath.Dir(target)
-		preparedDirectory, prepareErr := os.MkdirTemp(root, ".replacement-bin-")
-		if prepareErr != nil {
-			return fmt.Errorf("replace installed executable: %w; prepare directory-swap fallback: %v", err, prepareErr)
-		}
-		defer os.RemoveAll(preparedDirectory)
-		retiredDirectory, retireErr := os.MkdirTemp(root, ".retired-bin-")
-		if retireErr == nil {
-			retireErr = os.Remove(retiredDirectory)
-		}
-		if retireErr == nil {
-			retireErr = SetCoreUpdateSwapPaths(root, preparedDirectory, retiredDirectory)
-		}
-		if retireErr == nil {
-			retireErr = copyDirectory(binDirectory, preparedDirectory)
-		}
-		if retireErr == nil {
-			retireErr = os.WriteFile(filepath.Join(preparedDirectory, filepath.Base(target)), data, 0o700)
-		}
-		if retireErr == nil {
-			retireErr = os.WriteFile(filepath.Join(preparedDirectory, filepath.Base(previous)), currentExecutable, 0o700)
-		}
-		if retireErr == nil {
-			retireErr = os.Rename(binDirectory, retiredDirectory)
-		}
-		if retireErr == nil {
-			retireErr = os.Rename(preparedDirectory, binDirectory)
-		}
-		if retireErr != nil {
-			if _, statErr := os.Stat(binDirectory); os.IsNotExist(statErr) {
-				_ = os.Rename(retiredDirectory, binDirectory)
-			}
-			return fmt.Errorf("replace installed executable: %w; directory-swap fallback failed: %v. Latest core remains staged at %s", err, retireErr, source)
-		}
+	retiredExecutable, err := platform.RetiredFilePath(target)
+	if err != nil {
+		return fmt.Errorf("prepare retired executable path: %w", err)
+	}
+	if err := SetCoreUpdateRetiredExecutable(root, retiredExecutable); err != nil {
+		return err
+	}
+	if err := platform.ReplaceFileRetiring(incomingPath, target, retiredExecutable); err != nil {
+		return fmt.Errorf("replace installed executable: %w. Latest core remains staged at %s", err, source)
 	}
 	rollbackExecutable := func(cause error) error {
 		rollbackData, readErr := os.ReadFile(previous)
@@ -582,51 +553,6 @@ func ApplyReplacement(parentPID int, source, target, previous, registrySnapshot,
 		return err
 	}
 	return nil
-}
-
-func copyDirectory(source, destination string) error {
-	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		if relative == "." {
-			return nil
-		}
-		target := filepath.Join(destination, relative)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		if !entry.Type().IsRegular() {
-			return fmt.Errorf("unsupported file in managed bin directory: %s", relative)
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		input, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
-		if err != nil {
-			input.Close()
-			return err
-		}
-		_, copyErr := io.Copy(output, input)
-		closeErr := output.Close()
-		inputErr := input.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		return inputErr
-	})
 }
 
 type Status struct {
