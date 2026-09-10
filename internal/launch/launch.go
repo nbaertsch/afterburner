@@ -443,20 +443,41 @@ func writeNativeBootstrap(surfaces []terminal.ModalCapability, assertions []nati
 	if err != nil {
 		return "", nil, err
 	}
+	sessionID := ""
+	for _, surface := range surfaces {
+		if surface.SessionID != "" {
+			sessionID = surface.SessionID
+			break
+		}
+	}
+	if sessionID == "" {
+		sessionID, err = newSessionRoute()
+		if err != nil {
+			return "", nil, err
+		}
+	}
 	dir, err := os.MkdirTemp("", "afterburner-native-")
 	if err != nil {
 		return "", func() {}, fmt.Errorf("create native bootstrap directory: %w", err)
 	}
 	path := filepath.Join(dir, "bootstrap.json")
+	normalizedSurfaces := append([]terminal.ModalCapability(nil), surfaces...)
+	for index := range normalizedSurfaces {
+		if normalizedSurfaces[index].SessionID == "" {
+			normalizedSurfaces[index].SessionID = sessionID
+		}
+	}
 	payload := struct {
 		SchemaVersion int                        `json:"schemaVersion"`
 		SessionRoute  string                     `json:"sessionRoute"`
+		SessionID     string                     `json:"sessionId"`
 		Surfaces      []terminal.ModalCapability `json:"modalSurfaces,omitempty"`
 		Assertions    []nativeIdentityAssertion  `json:"verifiedExtensions,omitempty"`
 	}{
 		SchemaVersion: 2,
 		SessionRoute:  sessionRoute,
-		Surfaces:      append([]terminal.ModalCapability(nil), surfaces...),
+		SessionID:     sessionID,
+		Surfaces:      normalizedSurfaces,
 		Assertions:    assertions,
 	}
 	encoded, err := json.Marshal(payload)

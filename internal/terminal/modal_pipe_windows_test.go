@@ -42,6 +42,41 @@ func TestModalPipeListenerServesAuthenticatedRequest(t *testing.T) {
 	}
 }
 
+func TestModalPipeRejectsStaleSessionIdentity(t *testing.T) {
+	server, err := NewModalServer(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err := server.RegisterModalCanvas(ModalRegistration{OwnerExtensionID: "owner.alpha", CanvasID: "shared", SurfaceID: "alpha-modal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := NewModalPipeListenerForCapability(server, capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	server.AuthorizeClientProcess(uint32(os.Getpid()))
+	go listener.Serve()
+
+	missing := modalRequestMap(capability, "open", 1)
+	delete(missing, "sessionId")
+	response := sendPipeRequest(t, listener.PipeName(), missing)
+	if response.OK || response.Error != "modal-unauthorized-session" {
+		t.Fatalf("missing session response = %#v", response)
+	}
+	request := modalRequestMap(capability, "open", 1)
+	request["sessionId"] = "stale-session-stale-session-stale-session"
+	response = sendPipeRequest(t, listener.PipeName(), request)
+	if response.OK || response.Error != "modal-unauthorized-session" {
+		t.Fatalf("stale session response = %#v", response)
+	}
+	response = sendPipeRequest(t, listener.PipeName(), modalRequestMap(capability, "open", 1))
+	if !response.OK || server.ActiveCount() != 1 {
+		t.Fatalf("fresh session response = %#v active=%d", response, server.ActiveCount())
+	}
+}
+
 func TestModalPipeRejectsDirectOwnerImpersonation(t *testing.T) {
 	server, err := NewModalServer(nil, nil)
 	if err != nil {
@@ -87,6 +122,7 @@ func TestModalPipeRejectsDirectOwnerImpersonation(t *testing.T) {
 			"ownerExtensionId": ownerBCap.OwnerExtensionID,
 			"canvasId":         ownerBCap.CanvasID,
 			"surfaceId":        ownerBCap.SurfaceID,
+			"sessionId":        ownerBCap.SessionID,
 			"generation":       int64(1),
 		}, "modal-unauthorized-surface"},
 	}

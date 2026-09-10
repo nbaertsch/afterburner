@@ -2,6 +2,8 @@ package terminal
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,7 +109,8 @@ var modalInteractiveDocumentKinds = map[string]struct{}{
 // *presentation* and human input ownership move to the modal while it is
 // open.
 type ModalServer struct {
-	broker *Broker
+	broker    *Broker
+	sessionID string
 
 	mu                   sync.Mutex
 	registrations        map[modalIdentity]*modalRegistrationState
@@ -142,6 +145,7 @@ type ModalCapability struct {
 	OwnerExtensionID string `json:"ownerExtensionId"`
 	CanvasID         string `json:"canvasId"`
 	SurfaceID        string `json:"surfaceId"`
+	SessionID        string `json:"sessionId"`
 	Pipe             string `json:"pipe,omitempty"`
 }
 
@@ -281,8 +285,13 @@ type modalControlClickRenderer interface {
 }
 
 func NewModalServer(broker *Broker, renderer ModalRenderer) (*ModalServer, error) {
+	sessionID, err := newModalSessionID()
+	if err != nil {
+		return nil, err
+	}
 	server := &ModalServer{
 		broker:               broker,
+		sessionID:            sessionID,
 		registrations:        make(map[modalIdentity]*modalRegistrationState),
 		authorizedClientPIDs: make(map[uint32]struct{}),
 		active:               make(map[modalIdentity]modalSession),
@@ -308,6 +317,12 @@ func (s *ModalServer) RequireAuthenticatedClients() {
 // AuthorizeClientProcess records the child runtime process that may use the
 // modal control channel. Authorization is connection-bound, not provided in
 // each JSON frame.
+func (s *ModalServer) SessionID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionID
+}
+
 func (s *ModalServer) AuthorizeClientProcess(pid uint32) {
 	if pid == 0 {
 		return
@@ -332,6 +347,14 @@ func (s *ModalServer) clientAuthorized(pid uint32, authenticated bool) bool {
 
 // RegisterModalCanvas registers a modal surface from trusted native launch or
 // runtime-host code. The returned descriptor contains no bearer material.
+func newModalSessionID() (string, error) {
+	buffer := make([]byte, 16)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", fmt.Errorf("generate modal session id: %w", err)
+	}
+	return hex.EncodeToString(buffer), nil
+}
+
 func (s *ModalServer) RegisterModalCanvas(reg ModalRegistration) (ModalCapability, error) {
 	identity, err := normalizeModalRegistration(reg)
 	if err != nil {
@@ -346,6 +369,7 @@ func (s *ModalServer) RegisterModalCanvas(reg ModalRegistration) (ModalCapabilit
 		OwnerExtensionID: identity.ownerExtensionID,
 		CanvasID:         identity.canvasID,
 		SurfaceID:        identity.surfaceID,
+		SessionID:        s.sessionID,
 	}, nil
 }
 
@@ -384,6 +408,7 @@ func (s *ModalServer) authorize(req modalRequest) (modalIdentity, modalResponse)
 
 type modalRequest struct {
 	Operation        string          `json:"operation"`
+	SessionID        string          `json:"sessionId,omitempty"`
 	Type             string          `json:"type"`
 	ID               string          `json:"id"`
 	OwnerExtensionID string          `json:"ownerExtensionId"`
@@ -437,7 +462,7 @@ func (r modalRequest) identity() (modalIdentity, modalResponse) {
 // must use HandleAuthenticatedConnection so authorization is bound to the
 // native connection instead of bearer data in JSON.
 func (s *ModalServer) HandleConnection(conn io.ReadWriter) {
-	response := s.handleOne(conn, true, nil)
+	response := s.handleOne(conn, true, false, nil)
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		encoded = []byte(`{"ok":false,"error":"modal-encode-failed"}`)
@@ -450,7 +475,7 @@ func (s *ModalServer) HandleAuthenticatedConnection(conn io.ReadWriter, clientPI
 }
 
 func (s *ModalServer) HandleAuthorizedSurfaceConnection(conn io.ReadWriter, clientPID uint32, allowedIdentity *modalIdentity) {
-	response := s.handleOne(conn, s.clientAuthorized(clientPID, true), allowedIdentity)
+	response := s.handleOne(conn, s.clientAuthorized(clientPID, true), true, allowedIdentity)
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		encoded = []byte(`{"ok":false,"error":"modal-encode-failed"}`)
@@ -458,7 +483,7 @@ func (s *ModalServer) HandleAuthorizedSurfaceConnection(conn io.ReadWriter, clie
 	_, _ = conn.Write(append(encoded, '\n'))
 }
 
-func (s *ModalServer) handleOne(conn io.Reader, connectionAuthorized bool, allowedIdentity *modalIdentity) modalResponse {
+func (s *ModalServer) handleOne(conn io.Reader, connectionAuthorized bool, requireSessionID bool, allowedIdentity *modalIdentity) modalResponse {
 	line, err := readModalRequestLine(conn)
 	if errors.Is(err, errModalMessageTooLarge) {
 		return modalResponse{Error: "modal-message-too-large"}
@@ -494,6 +519,9 @@ func (s *ModalServer) handleOne(conn io.Reader, connectionAuthorized bool, allow
 	identity, authResponse := s.authorize(req)
 	if authResponse.Error != "" {
 		return authResponse
+	}
+	if requireSessionID && allowedIdentity != nil && req.SessionID != s.SessionID() {
+		return modalResponse{Error: "modal-unauthorized-session"}
 	}
 	if allowedIdentity != nil && identity != *allowedIdentity {
 		return modalResponse{Error: "modal-unauthorized-surface"}
@@ -1308,9 +1336,16 @@ func (s *ModalServer) CloseAll() {
 		s.mu.Unlock()
 		return
 	}
+	closed := make([]modalSession, 0, len(s.active))
+	for _, session := range s.active {
+		closed = append(closed, session)
+	}
 	s.active = make(map[modalIdentity]modalSession)
 	s.order = nil
 	renderer := s.renderer
+	for _, session := range closed {
+		s.enqueueEventLocked(ModalEvent{Type: "closed", ID: session.identity.surfaceID, Generation: session.generation}, session.identity)
+	}
 	s.mu.Unlock()
 	if s.broker != nil {
 		s.broker.SetOwner(OwnerCopilot)

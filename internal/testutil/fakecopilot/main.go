@@ -63,6 +63,7 @@ type modalSurface struct {
 	OwnerExtensionID string `json:"ownerExtensionId"`
 	CanvasID         string `json:"canvasId"`
 	SurfaceID        string `json:"surfaceId"`
+	SessionID        string `json:"sessionId"`
 	Pipe             string `json:"pipe"`
 }
 
@@ -74,6 +75,7 @@ type modalResponse struct {
 
 type modalBootstrap struct {
 	Pipe          string         `json:"pipe"`
+	SessionID     string         `json:"sessionId"`
 	ModalSurfaces []modalSurface `json:"modalSurfaces"`
 }
 
@@ -347,6 +349,11 @@ func exerciseModalPipe() (*modalExerciseCapture, error) {
 		return nil, err
 	}
 	pipeName := surface.Pipe
+	if surface.SessionID != "" {
+		os.Setenv("AFTERBURNER_TEST_MODAL_SESSION_ID", surface.SessionID)
+	} else if bootstrap.SessionID != "" {
+		os.Setenv("AFTERBURNER_TEST_MODAL_SESSION_ID", bootstrap.SessionID)
+	}
 	const generation int64 = 1
 	result := &modalExerciseCapture{}
 	if response, err := sendModalRequest(pipeName, map[string]any{
@@ -754,6 +761,11 @@ func applyModalIdentity(request map[string]any) {
 	}
 	if _, ok := request["surfaceId"]; !ok {
 		request["surfaceId"] = surface
+	}
+	if sessionID := os.Getenv("AFTERBURNER_TEST_MODAL_SESSION_ID"); sessionID != "" {
+		if _, ok := request["sessionId"]; !ok {
+			request["sessionId"] = sessionID
+		}
 	}
 }
 

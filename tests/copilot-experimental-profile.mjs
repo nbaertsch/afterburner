@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import pty from "node-pty";
@@ -9,6 +9,17 @@ const stripAnsi = value => value
   .replace(/\x1b[()][A-Za-z0-9]/g, "");
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function newestLaunchConfig(managedCopilotHome) {
+  const launchRoot = join(managedCopilotHome, "..", "launch-homes");
+  if (!existsSync(launchRoot)) return undefined;
+  return readdirSync(launchRoot, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => join(launchRoot, entry.name, "config.json"))
+    .filter(path => existsSync(path))
+    .map(path => ({ path, modified: statSync(path).mtimeMs }))
+    .sort((left, right) => right.modified - left.modified)[0]?.path;
+}
 
 export async function bootstrapExperimentalCopilotProfile({
   afterburn,
@@ -64,18 +75,19 @@ export async function bootstrapExperimentalCopilotProfile({
         nativeAppDeclined = true;
         child.write("\r");
       }
-      const promptReady = /\/ commands|tab next tab|\? help|@ files · # issues/i.test(recent);
-      if (promptReady && /Staff mode activated! Restart the app to enable staff features/i.test(text)) {
+      const promptReady = /\/ commands|tab next tab|\? help|@ files · # issues|Skipped terminal setup/i.test(recent);
+      if (promptReady) {
         await sleep(500);
-        const launchRoot = join(managedCopilotHome, "..", "launch-homes");
-        const launchHome = readdirSync(launchRoot, { withFileTypes: true })
-          .filter(entry => entry.isDirectory())
-          .map(entry => join(launchRoot, entry.name))
-          .find(path => existsSync(join(path, "config.json")));
-        if (!launchHome) throw new Error("experimental profile bootstrap did not produce config.json");
-        mkdirSync(managedCopilotHome, { recursive: true });
-        cpSync(join(launchHome, "config.json"), join(managedCopilotHome, "config.json"));
-        return;
+        const launchConfig = newestLaunchConfig(managedCopilotHome);
+        if (launchConfig) {
+          mkdirSync(managedCopilotHome, { recursive: true });
+          cpSync(launchConfig, join(managedCopilotHome, "config.json"));
+          return;
+        }
+        if (!/Staff mode activated! Restart the app to enable staff features/i.test(text) &&
+            existsSync(join(managedCopilotHome, "config.json"))) {
+          return;
+        }
       }
       if (closed) throw new Error("Copilot exited during experimental profile bootstrap");
       await sleep(100);

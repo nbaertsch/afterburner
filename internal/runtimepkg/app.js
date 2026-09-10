@@ -316,6 +316,7 @@ function loadModalBrokerConfig() {
     if (bootstrapPaths.length === 0) return Object.freeze({ modalSurfaces: Object.freeze([]), verifiedExtensions: Object.freeze([]) });
     const modalSurfaces = [];
     const verifiedExtensions = [];
+    let verifiedBootstrapSessionId = "";
     let legacyPipe;
     for (const bootstrapPath of bootstrapPaths) {
         try {
@@ -325,18 +326,20 @@ function loadModalBrokerConfig() {
             if (typeof parsed.sessionRoute === "string" && /^[A-Za-z0-9_-]{32,128}$/.test(parsed.sessionRoute) && !process.env.AFTERBURNER_SESSION_ROUTE) {
                 process.env.AFTERBURNER_SESSION_ROUTE = parsed.sessionRoute;
             }
-            modalSurfaces.push(...normalizeModalBootstrapSurfaces(parsed.modalSurfaces, parsed.pipe));
+            if (typeof parsed.sessionId === "string" && /^[A-Za-z0-9_-]{32,128}$/.test(parsed.sessionId)) verifiedBootstrapSessionId = parsed.sessionId;
+            modalSurfaces.push(...normalizeModalBootstrapSurfaces(parsed.modalSurfaces, parsed.pipe, parsed.sessionId ?? verifiedBootstrapSessionId));
             verifiedExtensions.push(...normalizeNativeIdentityAssertions(parsed.verifiedExtensions));
         } catch {}
     }
     return Object.freeze({
         pipe: legacyPipe,
+        sessionId: verifiedBootstrapSessionId,
         modalSurfaces: Object.freeze(modalSurfaces),
         verifiedExtensions: Object.freeze(verifiedExtensions)
     });
 }
 
-function normalizeModalBootstrapSurfaces(values, legacyPipe) {
+function normalizeModalBootstrapSurfaces(values, legacyPipe, bootstrapSessionId = "") {
     if (!Array.isArray(values)) return Object.freeze([]);
     const surfaces = [];
     const seen = new Set();
@@ -347,11 +350,12 @@ function normalizeModalBootstrapSurfaces(values, legacyPipe) {
             const canvasId = validateModalId(value.canvasId, "modal canvas id");
             const surfaceId = validateModalId(value.surfaceId, "modal surface id");
             const pipe = typeof value.pipe === "string" && value.pipe ? value.pipe : legacyPipe;
-            if (!ownerExtensionId || !pipe) continue;
+            const sessionId = typeof value.sessionId === "string" && /^[A-Za-z0-9_-]{32,128}$/.test(value.sessionId) ? value.sessionId : bootstrapSessionId;
+            if (!ownerExtensionId || !pipe || !sessionId) continue;
             const key = modalNativeSurfaceKey(ownerExtensionId, canvasId, surfaceId);
             if (seen.has(key)) continue;
             seen.add(key);
-            surfaces.push(Object.freeze({ ownerExtensionId, canvasId, surfaceId, pipe }));
+            surfaces.push(Object.freeze({ ownerExtensionId, canvasId, surfaceId, sessionId, pipe }));
         } catch {}
     }
     return Object.freeze(surfaces);
@@ -389,6 +393,9 @@ function normalizeNativeIdentityAssertions(values) {
 
 function seedModalNativeSurfaces(config) {
     for (const surface of config?.modalSurfaces ?? []) {
+        if (!surface || typeof surface !== "object") continue;
+        if (typeof surface.pipe !== "string" || !surface.pipe) continue;
+        if (typeof surface.sessionId !== "string" || !/^[A-Za-z0-9_-]{32,128}$/.test(surface.sessionId)) continue;
         modalNativeSurfaces.set(modalNativeSurfaceKey(surface.ownerExtensionId, surface.canvasId, surface.surfaceId), surface);
     }
 }
@@ -604,6 +611,7 @@ function modalNativeSurfaceKey(ownerExtensionId, canvasId, surfaceId) {
 
 function modalWireIdentity(surface) {
     return {
+        sessionId: surface.sessionId,
         ownerExtensionId: surface.ownerExtensionId,
         canvasId: surface.canvasId,
         surfaceId: surface.surfaceId

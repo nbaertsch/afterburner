@@ -162,6 +162,7 @@ func TestRunDirectProvidesNativeIdentityAssertionsWithoutModalTransport(t *testi
 		Env             map[string]string `json:"env"`
 		NativeBootstrap struct {
 			SessionRoute       string `json:"sessionRoute"`
+			SessionID          string `json:"sessionId"`
 			ModalSurfaces      []any  `json:"modalSurfaces"`
 			VerifiedExtensions []struct {
 				ExtensionID    string `json:"extensionId"`
@@ -179,6 +180,9 @@ func TestRunDirectProvidesNativeIdentityAssertionsWithoutModalTransport(t *testi
 	}
 	if captured.Env["AFTERBURNER_MODAL_BOOTSTRAP"] != "" || captured.Env["AFTERBURNER_MODAL_PIPE"] != "" {
 		t.Fatalf("direct mode exposed modal transport: %#v", captured.Env)
+	}
+	if captured.NativeBootstrap.SessionID == "" || captured.NativeBootstrap.SessionID == captured.NativeBootstrap.SessionRoute {
+		t.Fatalf("direct mode did not provide a distinct native session id: %#v", captured.NativeBootstrap)
 	}
 	if captured.Env["AFTERBURNER_SESSION_ROUTE"] == "" || captured.Env["AFTERBURNER_SESSION_ROUTE"] != captured.NativeBootstrap.SessionRoute {
 		t.Fatalf("direct mode did not expose the host-issued session route: %#v", captured.Env)
@@ -249,11 +253,18 @@ func TestWriteNativeBootstrapContainsOnlyPreissuedSurfaces(t *testing.T) {
 	if route, ok := payload["sessionRoute"].(string); !ok || len(route) < 32 || strings.ContainsAny(route, `\\/:*?"<>|`) {
 		t.Fatalf("bootstrap did not contain a Windows-safe session route: %#v", payload["sessionRoute"])
 	}
+	sessionID, ok := payload["sessionId"].(string)
+	if !ok || len(sessionID) < 32 || strings.ContainsAny(sessionID, `\\/:*?"<>|`) {
+		t.Fatalf("bootstrap did not contain a Windows-safe native session id: %#v", payload["sessionId"])
+	}
 	got, ok := payload["modalSurfaces"].([]any)
 	if !ok || len(got) != 1 {
 		t.Fatalf("bootstrap surfaces = %#v", payload["modalSurfaces"])
 	}
 	surface := got[0].(map[string]any)
+	if surface["sessionId"] != sessionID {
+		t.Fatalf("bootstrap surface did not carry the native session id: %#v", surface)
+	}
 	if surface["pipe"] != `\\.\pipe\test` {
 		t.Fatalf("bootstrap surface did not carry its scoped pipe: %#v", surface)
 	}

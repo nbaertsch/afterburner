@@ -326,6 +326,41 @@ async function bootstrapExperimentalProfile() {
   }
 }
 
+async function runSimultaneousFakeModals() {
+  const aTitle = "Afterburner Session A Modal";
+  const bTitle = "Afterburner Session B Modal";
+  const a = launch("simultaneous-A", { AFTERBURNER_TEST_MODAL: "1", AFTERBURNER_TEST_MODAL_ACTIONS: "1", AFTERBURNER_TEST_MODAL_TITLE: aTitle });
+  const b = launch("simultaneous-B", { AFTERBURNER_TEST_MODAL: "1", AFTERBURNER_TEST_MODAL_ACTIONS: "1", AFTERBURNER_TEST_MODAL_TITLE: bTitle });
+  currentSessions.splice(0, currentSessions.length, a, b);
+  try {
+    await waitFor(() => new RegExp(aTitle, "i").test(stripAnsi(a.raw)) && new RegExp(bTitle, "i").test(stripAnsi(b.raw)), "simultaneous modal open in both sessions", 20_000);
+    if (new RegExp(bTitle, "i").test(stripAnsi(a.raw)) || new RegExp(aTitle, "i").test(stripAnsi(b.raw))) throw new Error("simultaneous modal titles crossed session boundaries");
+    send(a, "r", "refresh action in simultaneous A");
+    await waitFor(() => /refresh action observed/i.test(stripAnsi(a.raw)), "refresh action in simultaneous A", 10_000);
+    if (new RegExp(bTitle, "i").test(stripAnsi(a.raw)) || new RegExp(aTitle, "i").test(stripAnsi(b.raw))) throw new Error("refresh action crossed session modal ownership");
+    send(a, "d", "doctor action in simultaneous A");
+    await waitFor(() => /Afterburner Black Box Doctor/i.test(stripAnsi(a.raw)), "doctor action in simultaneous A", 10_000);
+    send(b, "r", "refresh action in simultaneous B");
+    await waitFor(() => /refresh action observed/i.test(stripAnsi(b.raw)), "refresh action in simultaneous B", 10_000);
+    send(b, "d", "doctor action in simultaneous B");
+    await waitFor(() => /Afterburner Black Box Doctor/i.test(stripAnsi(b.raw)), "doctor action in simultaneous B", 10_000);
+    if (new RegExp(bTitle, "i").test(stripAnsi(a.raw)) || new RegExp(aTitle, "i").test(stripAnsi(b.raw))) throw new Error("doctor action crossed session modal ownership");
+    send(a, "q", "close simultaneous A action modal");
+    await waitFor(() => /Afterburner Black Box Escape/i.test(stripAnsi(a.raw)), "simultaneous A escape-reopen", 10_000);
+    send(a, "\x1b", "close simultaneous A escape modal");
+    await waitFor(() => /copilot-after-modal/i.test(stripAnsi(a.raw)), "simultaneous A close", 10_000);
+    if (!new RegExp(bTitle, "i").test(stripAnsi(b.raw)) && !/Afterburner Black Box Doctor/i.test(stripAnsi(b.raw))) throw new Error("closing simultaneous A disrupted simultaneous B modal");
+    send(b, "q", "close simultaneous B action modal");
+    await waitFor(() => /Afterburner Black Box Escape/i.test(stripAnsi(b.raw)), "simultaneous B escape-reopen", 10_000);
+    send(b, "\x1b", "close simultaneous B escape modal");
+    await waitFor(() => /copilot-after-modal/i.test(stripAnsi(b.raw)), "simultaneous B close", 10_000);
+    return { a, b };
+  } catch (error) {
+    error.sessions = [a, b];
+    throw error;
+  }
+}
+
 async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPattern, action, actionPattern) {
   const a = launch(`${name}-A`, activeExtraEnv);
   const b = launch(`${name}-B`);
@@ -403,6 +438,13 @@ const startedAt = Date.now();
 let evidence;
 try {
   if (!maybeFake) await bootstrapExperimentalProfile();
+  if (maybeFake) {
+    const simultaneous = await runSimultaneousFakeModals();
+    sessions.push(simultaneous.a, simultaneous.b);
+    allSessions.push(...sessions);
+    await terminateSessions(sessions);
+    sessions = [];
+  }
   const blackbox = await runPair("blackbox", maybeFake ? { AFTERBURNER_TEST_MODAL: "1", AFTERBURNER_TEST_MODAL_TITLE: "Afterburner Black Box Live" } : {}, /Afterburner Black Box Live/i, /Afterburner Black Box Live/i, "\x1b");
   sessions.push(blackbox.a, blackbox.b);
   allSessions.push(...sessions);
@@ -423,7 +465,7 @@ try {
     if (!machine.hasBridgeStateMutation) throw new Error("missing OpenAI bridge state mutation evidence");
     audit = analyzeAudit(await readAuditEntries());
   }
-  evidence = { ok: true, elapsedMs: Date.now() - startedAt, mode, assertions: ["live-extension-command-mode", "release-package-bytes-installed", "black-box-active-only-request-ack", "openai-active-only-modal-action-ack", "openai-bridge-ownership-proof", "openai-bridge-state-mutation", "openai-action-output", "passive-responsive-before-after", "no-session-event-persistence-errors", "sanitized-route-ipc-audit"], machine, audit, packages: packageEvidence, state };
+  evidence = { ok: true, elapsedMs: Date.now() - startedAt, mode, assertions: ["live-extension-command-mode", "release-package-bytes-installed", "simultaneous-modal-session-isolation", "simultaneous-action-session-isolation", "black-box-active-only-request-ack", "openai-active-only-modal-action-ack", "openai-bridge-ownership-proof", "openai-bridge-state-mutation", "openai-action-output", "passive-responsive-before-after", "no-session-event-persistence-errors", "sanitized-route-ipc-audit"], machine, audit, packages: packageEvidence, state };
 } catch (error) {
   if (Array.isArray(error.sessions)) {
     sessions.push(...error.sessions);

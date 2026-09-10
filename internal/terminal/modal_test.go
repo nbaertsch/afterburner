@@ -69,6 +69,90 @@ func TestModalServerAuthenticatesAndDrivesBrokerOwnership(t *testing.T) {
 	}
 }
 
+func TestModalServerRequiresSessionIDForAuthenticatedWireRequests(t *testing.T) {
+	server, err := NewModalServer(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err := server.RegisterModalCanvas(ModalRegistration{OwnerExtensionID: "owner.alpha", CanvasID: "panel", SurfaceID: "panel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.RequireAuthenticatedClients()
+	server.AuthorizeClientProcess(42)
+
+	request := modalRequestMap(capability, "open", 1)
+	request["sessionId"] = "stale-session-stale-session-stale-session"
+	identity := modalIdentity{ownerExtensionID: "owner.alpha", canvasID: "panel", surfaceID: "panel"}
+	response := callModalServerAuthorizedSurface(t, server, request, 42, &identity)
+	if response.OK || response.Error != "modal-unauthorized-session" {
+		t.Fatalf("stale session response = %#v", response)
+	}
+
+	request = modalRequestMap(capability, "open", 1)
+	response = callModalServerAuthorizedSurface(t, server, request, 42, &identity)
+	if !response.OK {
+		t.Fatalf("fresh session response = %#v", response)
+	}
+}
+
+func TestModalServerCloseAllNotifiesPollersAndRestoresOwnership(t *testing.T) {
+	process := &fakeProcess{}
+	backend := &fakeBackend{process: process}
+	broker := NewBroker(backend, BrokerOptions{})
+	if err := broker.Start(t.Context(), Command{Path: "copilot"}); err != nil {
+		t.Fatal(err)
+	}
+	renderer := &testModalRenderer{}
+	server, err := NewModalServer(broker, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err := server.RegisterModalCanvas(ModalRegistration{OwnerExtensionID: "owner.alpha", CanvasID: "panel", SurfaceID: "panel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := callModalServer(t, server, modalRequestMap(capability, "open", 1)); !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	pollDone := make(chan modalResponse, 1)
+	go func() { pollDone <- callModalServer(t, server, modalRequestMap(capability, "poll", 1)) }()
+	waitForModalWaiterTest(t, server, modalEventKey{identity: modalIdentity{ownerExtensionID: "owner.alpha", canvasID: "panel", surfaceID: "panel"}, generation: 1}, 5*time.Second)
+	server.CloseAll()
+	select {
+	case response := <-pollDone:
+		if !response.OK || response.Event == nil || response.Event.Type != "closed" {
+			t.Fatalf("poll response after CloseAll = %#v", response)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("CloseAll did not wake modal poller")
+	}
+	if broker.Owner() != OwnerCopilot || server.ActiveCount() != 0 || renderer.hidden != 1 {
+		t.Fatalf("owner=%s active=%d hidden=%d", broker.Owner(), server.ActiveCount(), renderer.hidden)
+	}
+}
+
+func waitForModalWaiterTest(t *testing.T, server *ModalServer, key modalEventKey, timeout time.Duration) {
+	t.Helper()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		server.mu.Lock()
+		waiterCount := len(server.waiters[key])
+		server.mu.Unlock()
+		if waiterCount > 0 {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("poll request did not register waiter")
+		case <-ticker.C:
+		}
+	}
+}
+
 func TestModalServerDeclaredSurfaceIsRegistered(t *testing.T) {
 	server, err := NewModalServer(nil, nil)
 	if err != nil {
@@ -1297,7 +1381,7 @@ func formatRuneRow(row []rune) string {
 }
 
 func modalRequestMap(capability ModalCapability, requestType string, generation int64) map[string]any {
-	return map[string]any{
+	request := map[string]any{
 		"operation":        requestType,
 		"id":               capability.SurfaceID,
 		"ownerExtensionId": capability.OwnerExtensionID,
@@ -1305,6 +1389,10 @@ func modalRequestMap(capability ModalCapability, requestType string, generation 
 		"surfaceId":        capability.SurfaceID,
 		"generation":       generation,
 	}
+	if capability.SessionID != "" {
+		request["sessionId"] = capability.SessionID
+	}
+	return request
 }
 
 func addLegacyModalIdentity(request map[string]any) {
@@ -1341,6 +1429,11 @@ func callModalServer(t *testing.T, server *ModalServer, request map[string]any) 
 
 func callModalServerAuthenticated(t *testing.T, server *ModalServer, request map[string]any, pid uint32) modalResponse {
 	t.Helper()
+	return callModalServerAuthorizedSurface(t, server, request, pid, nil)
+}
+
+func callModalServerAuthorizedSurface(t *testing.T, server *ModalServer, request map[string]any, pid uint32, allowedIdentity *modalIdentity) modalResponse {
+	t.Helper()
 	addLegacyModalIdentity(request)
 	if _, ok := request["generation"]; !ok {
 		request["generation"] = int64(1)
@@ -1349,7 +1442,7 @@ func callModalServerAuthenticated(t *testing.T, server *ModalServer, request map
 	if err := json.NewEncoder(&conn).Encode(request); err != nil {
 		t.Fatal(err)
 	}
-	server.HandleAuthenticatedConnection(&conn, pid)
+	server.HandleAuthorizedSurfaceConnection(&conn, pid, allowedIdentity)
 	var response modalResponse
 	if err := json.NewDecoder(&conn).Decode(&response); err != nil {
 		t.Fatal(err)

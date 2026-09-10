@@ -112,7 +112,7 @@ function modalSurface(ownerExtensionId, canvasId, surfaceId = canvasId) {
 }
 
 function modalBrokerConfigFor(ownerExtensionId, canvasId, surfaceId = canvasId) {
-  return { modalSurfaces: [{ ...modalSurface(ownerExtensionId, canvasId, surfaceId), pipe: "pipe" }] };
+  return { sessionId: "sessionAAAAAAAAAAAAAAAAAAAAAAAAAA", modalSurfaces: [{ ...modalSurface(ownerExtensionId, canvasId, surfaceId), sessionId: "sessionAAAAAAAAAAAAAAAAAAAAAAAAAA", pipe: "pipe" }] };
 }
 
 test("fallback is consumable and update before open is rejected", async () => {
@@ -142,6 +142,22 @@ test("fallback is consumable and update before open is rejected", async () => {
   assert.equal(closed.ok, true);
   assert.equal(closed.fallback, true);
   assert.equal(handle.fallback(), null);
+  await handle.dispose();
+});
+
+test("modal broker surfaces require native session identity", async () => {
+  const runtime = await loadModalRuntime(async () => ({ ok: true }), {
+    modalSurfaces: [{ ...modalSurface("test-owner", "missing-session"), pipe: "pipe" }]
+  });
+  const handle = runtime.registerModalCanvas({
+    id: "missing-session",
+    displayName: "Missing Session",
+    open: () => ({ body: "must fall back" })
+  }, { ownerExtensionId: "test-owner" });
+
+  const opened = await handle.open();
+  assert.equal(opened.fallback, true);
+  assert.equal(opened.error, "modal-surface-unavailable");
   await handle.dispose();
 });
 
@@ -176,7 +192,7 @@ test("broker wire messages preserve rich modal document", async () => {
   const messages = [];
   const pollResolvers = [];
   let closeGeneration = null;
-  const allowed = new Set(["operation", "id", "ownerExtensionId", "canvasId", "surfaceId", "generation", "title", "status", "body", "footer", "actions", "document"]);
+  const allowed = new Set(["operation", "id", "sessionId", "ownerExtensionId", "canvasId", "surfaceId", "generation", "title", "status", "body", "footer", "actions", "document"]);
   const runtime = await loadModalRuntime(async (message) => {
     messages.push(message);
     const unknown = Object.keys(message).filter((key) => !allowed.has(key));
@@ -229,8 +245,9 @@ test("broker wire messages preserve rich modal document", async () => {
   assert.equal(opened.frame.document.root.children[0].kind, "table");
   assert.equal(messages.at(-1).operation, "poll");
   const openMessage = messages.find((message) => message.operation === "open");
-  assert.deepEqual(Object.keys(openMessage).sort(), ["actions", "body", "canvasId", "document", "footer", "generation", "id", "operation", "ownerExtensionId", "status", "surfaceId", "title"]);
+  assert.deepEqual(Object.keys(openMessage).sort(), ["actions", "body", "canvasId", "document", "footer", "generation", "id", "operation", "ownerExtensionId", "sessionId", "status", "surfaceId", "title"]);
   assert.equal(openMessage.token, undefined);
+  assert.equal(openMessage.sessionId, "sessionAAAAAAAAAAAAAAAAAAAAAAAAAA");
   assert.equal(openMessage.ownerExtensionId, "test-owner");
   assert.equal(openMessage.canvasId, "wire-document-test");
   assert.equal(openMessage.surfaceId, "wire-document-test");
@@ -247,7 +264,7 @@ test("broker wire messages preserve rich modal document", async () => {
 
   await handle.close();
   const closeMessage = messages.find((message) => message.operation === "close");
-  assert.deepEqual(Object.keys(closeMessage).sort(), ["canvasId", "generation", "id", "operation", "ownerExtensionId", "surfaceId"]);
+  assert.deepEqual(Object.keys(closeMessage).sort(), ["canvasId", "generation", "id", "operation", "ownerExtensionId", "sessionId", "surfaceId"]);
   await handle.dispose();
 });
 
@@ -266,6 +283,7 @@ test("legacy scoped Black Box handle uses explicit native identity", async () =>
   const opened = await handle.open();
   assert.equal(opened.ok, true);
   const openMessage = messages.find((message) => message.operation === "open");
+  assert.equal(openMessage.sessionId, "sessionAAAAAAAAAAAAAAAAAAAAAAAAAA");
   assert.equal(openMessage.ownerExtensionId, "black-box");
   assert.equal(openMessage.canvasId, "black-box");
   assert.equal(openMessage.surfaceId, "black-box");

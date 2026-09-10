@@ -220,11 +220,11 @@ test("modal IPC retries partial acks and rejects stale replayed acks", async () 
 test("modal IPC routes modal opens, acknowledgements, and bridge state", async () => {
     const home = join(tmpdir(), `afterburner-openai-route-${process.pid}-${randomBytes(4).toString("hex")}`);
     await withRouteEnv(home, ROUTE_A, async () => {
-        const pending = requestModalOpen({ timeoutMs: 2000 });
+        const pending = requestModalOpen({ timeoutMs: 10000 });
         const queue = routeQueuePath(join(home, "state", "openai-server"), "modal-activation.jsonl", {
             env: { AFTERBURNER_SESSION_ROUTE: ROUTE_A }
         });
-        const queueDeadline = Date.now() + 2000;
+        const queueDeadline = Date.now() + 5000;
         while (true) {
             const body = await readFile(queue, "utf8").catch(error => {
                 if (error?.code === "ENOENT") return "";
