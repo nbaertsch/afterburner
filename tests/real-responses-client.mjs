@@ -4,11 +4,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { startRequestCompatibilityProxy } from "../extensions/BYOModels/extensions/BYOModels/request-compatibility.mjs";
 
 if (!process.argv[2] || !process.argv[3]) {
-    throw new Error("Usage: node tests\\real-responses-client.mjs <copilot-sdk-directory> <copilot.exe>");
+    throw new Error("Usage: node tests\\real-responses-client.mjs <copilot-sdk-directory> <copilot.exe> [proxy-module]");
 }
+const { startRequestCompatibilityProxy } = await import(process.argv[4]
+    ? pathToFileURL(resolve(process.argv[4]))
+    : new URL("../extensions/BYOModels/extensions/BYOModels/request-compatibility.mjs", import.meta.url));
 const { CopilotClient, RuntimeConnection } = await import(pathToFileURL(join(resolve(process.argv[2]), "index.js")));
 const root = mkdtempSync(join(tmpdir(), "afterburn-responses-client-"));
 const completed = output => ({
@@ -28,6 +30,14 @@ const upstream = createServer(async (request, response) => {
     switch (scenario) {
         case "error":
             event = { type: "error", message: "Synthetic provider denial.", code: "policy_denied" };
+            break;
+        case "null-error":
+            event = { type: "error", error: null, message: "Synthetic provider denial.", code: "policy_denied" };
+            break;
+        case "failed-null-error":
+            event = { type: "response.failed", response: {
+                status: "failed", error: null, message: "Synthetic provider denial.", code: "policy_denied"
+            } };
             break;
         case "failed":
             event = { type: "response.failed", response: { status: "failed", error: {
@@ -77,7 +87,7 @@ const client = new CopilotClient({
 });
 try {
     await client.start();
-    for (scenario of ["error", "failed", "incomplete", "refusal", "completed", "tool"]) {
+    for (scenario of ["error", "null-error", "failed", "failed-null-error", "incomplete", "refusal", "completed", "tool"]) {
         calls = 0;
         toolCalls = 0;
         const session = await client.createSession({
@@ -99,6 +109,10 @@ try {
             } else {
                 await assert.rejects(session.sendAndWait({ prompt: "Say hello." }, 45000), error => {
                     assert.match(error.message, scenario === "incomplete" ? /max_output_tokens/ : /Synthetic provider denial/);
+                    assert.match(error.message, /synthetic-upstream-request/);
+                    if (scenario === "null-error" || scenario === "failed-null-error") {
+                        assert.match(error.message, /\[policy_denied\]/);
+                    }
                     assert.doesNotMatch(error.message, /retried 5 times|without a completed response/);
                     return true;
                 });

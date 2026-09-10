@@ -131,6 +131,10 @@ For clients that discard Responses SSE failure events, set `"bufferResponses": t
 The session proxy validates the entire upstream stream before sending response headers. Upstream
 errors, failed responses, and incomplete responses become explicit HTTP errors with the provider
 message and available upstream request ID; they are never turned into successful model responses.
+Error codes also appear in the displayed message. Error extraction preserves nonblank `message`,
+`title`, and `code` fields across nested or JSON-encoded error wrappers, including `error: null`.
+If no recognized message is available, the diagnostic explicitly says so rather than guessing the
+cause. These diagnostics do not retain raw upstream response bodies.
 Deterministic failures use HTTP 422, rate limits use 429, and server/transport failures use 5xx.
 Successful terminal response objects and tool calls are preserved. Refusal blocks are surfaced
 as explicit `upstream_refusal` errors with their original text, rather than empty successful replies.
@@ -150,6 +154,8 @@ From the repository root, run `npm run test:real-responses-client -- <copilot-sd
 to exercise the production proxy with the actual native client and a local synthetic provider.
 It verifies explicit failures, incomplete responses, refusals, successful text, and a complete tool
 round trip without contacting any configured provider.
+An optional final `proxy-module` path tests an installed release's `request-compatibility.mjs`
+instead of the repository copy.
 
 Configured provider `headers` are applied by the owning proxy to every upstream request; they do
 not depend on the Copilot SDK forwarding them through the loopback hop. Keep credentials in

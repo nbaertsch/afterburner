@@ -61,6 +61,31 @@ test("failure, incomplete, malformed and truncated streams cannot become success
   ), /Do not overwrite/);
 });
 
+test("error wrappers preserve supplied messages and codes instead of replacing them with fallbacks", () => {
+  const cases = [
+    [{ type: "error", error: null, code: "policy_denied", message: "Synthetic refusal." }, 422, "policy_denied", "Synthetic refusal."],
+    [{ type: "error", error: {}, code: "rate_limit_exceeded", message: "Slow down." }, 429, "rate_limit_exceeded", "Slow down."],
+    [{ type: "error", code: "server_error", error: "Unavailable." }, 503, "server_error", "Unavailable."],
+    [{ type: "error", message: "Outer detail.", error: { code: "policy_denied", error: null } }, 422, "policy_denied", "Outer detail."],
+    [{ type: "error", code: "outer", message: "Outer.", error: { code: "inner", message: "Inner." } }, 422, "inner", "Inner."],
+    [{ type: "error", message: "Outer.", error: { code: "", message: " ", title: "", error: null } }, 422, "upstream_error", "Outer."],
+    [{ type: "error", error: '{"error":{"code":"server_error","message":"Unavailable.","error":null}}' }, 503, "server_error", "Unavailable."],
+    [{ type: "response.failed", response: { status: "failed", error: null, code: "policy_denied", message: "Synthetic refusal." } }, 422, "policy_denied", "Synthetic refusal."],
+    [{ type: "response.failed", response: { status: "failed", code: "server_error", error: { title: "Unavailable." } } }, 503, "server_error", "Unavailable."]
+  ];
+  for (const [event, status, code, message] of cases) {
+    assert.throws(() => terminalResponseFromEventStream(sse(event)), error => {
+      assert.equal(error.status, status);
+      assert.equal(error.code, code);
+      assert.equal(error.message, message);
+      return true;
+    });
+  }
+  assert.throws(() => terminalResponseFromEventStream(sse({
+    type: "response.failed", response: { status: "failed", error: null }
+  })), /response.failed event reported failure without a recognized error message/);
+});
+
 test("buffered proxy reports upstream failure before committing HTTP success", async () => {
   let currentEvent = { type: "response.failed", response: { status: "failed", error: { code: "policy_denied", message: "Synthetic upstream refusal." } } };
   const upstream = createServer(async (request, response) => {
@@ -86,6 +111,13 @@ test("buffered proxy reports upstream failure before committing HTTP success", a
     assert.equal(error.code, "policy_denied");
     assert.match(error.message, /Synthetic upstream refusal/);
     assert.match(error.message, /upstream-123/);
+    currentEvent = { type: "error", error: null, code: "policy_denied", message: "Preserve this synthetic refusal." };
+    const nullError = await send();
+    assert.equal(nullError.status, 422);
+    const preserved = (await nullError.json()).error;
+    assert.equal(preserved.code, "policy_denied");
+    assert.match(preserved.message, /\[policy_denied\]: Preserve this synthetic refusal/);
+    assert.match(preserved.message, /upstream-123/);
     currentEvent = { type: "response.completed", response: completed };
     const success = await send();
     assert.equal(success.status, 200);

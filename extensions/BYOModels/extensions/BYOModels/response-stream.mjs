@@ -11,19 +11,23 @@ export class ResponseStreamError extends Error {
 
 function upstreamError(value, fallback, fallbackCode) {
     let error = value;
+    let code = fallbackCode;
+    let message = fallback;
     for (let depth = 0; depth < 4; depth++) {
         if (typeof error === "string") {
             try { error = JSON.parse(error); }
-            catch { return new ResponseStreamError(error, fallbackCode, 422); }
-        } else if (error?.error !== undefined) {
-            error = error.error;
+            catch {
+                if (error.trim()) message = error;
+                break;
+            }
         } else {
-            break;
+            if (typeof error?.code === "string" && error.code.trim()) code = error.code;
+            if (typeof error?.message === "string" && error.message.trim()) message = error.message;
+            else if (typeof error?.title === "string" && error.title.trim()) message = error.title;
+            if (error?.error == null) break;
+            error = error.error;
         }
     }
-    const code = typeof error?.code === "string" ? error.code : fallbackCode;
-    const message = typeof error?.message === "string" ? error.message :
-        typeof error?.title === "string" ? error.title : fallback;
     const status = code === "rate_limit_exceeded" ? 429 :
         ["server_error", "internal_server_error", "service_unavailable"].includes(code) ? 503 : 422;
     return new ResponseStreamError(message, code, status);
@@ -50,14 +54,16 @@ export function terminalResponseFromEventStream(source) {
         const type = event?.type ?? name;
         if (typeof type === "string" && type) lastEvent = type.slice(0, 120);
         if (type === "error" || event?.error != null) {
-            failure = upstreamError(event, "Upstream Responses request failed.", "upstream_error");
+            failure = upstreamError(event,
+                "Upstream Responses error event did not include a recognized error message.", "upstream_error");
         } else if (["response.completed", "response.failed", "response.incomplete"].includes(type)) {
             const response = event.response;
             if (!response || typeof response !== "object" || Array.isArray(response)) {
                 throw new ResponseStreamError(`Upstream ${type} event has no response object.`);
             }
             if (type === "response.failed" || response.status === "failed" || response.error) {
-                failure = upstreamError(response.error, "Upstream Responses request failed.", "upstream_response_failed");
+                failure = upstreamError(response,
+                    `Upstream ${type} event reported failure without a recognized error message.`, "upstream_response_failed");
             } else if (type === "response.incomplete" || response.status === "incomplete") {
                 const reason = response.incomplete_details?.reason ?? "unspecified";
                 failure = new ResponseStreamError(

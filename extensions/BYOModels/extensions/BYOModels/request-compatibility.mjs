@@ -240,11 +240,12 @@ function createProxyServer(
                 return;
             }
             const requestId = upstreamRequestId ? ` (upstream request: ${upstreamRequestId})` : "";
+            const errorCode = error instanceof ResponseStreamError ? error.code : "byomodels_proxy_error";
             response.writeHead(error instanceof ResponseStreamError ? error.status : 502, { "content-type": "application/json" });
             response.end(JSON.stringify({
                 error: {
-                    code: error instanceof ResponseStreamError ? error.code : "byomodels_proxy_error",
-                    message: `BYOModels '${provider.name}': ${error?.message ?? String(error)}${requestId}`
+                    code: errorCode,
+                    message: `BYOModels '${provider.name}' [${errorCode}]: ${error?.message ?? String(error)}${requestId}`
                 }
             }));
         } finally {
