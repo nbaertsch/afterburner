@@ -111,6 +111,15 @@ function sanitizeClientHeaders(headers) {
     }
 }
 
+function upstreamClientHeaders(requestHeaders) {
+    const headers = {};
+    for (const name of ["accept", "content-type"]) {
+        const value = requestHeaders[name];
+        if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+}
+
 function completedResponseFromEventStream(source) {
     let completed;
     for (const block of source.split(/\r?\n\r?\n/)) {
@@ -182,7 +191,7 @@ function createProxyServer(
             }
 
             const target = upstreamTarget(upstream, request.url);
-            const headers = { ...request.headers };
+            const headers = upstreamClientHeaders(request.headers);
             const capabilityAuthorization = safeEqual(bearerToken(request), capability);
             if (capabilityAuthorization) {
                 delete headers.authorization;

@@ -147,6 +147,7 @@ test("compatibility proxy adapts non-streaming Responses calls for streaming-onl
   const upstream = createServer(async (request, response) => {
     assert.equal(request.headers["x-ms-scp-use-cell"], "true");
     assert.equal(request.headers["x-client-hop"], undefined);
+    assert.equal(request.headers["x-copilot-internal"], undefined);
     assert.equal(request.headers["proxy-authorization"], undefined);
     assert.equal(request.headers.te, undefined);
     const chunks = [];
@@ -182,6 +183,7 @@ test("compatibility proxy adapts non-streaming Responses calls for streaming-onl
         "proxy-authorization": "secret",
         te: "trailers",
         "x-client-hop": "must-not-forward",
+        "x-copilot-internal": "must-not-forward",
         "x-ms-scp-use-cell": "false"
       }),
       body: JSON.stringify({ model: "wire-model", input: "hello" })

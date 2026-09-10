@@ -408,7 +408,7 @@ func TestProxyAdaptsNonStreamingResponsesForStreamingOnlyEndpoints(t *testing.T)
 		if got := request.Header.Get("x-provider-routing"); got != "required" {
 			t.Fatalf("configured provider header = %q", got)
 		}
-		for _, name := range []string{"x-client-hop", "proxy-authorization", "te"} {
+		for _, name := range []string{"x-client-hop", "x-copilot-internal", "proxy-authorization", "te"} {
 			if got := request.Header.Get(name); got != "" {
 				t.Fatalf("hop-by-hop header %q reached upstream with value %q", name, got)
 			}
@@ -452,6 +452,7 @@ func TestProxyAdaptsNonStreamingResponsesForStreamingOnlyEndpoints(t *testing.T)
 	request.Header.Set("proxy-authorization", "secret")
 	request.Header.Set("te", "trailers")
 	request.Header.Set("x-client-hop", "must-not-forward")
+	request.Header.Set("x-copilot-internal", "must-not-forward")
 	request.Header.Set("x-provider-routing", "wrong")
 	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
 	response, err := http.DefaultClient.Do(request)

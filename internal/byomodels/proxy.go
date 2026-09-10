@@ -406,7 +406,7 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 		writeProxyError(response, err)
 		return
 	}
-	copyHeaders(upstreamRequest.Header, request.Header)
+	copyClientRequestHeaders(upstreamRequest.Header, request.Header)
 	if current.authorizationBearer(request) == current.capability {
 		upstreamRequest.Header.Del("authorization")
 	}
@@ -692,6 +692,14 @@ func maxTime(left, right time.Time) time.Time {
 func copyHeaders(destination, source http.Header) {
 	for name, values := range source {
 		for _, value := range values {
+			destination.Add(name, value)
+		}
+	}
+}
+
+func copyClientRequestHeaders(destination, source http.Header) {
+	for _, name := range []string{"accept", "content-type"} {
+		for _, value := range source.Values(name) {
 			destination.Add(name, value)
 		}
 	}
