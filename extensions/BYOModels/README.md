@@ -118,6 +118,10 @@ response expected by Copilot. Configure it as:
 ```
 
 The proxy preserves path-prefixed base URLs and query parameters.
+Configured provider `headers` are applied by the owning proxy to every upstream request; they do
+not depend on the Copilot SDK forwarding them through the loopback hop. Keep credentials in
+`auth`; transport, authorization, and Afterburner capability headers are proxy-managed and cannot
+be configured through `headers`.
 Set `requestCompatibility.proxyPort` to a preferred stable, provider-specific port so the first
 session normally receives a predictable loopback endpoint. The port is not a global singleton:
 if the preferred port is already occupied by another Afterburner session, another provider in the

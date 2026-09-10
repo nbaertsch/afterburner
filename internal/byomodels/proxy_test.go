@@ -19,6 +19,9 @@ import (
 func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 	var receivedID string
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("x-provider-routing"); got != "required" {
+			t.Fatalf("configured provider header = %q", got)
+		}
 		var payload struct {
 			Input []struct {
 				ID string `json:"id"`
@@ -69,6 +72,7 @@ func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Header.Set("content-type", "application/json")
+	request.Header.Set("x-provider-routing", "wrong")
 	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -81,6 +85,62 @@ func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 	}
 	if receivedID == longID || !strings.HasPrefix(receivedID, "ab_") {
 		t.Fatalf("input ID was not rewritten: %q", receivedID)
+	}
+}
+
+func TestProxyConfigurationNormalizesHeaderNamesAndIncludesValues(t *testing.T) {
+	configured := provider{
+		Headers: map[string]string{
+			"X-Z": "2",
+			"x-a": "1",
+		},
+		RequestCompatibility: requestCompatibility{
+			MaxInputItemIDLength: 64,
+			ForceStreaming:       true,
+		},
+		Auth: auth{
+			Type:     "azure-cli",
+			Resource: "https://resource.example",
+		},
+	}
+	const expected = "xxJUMvZ6fjU1ZvCj3mIFY-YhweILh_zxKyVeZ3mTSAs"
+	if got := proxyConfiguration(configured); got != expected {
+		t.Fatalf("configuration = %q, want %q", got, expected)
+	}
+	configured.Headers = map[string]string{"X-A": "1", "x-z": "2"}
+	if got := proxyConfiguration(configured); got != expected {
+		t.Fatalf("normalized configuration = %q, want %q", got, expected)
+	}
+	configured.Headers["X-A"] = "changed"
+	if got := proxyConfiguration(configured); got == expected {
+		t.Fatalf("changed header value retained configuration %q", got)
+	}
+}
+
+func TestProviderHeaderValidation(t *testing.T) {
+	for _, current := range []struct {
+		name    string
+		headers map[string]string
+	}{
+		{name: "empty", headers: map[string]string{" ": "value"}},
+		{name: "invalid name", headers: map[string]string{"bad header": "value"}},
+		{name: "duplicate", headers: map[string]string{"X-Test": "one", "x-test": "two"}},
+		{name: "managed", headers: map[string]string{proxyCapabilityHeader: "value"}},
+		{name: "multiline", headers: map[string]string{"x-test": "one\r\ntwo"}},
+		{name: "control byte", headers: map[string]string{"x-test": "one\x01two"}},
+		{name: "delete byte", headers: map[string]string{"x-test": "one\x7ftwo"}},
+	} {
+		t.Run(current.name, func(t *testing.T) {
+			if err := validateProviderHeaders(provider{Name: "test", Headers: current.headers}); err == nil {
+				t.Fatal("expected configured header validation failure")
+			}
+		})
+	}
+	if err := validateProviderHeaders(provider{
+		Name:    "test",
+		Headers: map[string]string{"x-ms-scp-use-cell": "true"},
+	}); err != nil {
+		t.Fatalf("valid configured header rejected: %v", err)
 	}
 }
 
@@ -345,6 +405,14 @@ func TestProxyAdaptsNonStreamingResponsesForStreamingOnlyEndpoints(t *testing.T)
 	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		receivedURL = request.URL.String()
+		if got := request.Header.Get("x-provider-routing"); got != "required" {
+			t.Fatalf("configured provider header = %q", got)
+		}
+		for _, name := range []string{"x-client-hop", "proxy-authorization", "te"} {
+			if got := request.Header.Get(name); got != "" {
+				t.Fatalf("hop-by-hop header %q reached upstream with value %q", name, got)
+			}
+		}
 		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
 			t.Fatal(err)
 		}
@@ -380,6 +448,11 @@ func TestProxyAdaptsNonStreamingResponsesForStreamingOnlyEndpoints(t *testing.T)
 		t.Fatal(err)
 	}
 	request.Header.Set("content-type", "application/json")
+	request.Header.Set("connection", "x-client-hop")
+	request.Header.Set("proxy-authorization", "secret")
+	request.Header.Set("te", "trailers")
+	request.Header.Set("x-client-hop", "must-not-forward")
+	request.Header.Set("x-provider-routing", "wrong")
 	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -491,6 +564,9 @@ func writeStreamingConfig(t *testing.T, upstream string, port int) string {
   "providers": [{
     "name": "test-provider",
     "baseUrl": %q,
+    "headers": {
+      "x-provider-routing": "required"
+    },
     "requestCompatibility": {
       "forceStreaming": true,
       "proxyPort": %d
@@ -525,6 +601,9 @@ func writeConfig(t *testing.T, upstream string, port int) string {
   "providers": [{
     "name": "test-provider",
     "baseUrl": %q,
+    "headers": {
+      "x-provider-routing": "required"
+    },
     "requestCompatibility": {
       "maxInputItemIdLength": 64,
       "proxyPort": %d

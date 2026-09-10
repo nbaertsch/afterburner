@@ -21,6 +21,22 @@ try {
     );
 }
 const configPath = new URL(`file:///${configuredPath.replace(/\\/g, "/")}`);
+const providerHeaderNamePattern = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const proxyManagedHeaders = new Set([
+    "accept-encoding",
+    "authorization",
+    "connection",
+    "content-length",
+    "host",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "x-afterburner-proxy-capability"
+]);
 const runtimeMetadataPath = join(
     process.env.COPILOT_HOME ?? join(process.env.USERPROFILE ?? "", ".copilot"),
     "runtime-extension-data",
@@ -64,6 +80,28 @@ function validateConfig() {
             (!Number.isInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535)) {
             throw new Error(
                 `Provider '${provider.name}' must define requestCompatibility.proxyPort between 1024 and 65535.`
+            );
+        }
+        if (provider.headers !== undefined &&
+            (!provider.headers || typeof provider.headers !== "object" ||
+                Array.isArray(provider.headers) ||
+                Object.entries(provider.headers).some(([name, value]) =>
+                    !providerHeaderNamePattern.test(name.trim()) ||
+                    typeof value !== "string" ||
+                    /[\x00-\x08\x0a-\x1f\x7f]/.test(value)))) {
+            throw new Error(
+                `Provider '${provider.name}' must define headers as an object of valid HTTP header names and single-line string values.`
+            );
+        }
+        const headerNames = Object.keys(provider.headers ?? {})
+            .map((name) => name.trim().toLowerCase());
+        if (new Set(headerNames).size !== headerNames.length) {
+            throw new Error(`Provider '${provider.name}' defines duplicate case-insensitive header names.`);
+        }
+        const managedHeader = headerNames.find((name) => proxyManagedHeaders.has(name));
+        if (managedHeader) {
+            throw new Error(
+                `Provider '${provider.name}' cannot configure proxy-managed header '${managedHeader}'.`
             );
         }
         providerNames.add(provider.name);

@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,22 @@ const (
 	proxyCapabilityHeader = "x-afterburner-proxy-capability"
 )
 
+var proxyManagedHeaders = map[string]bool{
+	"accept-encoding":     true,
+	"authorization":       true,
+	"connection":          true,
+	"content-length":      true,
+	"host":                true,
+	"keep-alive":          true,
+	"proxy-authenticate":  true,
+	"proxy-authorization": true,
+	"te":                  true,
+	"trailer":             true,
+	"transfer-encoding":   true,
+	"upgrade":             true,
+	proxyCapabilityHeader: true,
+}
+
 type config struct {
 	Version   int        `json:"version"`
 	Providers []provider `json:"providers"`
@@ -39,6 +56,7 @@ type config struct {
 type provider struct {
 	Name                 string               `json:"name"`
 	BaseURL              string               `json:"baseUrl"`
+	Headers              map[string]string    `json:"headers"`
 	RequestCompatibility requestCompatibility `json:"requestCompatibility"`
 	Auth                 auth                 `json:"auth"`
 }
@@ -116,6 +134,10 @@ func Start(configPath string) (*Manager, error) {
 	manager := &Manager{}
 	tokens := &tokenCache{values: map[string]tokenValue{}}
 	for _, configured := range value.Providers {
+		if err := validateProviderHeaders(configured); err != nil {
+			manager.Close()
+			return nil, err
+		}
 		compatibility := configured.RequestCompatibility
 		if (compatibility.MaxInputItemIDLength < 16 && !compatibility.ForceStreaming) ||
 			compatibility.ProxyPort == 0 || !canNativeOwn(configured) {
@@ -177,14 +199,70 @@ func newCapability() (string, error) {
 }
 
 func proxyConfiguration(value provider) string {
+	configuredHeaders := make([]string, 0, len(value.Headers))
+	for name, configuredValue := range value.Headers {
+		configuredHeaders = append(
+			configuredHeaders,
+			strings.ToLower(strings.TrimSpace(name))+":"+configuredValue,
+		)
+	}
+	sort.Strings(configuredHeaders)
 	configuration := strings.Join([]string{
 		strconv.Itoa(value.RequestCompatibility.MaxInputItemIDLength),
 		strconv.FormatBool(value.RequestCompatibility.ForceStreaming),
 		value.Auth.Type,
 		value.Auth.Resource,
+		strings.Join(configuredHeaders, "\n"),
 	}, "\x00")
 	hash := sha256.Sum256([]byte(configuration))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
+}
+
+func validateProviderHeaders(value provider) error {
+	names := map[string]bool{}
+	for name, configuredValue := range value.Headers {
+		normalized := strings.ToLower(strings.TrimSpace(name))
+		if !validHeaderName(normalized) {
+			return fmt.Errorf("provider %q has invalid configured header name %q", value.Name, name)
+		}
+		if names[normalized] {
+			return fmt.Errorf("provider %q has duplicate configured header %q", value.Name, normalized)
+		}
+		if proxyManagedHeaders[normalized] {
+			return fmt.Errorf("provider %q cannot configure proxy-managed header %q", value.Name, normalized)
+		}
+		if !validHeaderValue(configuredValue) {
+			return fmt.Errorf("provider %q has an invalid value for configured header %q", value.Name, normalized)
+		}
+		names[normalized] = true
+	}
+	return nil
+}
+
+func validHeaderName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			strings.ContainsRune("!#$%&'*+-.^_`|~", rune(character)) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validHeaderValue(value string) bool {
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if (character < 0x20 && character != '\t') || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func (manager *Manager) Close() error {
@@ -329,13 +407,16 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	copyHeaders(upstreamRequest.Header, request.Header)
+	if current.authorizationBearer(request) == current.capability {
+		upstreamRequest.Header.Del("authorization")
+	}
 	removeHopByHopHeaders(upstreamRequest.Header)
 	upstreamRequest.Header.Del("host")
 	upstreamRequest.Header.Del("content-length")
 	upstreamRequest.Header.Del("accept-encoding")
 	upstreamRequest.Header.Del(proxyCapabilityHeader)
-	if current.authorizationBearer(request) == current.capability {
-		upstreamRequest.Header.Del("authorization")
+	for name, value := range current.provider.Headers {
+		upstreamRequest.Header.Set(strings.TrimSpace(name), value)
 	}
 	if current.provider.Auth.Type == "azure-cli" {
 		token, tokenErr := current.tokens.get(request.Context(), current.provider.Auth.Resource)
@@ -617,6 +698,11 @@ func copyHeaders(destination, source http.Header) {
 }
 
 func removeHopByHopHeaders(headers http.Header) {
+	for _, value := range headers.Values("connection") {
+		for _, name := range strings.Split(value, ",") {
+			headers.Del(strings.TrimSpace(name))
+		}
+	}
 	for _, name := range []string{
 		"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
 		"te", "trailer", "transfer-encoding", "upgrade",

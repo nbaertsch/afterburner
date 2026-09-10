@@ -53,11 +53,17 @@ export function proxyConfiguration(provider) {
     const maximumLength = Number.isInteger(provider.requestCompatibility?.maxInputItemIdLength)
         ? provider.requestCompatibility.maxInputItemIdLength
         : 0;
+    const configuredHeaders = Object.entries(provider.headers ?? {})
+        .map(([name, value]) => [name.trim().toLowerCase(), value])
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([name, value]) => `${name}:${value}`)
+        .join("\n");
     const configuration = [
         String(maximumLength),
         String(provider.requestCompatibility?.forceStreaming === true),
         provider.auth?.type ?? "",
-        provider.auth?.resource ?? ""
+        provider.auth?.resource ?? "",
+        configuredHeaders
     ].join("\0");
     return createHash("sha256").update(configuration).digest("base64url");
 }
@@ -80,6 +86,29 @@ function upstreamTarget(upstream, requestUrl) {
     const query = [target.search.slice(1), incoming.search.slice(1)].filter(Boolean).join("&");
     target.search = query ? `?${query}` : "";
     return target;
+}
+
+function sanitizeClientHeaders(headers) {
+    for (const value of String(headers.connection ?? "").split(",")) {
+        const name = value.trim().toLowerCase();
+        if (name) delete headers[name];
+    }
+    for (const name of [
+        "accept-encoding",
+        "connection",
+        "content-length",
+        "host",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        proxyCapabilityHeader
+    ]) {
+        delete headers[name];
+    }
 }
 
 function completedResponseFromEventStream(source) {
@@ -154,13 +183,13 @@ function createProxyServer(
 
             const target = upstreamTarget(upstream, request.url);
             const headers = { ...request.headers };
-            delete headers.host;
-            delete headers["content-length"];
-            delete headers.connection;
-            delete headers["transfer-encoding"];
-            delete headers[proxyCapabilityHeader];
-            if (safeEqual(bearerToken(request), capability)) {
+            const capabilityAuthorization = safeEqual(bearerToken(request), capability);
+            if (capabilityAuthorization) {
                 delete headers.authorization;
+            }
+            sanitizeClientHeaders(headers);
+            for (const [name, value] of Object.entries(provider.headers ?? {})) {
+                headers[name.trim().toLowerCase()] = value;
             }
             if (getUpstreamHeaders) {
                 Object.assign(headers, await getUpstreamHeaders());

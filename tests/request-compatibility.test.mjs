@@ -1,11 +1,48 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import test from "node:test";
-import { proxyCapabilityHeader, startRequestCompatibilityProxy } from "../extensions/BYOModels/extensions/BYOModels/request-compatibility.mjs";
+import {
+  proxyCapabilityHeader,
+  proxyConfiguration,
+  startRequestCompatibilityProxy
+} from "../extensions/BYOModels/extensions/BYOModels/request-compatibility.mjs";
 
 function proxyHeaders(proxy, extra = {}) {
   return { ...extra, [proxyCapabilityHeader]: proxy.capability };
 }
+
+function sendRawRequest(url, { headers, body }) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(url, { method: "POST", headers }, (response) => {
+      const chunks = [];
+      response.on("data", chunk => chunks.push(chunk));
+      response.on("end", () => resolve({
+        body: Buffer.concat(chunks),
+        headers: response.headers,
+        status: response.statusCode
+      }));
+    });
+    request.on("error", reject);
+    request.end(body);
+  });
+}
+
+test("proxy configuration normalizes header names and includes values", () => {
+  const provider = {
+    auth: { type: "azure-cli", resource: "https://resource.example" },
+    headers: { "X-Z": "2", "x-a": "1" },
+    requestCompatibility: { maxInputItemIdLength: 64, forceStreaming: true }
+  };
+  assert.equal(proxyConfiguration(provider), "xxJUMvZ6fjU1ZvCj3mIFY-YhweILh_zxKyVeZ3mTSAs");
+  assert.equal(proxyConfiguration({
+    ...provider,
+    headers: { "X-A": "1", "x-z": "2" }
+  }), proxyConfiguration(provider));
+  assert.notEqual(proxyConfiguration({
+    ...provider,
+    headers: { "x-a": "changed", "x-z": "2" }
+  }), proxyConfiguration(provider));
+});
 
 test("compatibility proxy normalizes IDs and refreshes authentication", async () => {
   let received;
@@ -108,6 +145,10 @@ test("compatibility proxy rejects unauthorized callers before token acquisition 
 test("compatibility proxy adapts non-streaming Responses calls for streaming-only endpoints", async () => {
   const received = [];
   const upstream = createServer(async (request, response) => {
+    assert.equal(request.headers["x-ms-scp-use-cell"], "true");
+    assert.equal(request.headers["x-client-hop"], undefined);
+    assert.equal(request.headers["proxy-authorization"], undefined);
+    assert.equal(request.headers.te, undefined);
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -130,17 +171,24 @@ test("compatibility proxy adapts non-streaming Responses calls for streaming-onl
   const proxy = await startRequestCompatibilityProxy({
     name: "streaming-only",
     baseUrl: `http://127.0.0.1:${address.port}/workspaces/default/stream/2.0/openai/v1?api-version=1`,
+    headers: { "x-ms-scp-use-cell": "true" },
     requestCompatibility: { forceStreaming: true }
   });
   try {
-    const response = await fetch(`${proxy.baseUrl}/responses?trace=1`, {
-      method: "POST",
-      headers: proxyHeaders(proxy, { "content-type": "application/json" }),
+    const response = await sendRawRequest(`${proxy.baseUrl}/responses?trace=1`, {
+      headers: proxyHeaders(proxy, {
+        "content-type": "application/json",
+        connection: "x-client-hop",
+        "proxy-authorization": "secret",
+        te: "trailers",
+        "x-client-hop": "must-not-forward",
+        "x-ms-scp-use-cell": "false"
+      }),
       body: JSON.stringify({ model: "wire-model", input: "hello" })
     });
     assert.equal(response.status, 200);
-    assert.match(response.headers.get("content-type"), /^application\/json/);
-    assert.deepEqual(await response.json(), {
+    assert.match(response.headers["content-type"], /^application\/json/);
+    assert.deepEqual(JSON.parse(response.body.toString("utf8")), {
       id: "response-1",
       status: "completed",
       model: "wire-model",
