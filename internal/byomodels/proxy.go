@@ -78,7 +78,6 @@ type service struct {
 	client   *http.Client
 	server   *http.Server
 	listener net.Listener
-	cancel   context.CancelFunc
 	done     chan struct{}
 	closed   bool
 }
@@ -171,8 +170,8 @@ func (manager *Manager) Close() error {
 }
 
 func (current *service) start() error {
-	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(current.provider.RequestCompatibility.ProxyPort))
-	listener, err := net.Listen("tcp", address)
+	preferred := net.JoinHostPort("127.0.0.1", strconv.Itoa(current.provider.RequestCompatibility.ProxyPort))
+	listener, err := net.Listen("tcp", preferred)
 	if err == nil {
 		current.activate(listener)
 		return nil
@@ -180,14 +179,16 @@ func (current *service) start() error {
 	if !errors.Is(err, os.ErrExist) && !isAddressInUse(err) {
 		return fmt.Errorf("bind BYOModels proxy for provider %q: %w", current.provider.Name, err)
 	}
-	matches, verifyErr := current.verifyShared()
-	if verifyErr != nil || !matches {
-		return fmt.Errorf("BYOModels proxy port %d for provider %q is already in use",
-			current.provider.RequestCompatibility.ProxyPort, current.provider.Name)
+	fallback, fallbackErr := net.Listen("tcp", "127.0.0.1:0")
+	if fallbackErr != nil {
+		return fmt.Errorf(
+			"bind BYOModels fallback proxy for provider %q after preferred port %d was unavailable: %w",
+			current.provider.Name,
+			current.provider.RequestCompatibility.ProxyPort,
+			fallbackErr,
+		)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	current.cancel = cancel
-	go current.awaitOwnership(ctx, address)
+	current.activate(fallback)
 	return nil
 }
 
@@ -212,28 +213,8 @@ func (current *service) activate(listener net.Listener) bool {
 		close(current.done)
 		return false
 	}
-	current.cancel = nil
 	current.serve(listener)
 	return true
-}
-
-func (current *service) awaitOwnership(ctx context.Context, address string) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			close(current.done)
-			return
-		case <-ticker.C:
-			listener, err := net.Listen("tcp", address)
-			if err != nil {
-				continue
-			}
-			current.activate(listener)
-			return
-		}
-	}
 }
 
 func (current *service) close() error {
@@ -245,17 +226,9 @@ func (current *service) close() error {
 		return nil
 	}
 	current.closed = true
-	cancelStandby := current.cancel
 	server := current.server
 	done := current.done
 	current.mu.Unlock()
-	if cancelStandby != nil {
-		cancelStandby()
-	}
-	if server == nil {
-		<-done
-		return nil
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := server.Shutdown(ctx)
@@ -264,35 +237,6 @@ func (current *service) close() error {
 		return fmt.Errorf("stop BYOModels proxy for provider %q: %w", current.provider.Name, err)
 	}
 	return nil
-}
-
-func (current *service) verifyShared() (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		fmt.Sprintf("http://127.0.0.1:%d%s",
-			current.provider.RequestCompatibility.ProxyPort, healthPath), nil)
-	if err != nil {
-		return false, err
-	}
-	response, err := current.client.Do(request)
-	if err != nil {
-		return false, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return false, nil
-	}
-	var value identity
-	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&value); err != nil {
-		return false, err
-	}
-	if value.Marker != current.identity.Marker ||
-		value.Provider != current.identity.Provider ||
-		value.Upstream != current.identity.Upstream {
-		return false, nil
-	}
-	return value.Configuration == "" || value.Configuration == current.identity.Configuration, nil
 }
 
 func (current *service) handle(response http.ResponseWriter, request *http.Request) {

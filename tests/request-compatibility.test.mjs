@@ -146,8 +146,10 @@ test("compatibility proxy preserves caller-requested streaming responses", async
   }
 });
 
-test("stable compatibility proxy survives owner handoff between sessions", async () => {
-  const upstream = createServer((_request, response) => {
+test("compatibility proxies use process-local ownership when sessions start simultaneously", async () => {
+  const receivedAuthorization = [];
+  const upstream = createServer(async (request, response) => {
+    receivedAuthorization.push(request.headers.authorization);
     response.writeHead(200, { "content-type": "application/json" });
     response.end('{"ok":true}');
   });
@@ -159,50 +161,62 @@ test("stable compatibility proxy survives owner handoff between sessions", async
   const proxyPort = reservedAddress.port;
   await new Promise((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
   const provider = {
-    name: "stable-test",
+    name: "simultaneous-test",
     baseUrl: `http://127.0.0.1:${upstreamAddress.port}`,
+    auth: { type: "azure-cli", resource: "https://resource.example" },
     requestCompatibility: { maxInputItemIdLength: 64, proxyPort }
   };
-  const owner = await startRequestCompatibilityProxy(provider);
-  const standby = await startRequestCompatibilityProxy(provider, { standbyRetryMs: 10 });
+  const [sessionA, sessionB] = await Promise.all([
+    startRequestCompatibilityProxy(provider, { getBearerToken: async () => "session-a-token" }),
+    startRequestCompatibilityProxy(provider, { getBearerToken: async () => "session-b-token" })
+  ]);
   try {
-    assert.equal(owner.baseUrl, standby.baseUrl);
-    await owner.close();
-    let response;
-    for (let attempt = 0; attempt < 50; attempt++) {
-      try {
-        response = await fetch(`${standby.baseUrl}/responses`);
-        if (response.ok) break;
-      } catch {}
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-    assert.equal(response?.status, 200);
+    assert.notEqual(sessionA.baseUrl, sessionB.baseUrl);
+    assert.equal(new URL(sessionA.baseUrl).port === String(proxyPort) || new URL(sessionB.baseUrl).port === String(proxyPort), true);
+    await fetch(`${sessionA.baseUrl}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    await fetch(`${sessionB.baseUrl}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    assert.deepEqual(new Set(receivedAuthorization), new Set(["Bearer session-a-token", "Bearer session-b-token"]));
   } finally {
-    await standby.close();
+    await sessionA.close();
+    await sessionB.close();
     await new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
   }
 });
 
-test("stable compatibility proxy rejects an unrelated listener", async () => {
-  const unrelated = createServer((_request, response) => {
+test("compatibility proxy falls back when the configured port is occupied by stale or unrelated work", async () => {
+  const upstream = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"ok":true}');
+  });
+  const stale = createServer((_request, response) => {
     response.writeHead(404);
     response.end();
   });
-  await new Promise(resolve => unrelated.listen(0, "127.0.0.1", resolve));
-  const address = unrelated.address();
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  await new Promise(resolve => stale.listen(0, "127.0.0.1", resolve));
+  const upstreamAddress = upstream.address();
+  const staleAddress = stale.address();
+  const proxy = await startRequestCompatibilityProxy({
+    name: "stale-port-test",
+    baseUrl: `http://127.0.0.1:${upstreamAddress.port}`,
+    requestCompatibility: { maxInputItemIdLength: 64, proxyPort: staleAddress.port }
+  });
   try {
-    await assert.rejects(() => startRequestCompatibilityProxy({
-      name: "collision-test",
-      baseUrl: "https://example.invalid",
-      requestCompatibility: { maxInputItemIdLength: 64, proxyPort: address.port }
-    }), error => error?.code === "EADDRINUSE");
+    assert.notEqual(new URL(proxy.baseUrl).port, String(staleAddress.port));
+    const response = await fetch(`${proxy.baseUrl}/responses`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true });
   } finally {
-    await new Promise((resolve, reject) => unrelated.close(error => error ? reject(error) : resolve()));
+    await proxy.close();
+    await new Promise((resolve, reject) => stale.close(error => error ? reject(error) : resolve()));
+    await new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
   }
 });
 
-test("stable compatibility proxy rejects a listener with different translation settings", async () => {
-  const upstream = createServer((_request, response) => {
+test("providers sharing a configured port each receive an isolated local proxy", async () => {
+  const received = [];
+  const upstream = createServer(async (request, response) => {
+    received.push({ url: request.url, authorization: request.headers.authorization });
     response.writeHead(200, { "content-type": "application/json" });
     response.end('{"ok":true}');
   });
@@ -213,19 +227,29 @@ test("stable compatibility proxy rejects a listener with different translation s
   const reservedAddress = reservation.address();
   const proxyPort = reservedAddress.port;
   await new Promise((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
-  const owner = await startRequestCompatibilityProxy({
-    name: "settings-test",
-    baseUrl: `http://127.0.0.1:${upstreamAddress.port}`,
+  const providerA = {
+    name: "provider-a",
+    baseUrl: `http://127.0.0.1:${upstreamAddress.port}/a`,
     requestCompatibility: { maxInputItemIdLength: 64, proxyPort }
-  });
+  };
+  const providerB = {
+    name: "provider-b",
+    baseUrl: `http://127.0.0.1:${upstreamAddress.port}/b`,
+    requestCompatibility: { maxInputItemIdLength: 64, proxyPort }
+  };
+  const [proxyA, proxyB] = await Promise.all([
+    startRequestCompatibilityProxy(providerA, { getBearerToken: async () => "token-a" }),
+    startRequestCompatibilityProxy(providerB, { getBearerToken: async () => "token-b" })
+  ]);
   try {
-    await assert.rejects(() => startRequestCompatibilityProxy({
-      name: "settings-test",
-      baseUrl: `http://127.0.0.1:${upstreamAddress.port}`,
-      requestCompatibility: { maxInputItemIdLength: 64, forceStreaming: true, proxyPort }
-    }), error => error?.code === "EADDRINUSE");
+    assert.notEqual(proxyA.baseUrl, proxyB.baseUrl);
+    await fetch(`${proxyA.baseUrl}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    await fetch(`${proxyB.baseUrl}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    assert.deepEqual(received.map(item => item.url).sort(), ["/a/responses", "/b/responses"]);
+    assert.deepEqual(new Set(received.map(item => item.authorization)), new Set(["Bearer token-a", "Bearer token-b"]));
   } finally {
-    await owner.close();
+    await proxyA.close();
+    await proxyB.close();
     await new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
   }
 });

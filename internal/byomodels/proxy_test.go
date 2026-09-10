@@ -73,48 +73,39 @@ func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 	}
 }
 
-func TestProxyRejectsUnrelatedListener(t *testing.T) {
+func TestProxyFallsBackWhenPreferredPortHasUnrelatedListener(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("content-type", "application/json")
+		_, _ = response.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	port := listener.Addr().(*net.TCPAddr).Port
-	path := writeConfig(t, "https://example.invalid", port)
-	if _, err := Start(path); err == nil || !strings.Contains(err.Error(), "already in use") {
-		t.Fatalf("Start() error = %v", err)
-	}
-}
-
-func TestProxySharesLegacyOwnerWithoutConfigurationIdentity(t *testing.T) {
-	port := availablePort(t)
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := &http.Server{Handler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != healthPath {
-			http.NotFound(response, request)
-			return
-		}
-		response.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(response).Encode(identity{
-			Marker:   healthMarker,
-			Provider: "test-provider",
-			Upstream: "https://example.invalid/",
-		})
-	})}
-	go server.Serve(listener)
-	defer server.Close()
-
-	manager, err := Start(writeConfig(t, "https://example.invalid", port))
+	preferredPort := listener.Addr().(*net.TCPAddr).Port
+	manager, err := Start(writeConfig(t, upstream.URL, preferredPort))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Close()
+
+	actualPort := managerPort(t, manager, 0)
+	if actualPort == preferredPort {
+		t.Fatalf("proxy reused occupied preferred port %d", preferredPort)
+	}
+	response, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/responses", actualPort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
 }
 
-func TestProxySurvivesOwnerHandoff(t *testing.T) {
+func TestProxyStartsIsolatedOwnersForSimultaneousSessions(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("content-type", "application/json")
 		_, _ = response.Write([]byte(`{"ok":true}`))
@@ -132,26 +123,63 @@ func TestProxySurvivesOwnerHandoff(t *testing.T) {
 		owner.Close()
 		t.Fatal(err)
 	}
+	defer owner.Close()
 	defer standby.Close()
-	if err := owner.Close(); err != nil {
+	ownerPort := managerPort(t, owner, 0)
+	standbyPort := managerPort(t, standby, 0)
+	if ownerPort == standbyPort {
+		t.Fatalf("simultaneous sessions shared proxy port %d", ownerPort)
+	}
+	for _, endpointPort := range []int{ownerPort, standbyPort} {
+		response, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/responses", endpointPort))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d from %d", response.StatusCode, endpointPort)
+		}
+	}
+}
+
+func TestProvidersSharingPreferredPortEachStartProxy(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("content-type", "application/json")
+		_, _ = response.Write([]byte(fmt.Sprintf(`{"path":%q}`, request.URL.Path)))
+	}))
+	defer upstream.Close()
+	port := availablePort(t)
+	path := writeTwoProviderConfig(t, upstream.URL, port)
+	manager, err := Start(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	endpoint := fmt.Sprintf("http://127.0.0.1:%d/responses", port)
-	var response *http.Response
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
-		response, err = http.Get(endpoint)
-		if err == nil {
-			break
+	defer manager.Close()
+	if len(manager.services) != 2 {
+		t.Fatalf("services = %d, want 2", len(manager.services))
+	}
+	firstPort := managerPort(t, manager, 0)
+	secondPort := managerPort(t, manager, 1)
+	if firstPort == secondPort {
+		t.Fatalf("providers shared proxy port %d", firstPort)
+	}
+	for index, endpointPort := range []int{firstPort, secondPort} {
+		response, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/responses", endpointPort))
+		if err != nil {
+			t.Fatal(err)
 		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	if err != nil {
-		t.Fatalf("standby did not take ownership: %v", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d", response.StatusCode)
+		var body struct {
+			Path string `json:"path"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			response.Body.Close()
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		want := []string{"/a/responses", "/b/responses"}[index]
+		if body.Path != want {
+			t.Fatalf("path = %q, want %q", body.Path, want)
+		}
 	}
 }
 
@@ -378,6 +406,46 @@ func writeConfig(t *testing.T, upstream string, port int) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func writeTwoProviderConfig(t *testing.T, upstream string, port int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "byomodels.json")
+	value := fmt.Sprintf(`{
+  "version": 1,
+  "providers": [{
+    "name": "provider-a",
+    "baseUrl": %q,
+    "requestCompatibility": {
+      "maxInputItemIdLength": 64,
+      "proxyPort": %d
+    }
+  }, {
+    "name": "provider-b",
+    "baseUrl": %q,
+    "requestCompatibility": {
+      "maxInputItemIdLength": 64,
+      "proxyPort": %d
+    }
+  }],
+  "models": []
+}`, upstream+"/a", port, upstream+"/b", port)
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func managerPort(t *testing.T, manager *Manager, index int) int {
+	t.Helper()
+	if index >= len(manager.services) {
+		t.Fatalf("service index %d out of range", index)
+	}
+	address, ok := manager.services[index].listener.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("unexpected listener address %v", manager.services[index].listener.Addr())
+	}
+	return address.Port
 }
 
 func TestExpirationTime(t *testing.T) {

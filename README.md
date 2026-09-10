@@ -177,6 +177,14 @@ managed session junction and registry, reconciles session components, removes in
 state, and cleans abandoned staging directories without deleting user configuration or extension
 data.
 
+## Agentic engineering workflow
+
+Production incidents follow this repository workflow: collect incident evidence, create a minimal
+reproduction, state the invariant being protected, create a feature branch, land the focused fix,
+add deterministic unit/integration regression tests, run pristine local CI-equivalent validation,
+perform an adversarial full-diff review, and only then prepare release readiness. Local testing is
+the first gate; CI and deployment are final release gates, not substitutes for local reproduction.
+
 ## Updates and rollback
 
 ```powershell

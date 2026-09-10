@@ -124,13 +124,23 @@ const prepareIsolatedEnvironment = () => {
   mkdirSync(join(root, "localappdata"), { recursive: true });
   mkdirSync(join(root, "appdata"), { recursive: true });
 
-  execFileSync(executable, ["install", "byo-models"], {
-    cwd: workspace,
-    env: isolatedEnvironment({ AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH: "1" }),
-    stdio: "pipe"
-  });
+  const packageSource = join(root, "byo-models-uat-source");
+  cpSync(join(repoRoot, "extensions", "BYOModels"), packageSource, { recursive: true });
+  const manifestPath = join(packageSource, "afterburner.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.id = "byo-models-uat";
+  manifest.visibility = "private";
+  writeJson(manifestPath, manifest);
+  const archive = join(root, "byo-models-uat.zip");
+  for (const args of [["extension", "pack", packageSource, archive], ["extension", "install", archive], ["extension", "enable", "byo-models-uat"]]) {
+    execFileSync(executable, args, {
+      cwd: workspace,
+      env: isolatedEnvironment({ AFTERBURNER_DISABLE_BUILTIN_RELEASE_FETCH: "1" }),
+      stdio: "pipe"
+    });
+  }
   const registry = JSON.parse(readFileSync(join(afterburnerHome, "registry.json"), "utf8"));
-  const activePath = registry.extensions?.["byo-models"]?.activePath;
+  const activePath = registry.extensions?.["byo-models-uat"]?.activePath;
   if (activePath) {
     installCopilotSdkShim(activePath);
   }
@@ -152,12 +162,24 @@ const prepareIsolatedEnvironment = () => {
       type: "azure",
       baseUrl: providerBaseUrl,
       wireApi: "responses",
-      requestCompatibility: { maxInputItemIdLength: 64 }
+      requestCompatibility: { maxInputItemIdLength: 64, proxyPort: 61951 }
+    }, {
+      name: "colosseum-alt",
+      type: "azure",
+      baseUrl: providerBaseUrl,
+      wireApi: "responses",
+      requestCompatibility: { maxInputItemIdLength: 64, proxyPort: 61951 }
     }],
     models: [
       { provider: "colosseum-prod", id: "gpt-5-5", name: "Colosseum Prod GPT-5.5", modelId: "gpt-5.5", wireModel: "gpt-5-5" },
       { provider: "colosseum-prod", id: "gpt-5-6-sol", name: "Colosseum Prod GPT-5.6 Sol", modelId: "gpt-5.6-sol", wireModel: "gpt-5-6-sol" },
-      { provider: "colosseum-prod", id: "gpt-5-6-luna", name: "Colosseum Prod GPT-5.6 Luna", modelId: "gpt-5.6-luna", wireModel: "gpt-5-6-luna" }
+      { provider: "colosseum-prod", id: "gpt-5-6-luna", name: "Colosseum Prod GPT-5.6 Luna", modelId: "gpt-5.6-luna", wireModel: "gpt-5-6-luna" },
+      { provider: "colosseum-prod", id: "sol-reasoning", name: "Colosseum Prod Sol Reasoning", modelId: "gpt-5.6-sol", wireModel: "gpt-5-6-sol" },
+      { provider: "colosseum-prod", id: "luna-long", name: "Colosseum Prod Luna Long", modelId: "gpt-5.6-luna", wireModel: "gpt-5-6-luna" },
+      { provider: "colosseum-alt", id: "gpt-5-5", name: "Colosseum Alt GPT-5.5", modelId: "gpt-5.5", wireModel: "gpt-5-5" },
+      { provider: "colosseum-alt", id: "gpt-5-6-sol", name: "Colosseum Alt GPT-5.6 Sol", modelId: "gpt-5.6-sol", wireModel: "gpt-5-6-sol" },
+      { provider: "colosseum-alt", id: "gpt-5-6-luna", name: "Colosseum Alt GPT-5.6 Luna", modelId: "gpt-5.6-luna", wireModel: "gpt-5-6-luna" },
+      { provider: "colosseum-alt", id: "luna-long", name: "Colosseum Alt Luna Long", modelId: "gpt-5.6-luna", wireModel: "gpt-5-6-luna" }
     ]
   });
 };
@@ -253,7 +275,7 @@ child.onData(data => {
   }
   if (!openedPicker &&
       text.includes("[runtime-extension-host] registered picker adapter") &&
-      text.includes("[runtime-extension-host] activated Afterburner extension 'byo-models'") &&
+      /\[runtime-extension-host\] activated Afterburner extension 'byo-models(?:-uat)?'/.test(text) &&
       (text.includes("← open sidebar") || text.includes("/ commands") || text.includes("Plan:"))) {
     openedPicker = true;
     const openPicker = () => {
@@ -269,7 +291,9 @@ child.onData(data => {
       text.includes("GPT-5.6 Sol")) {
     filteredPicker = true;
     clearInterval(pickerInterval);
-    const byomodelsReady = text.includes("Registered 3 BYOModels model(s)") && text.includes("Colosseum Prod GPT-5.5");
+    const byomodelsReady = text.includes("Registered 9 BYOModels model(s)") &&
+      text.includes("colosseum-prod/gpt-5-5 <- gpt-5.5") &&
+      text.includes("colosseum-alt/luna-long <- gpt-5.6-luna");
     const targetQuery = byomodelsReady ? "colosseum-prod/gpt-5-5" : "GPT-5.6 Sol";
     const expectedModel = byomodelsReady ? "colosseum-prod/gpt-5-5" : "gpt-5.6-sol";
     const interactionOffset = raw.length;
@@ -289,6 +313,9 @@ child.onData(data => {
       const interaction = stripAnsi(raw.slice(interactionOffset));
       const current = stripAnsi(raw);
       const requirements = byomodelsReady ? [
+        [current, "Registered 9 BYOModels model(s)"],
+        [current, "colosseum-prod/gpt-5-5 <- gpt-5.5"],
+        [current, "colosseum-alt/luna-long <- gpt-5.6-luna"],
         [current, "Colosseum Prod GPT-5.5"],
         [current, "Colosseum Prod GPT-5.6 Sol"],
         [current, "Colosseum Prod GPT-5.6 Luna"],

@@ -172,30 +172,9 @@ function listen(server, port) {
     });
 }
 
-async function verifySharedProxy(port, identity) {
-    let response;
-    try {
-        response = await fetch(`http://127.0.0.1:${port}${healthPath}`, {
-            signal: AbortSignal.timeout(2000)
-        });
-    } catch {
-        return false;
-    }
-    if (!response.ok) return false;
-    try {
-        const value = await response.json();
-        return value?.marker === identity.marker &&
-            value?.provider === identity.provider &&
-            value?.upstream === identity.upstream &&
-            value?.configuration === identity.configuration;
-    } catch {
-        return false;
-    }
-}
-
 export async function startRequestCompatibilityProxy(
     provider,
-    { onRewrite = () => {}, getBearerToken, standbyRetryMs = 1000 } = {}
+    { onRewrite = () => {}, getBearerToken } = {}
 ) {
     const maximumLength = provider.requestCompatibility?.maxInputItemIdLength;
     const forceStreaming = provider.requestCompatibility?.forceStreaming === true;
@@ -214,8 +193,6 @@ export async function startRequestCompatibilityProxy(
     const upstream = new URL(provider.baseUrl);
     const identity = proxyIdentity(provider, upstream);
     let activeServer;
-    let standbyTimer;
-    let binding = false;
     let closed = false;
 
     const create = () =>
@@ -228,51 +205,39 @@ export async function startRequestCompatibilityProxy(
             onRewrite,
             getBearerToken
         );
-    const first = create();
-    try {
-        await listen(first, configuredPort);
-        activeServer = first;
-    } catch (error) {
-        if (configuredPort === 0 || error?.code !== "EADDRINUSE" ||
-            !await verifySharedProxy(configuredPort, identity)) {
+
+    async function bind(port) {
+        const server = create();
+        try {
+            await listen(server, port);
+            return server;
+        } catch (error) {
+            await new Promise(resolve => server.close(() => resolve()));
             throw error;
         }
-        standbyTimer = setInterval(async () => {
-            if (closed || binding || activeServer) return;
-            binding = true;
-            const candidate = create();
-            try {
-                await listen(candidate, configuredPort);
-                clearInterval(standbyTimer);
-                standbyTimer = undefined;
-                if (closed) {
-                    await new Promise(resolve => candidate.close(() => resolve()));
-                } else {
-                    activeServer = candidate;
-                }
-            } catch (bindError) {
-                if (bindError?.code !== "EADDRINUSE") {
-                    clearInterval(standbyTimer);
-                    standbyTimer = undefined;
-                }
-            } finally {
-                binding = false;
-            }
-        }, standbyRetryMs);
-        standbyTimer.unref?.();
     }
 
-    const address = activeServer?.address();
-    const port = configuredPort || (address && typeof address !== "string" ? address.port : 0);
+    try {
+        activeServer = await bind(configuredPort);
+    } catch (error) {
+        if (configuredPort === 0 || error?.code !== "EADDRINUSE") {
+            throw error;
+        }
+        activeServer = await bind(0);
+    }
+
+    const address = activeServer.address();
+    const port = address && typeof address !== "string" ? address.port : 0;
     if (!port) {
         throw new Error(`Unable to bind compatibility proxy for provider '${provider.name}'.`);
     }
     return {
         baseUrl: `http://127.0.0.1:${port}`,
+        preferredPort: configuredPort,
+        port,
         close: async () => {
+            if (closed) return;
             closed = true;
-            if (standbyTimer) clearInterval(standbyTimer);
-            if (!activeServer) return;
             await new Promise((resolve, reject) =>
                 activeServer.close(error => error ? reject(error) : resolve())
             );

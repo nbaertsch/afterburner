@@ -118,6 +118,18 @@ response expected by Copilot. Configure it as:
 ```
 
 The proxy preserves path-prefixed base URLs and query parameters.
-Set `requestCompatibility.proxyPort` to a stable, provider-specific port so resumed sessions never
-retain an expired ephemeral endpoint. Concurrent Afterburner sessions verify and share the same
-proxy, and a standby process takes ownership when the previous owner exits.
+Set `requestCompatibility.proxyPort` to a preferred stable, provider-specific port so the first
+session normally receives a predictable loopback endpoint. The port is not a global singleton:
+if the preferred port is already occupied by another Afterburner session, another provider in the
+same config, or stale unrelated work, the session binds its own ephemeral loopback proxy and
+registers models with that process-local endpoint instead of sharing authentication state or failing
+startup.
+
+Compatibility proxy invariants:
+
+- every Copilot process that registers BYOModels owns the proxies in its model registrations;
+- IPC is loopback-only and authenticated upstream credentials stay inside the owning process;
+- a configured `proxyPort` is a preferred address, never a reason to drop configured models;
+- cleanup closes only proxies owned by the current process; no process kills or global port cleanup;
+- multi-session acceptance requires all concurrent sessions to register all configured models even
+  when they prefer the same port.
