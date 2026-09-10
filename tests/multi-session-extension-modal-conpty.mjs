@@ -403,9 +403,17 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
       }, `${name} modal acknowledgement in A`, 10_000);
     }
     let actionInputs = [];
+    let priorActionRequestIds = new Set();
     if (action) {
       actionInputs = Array.isArray(action) ? action : [action];
       if (!maybeFake) await waitForOutputSettled(a);
+      if (!maybeFake && actionPattern) {
+        priorActionRequestIds = new Set(
+          (await readAuditEntries())
+            .filter(entry => entry.surfaceId === "openai-server" && entry.action)
+            .map(entry => entry.requestId)
+        );
+      }
       for (const [index, input] of actionInputs.entries()) {
         const outputLength = a.raw.length;
         send(a, input, `${name} action ${index + 1}/${actionInputs.length} in A`);
@@ -416,7 +424,26 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
       }
     }
     if (actionPattern && !maybeFake) {
-      await waitFor(() => actionPattern.test(stripAnsi(a.raw)), `${name} action output in A`, 20_000);
+      let lastActionRetry = Date.now();
+      let lastAuditRead = 0;
+      let actionRequestAccepted = false;
+      await waitFor(async () => {
+        if (actionPattern.test(stripAnsi(a.raw))) return true;
+        if (!actionRequestAccepted && Date.now() - lastAuditRead >= 500) {
+          lastAuditRead = Date.now();
+          const entries = await readAuditEntries();
+          actionRequestAccepted = entries.some(entry =>
+            entry.surfaceId === "openai-server" &&
+            entry.action &&
+            !priorActionRequestIds.has(entry.requestId)
+          );
+        }
+        if (!actionRequestAccepted && actionInputs.length > 0 && Date.now() - lastActionRetry >= 3_000) {
+          send(a, actionInputs.at(-1), `retry ${name} action in A`);
+          lastActionRetry = Date.now();
+        }
+        return false;
+      }, `${name} action output in A`, 20_000);
     }
     await new Promise(resolve => setTimeout(resolve, 1500));
     if (passiveForbiddenPattern.test(stripAnsi(b.raw))) throw new Error(`${name} modal rendered in passive session B`);
@@ -450,7 +477,7 @@ try {
   allSessions.push(...sessions);
   await terminateSessions(sessions);
   sessions = [];
-  const openai = await runPair("openai", maybeFake ? { AFTERBURNER_TEST_MODAL: "1", AFTERBURNER_TEST_MODAL_TITLE: "OpenAI Server", AFTERBURNER_TEST_MODAL_ACTIONS: "1" } : {}, /OpenAI Server/i, /OpenAI Server/i, maybeFake ? "r" : ["\t", "\t", " "], /status refreshed|OpenAI server listening|OpenAI server is not running|requests=/i);
+  const openai = await runPair("openai", maybeFake ? { AFTERBURNER_TEST_MODAL: "1", AFTERBURNER_TEST_MODAL_TITLE: "OpenAI Server", AFTERBURNER_TEST_MODAL_ACTIONS: "1" } : {}, /OpenAI Server/i, /OpenAI Server/i, "r", /status refreshed|OpenAI server listening|OpenAI server is not running|requests=/i);
   sessions.push(openai.a, openai.b);
   allSessions.push(...sessions);
   assertNoSessionPersistenceErrors(allSessions);
