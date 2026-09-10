@@ -241,7 +241,8 @@ test("modal IPC routes modal opens, acknowledgements, and bridge state", async (
         assert.equal(requests.length, 1);
         assert.equal(await withRouteEnv(home, ROUTE_B, async () => completeModalOpenRequest(requests[0], { ok: true })), false);
         await completeModalOpenRequest(requests[0], { ok: true });
-        assert.equal((await pending).ok, true);
+        const acknowledgement = await pending;
+        assert.equal(acknowledgement.ok, true, JSON.stringify(acknowledgement));
         const stateA = await writeBridgeState({ active: true, endpoint: "127.0.0.1:1" }, "owned");
         assert.equal("routeId" in stateA, false);
         await withRouteEnv(home, ROUTE_B, async () => {
