@@ -370,7 +370,8 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
       await waitFor(() => activePattern.test(stripAnsi(a.raw)), `${name} modal in A`, 20_000);
     } else {
       await waitFor(() => /activated.*black-box/i.test(stripAnsi(a.raw)) && /activated.*black-box/i.test(stripAnsi(b.raw)), "both runtimes loaded extensions");
-      await waitFor(() => isReady(stripAnsi(a.raw)) && isReady(stripAnsi(b.raw)), "both terminals ready after startup dialogs", 30_000);
+      await waitFor(() => isReady(stripAnsi(a.raw)) && isReady(stripAnsi(b.raw)), "both terminals ready after startup dialogs",
+        Number(process.env.AFTERBURNER_MULTI_SESSION_READY_TIMEOUT_MS ?? 30_000));
       await Promise.all([
         waitForOutputSettled(a, 1_000, 30_000),
         waitForOutputSettled(b, 1_000, 30_000)

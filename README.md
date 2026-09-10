@@ -235,6 +235,9 @@ npm run test:release-local
 
 Windows CI also builds amd64/arm64 binaries and validates exact resume forwarding, Ctrl+C, and
 the modal broker under a real ConPTY. The interactive picker harness is `tests\native-conpty.mjs`.
+For the multi-session release gate on a busy development machine,
+`AFTERBURNER_MULTI_SESSION_READY_TIMEOUT_MS` overrides the default 30-second startup-readiness
+budget; modal interaction assertions and their latency budgets are unchanged.
 For installed end-to-end modal validation, run `npm run test:real-tui:black-box`; it opens a real
 Afterburner/Copilot TUI, bracket-pastes `/black-box-modal` for deterministic command entry, and then
 uses actual keyboard input for arrow/Page/Home/End scrolling, Refresh, Doctor, Export, `q` close,
