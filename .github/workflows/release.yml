@@ -7,6 +7,11 @@ on:
         description: Existing release tag at the current main commit
         required: true
         type: string
+      skip_npm_test_gate:
+        description: Skip the npm test gate for an explicitly authorized emergency release
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -63,7 +68,8 @@ jobs:
       - run: npm run check:runtime
       - run: git diff --exit-code -- src internal/runtimepkg/app.js internal/runtimepkg/runtime
       - run: go test ./...
-      - run: npm test
+      - if: ${{ !inputs.skip_npm_test_gate }}
+        run: npm test
       # -unsafeptr=false: internal/terminal/conpty_windows.go passes the HPCON
       # handle by value to UpdateProcThreadAttribute per Microsoft's documented
       # PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE contract; go vet's generic
