@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { createCanvas } from "@github/copilot-sdk";
 import { joinSession } from "@github/copilot-sdk/extension";
-import { startRequestCompatibilityProxy } from "./request-compatibility.mjs";
+import { proxyConfiguration, startRequestCompatibilityProxy } from "./request-compatibility.mjs";
 
 const execFileAsync = promisify(execFile);
 const afterburnerHome = process.env.AFTERBURNER_HOME ??
@@ -90,6 +90,37 @@ validateConfig();
 
 const azureTokenCache = new Map();
 const compatibilityProxyRewrites = new Map();
+
+function nativeCompatibilityProxies() {
+    const raw = process.env.AFTERBURNER_BYOMODELS_PROXIES;
+    delete process.env.AFTERBURNER_BYOMODELS_PROXIES;
+    if (!raw) return new Map();
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return new Map();
+    }
+    const endpoints = new Map();
+    if (!Array.isArray(parsed)) return endpoints;
+    for (const endpoint of parsed) {
+        if (!endpoint || typeof endpoint.provider !== "string" ||
+            typeof endpoint.baseUrl !== "string" || typeof endpoint.capability !== "string" ||
+            endpoint.capability.length < 32 || typeof endpoint.configuration !== "string") continue;
+        try {
+            const url = new URL(endpoint.baseUrl);
+            if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username || url.password || url.search || url.hash) continue;
+            endpoints.set(endpoint.provider, {
+                baseUrl: url.href.replace(/\/$/, ""),
+                capability: endpoint.capability,
+                configuration: endpoint.configuration
+            });
+        } catch {}
+    }
+    return endpoints;
+}
+
+const nativeProxyEndpoints = nativeCompatibilityProxies();
 
 function requiredEnvironmentValue(provider, auth, field) {
     const variable = auth.environmentVariable;
@@ -204,16 +235,35 @@ async function hydrateProvider(provider) {
     const getBearerToken = auth?.type === "azure-cli"
         ? () => acquireAzureCliToken(auth.resource)
         : undefined;
-    const compatibilityProxy = await startRequestCompatibilityProxy(provider, {
-        getBearerToken,
-        onRewrite: (rewritten) => {
-            compatibilityProxyRewrites.set(
-                provider.name,
-                (compatibilityProxyRewrites.get(provider.name) ?? 0) + rewritten
-            );
-        }
-    });
+    const getUpstreamHeaders = auth?.type === "api-key-env"
+        ? () => ({ "api-key": requiredEnvironmentValue(provider, auth, "API-key authentication") })
+        : auth?.type === "bearer-token-env"
+            ? () => ({ authorization: `Bearer ${requiredEnvironmentValue(provider, auth, "bearer-token authentication")}` })
+            : undefined;
+    let compatibilityProxy;
+    const nativeProxy = nativeProxyEndpoints.get(provider.name);
+    if (nativeProxy && nativeProxy.configuration === proxyConfiguration(provider)) {
+        compatibilityProxy = nativeProxy;
+    } else {
+        compatibilityProxy = await startRequestCompatibilityProxy(provider, {
+            getBearerToken,
+            getUpstreamHeaders,
+            onRewrite: (rewritten) => {
+                compatibilityProxyRewrites.set(
+                    provider.name,
+                    (compatibilityProxyRewrites.get(provider.name) ?? 0) + rewritten
+                );
+            }
+        });
+    }
     if (compatibilityProxy) sdkProvider.baseUrl = compatibilityProxy.baseUrl;
+
+    if (compatibilityProxy) {
+        return {
+            ...sdkProvider,
+            bearerToken: compatibilityProxy.capability
+        };
+    }
 
     if (!auth) {
         return sdkProvider;
@@ -223,9 +273,7 @@ async function hydrateProvider(provider) {
         case "azure-cli":
             return {
                 ...sdkProvider,
-                ...(compatibilityProxy
-                    ? { bearerToken: "afterburner-loopback-auth" }
-                    : { bearerTokenProvider: () => acquireAzureCliToken(auth.resource) })
+                bearerTokenProvider: () => acquireAzureCliToken(auth.resource)
             };
         case "api-key-env":
             return {

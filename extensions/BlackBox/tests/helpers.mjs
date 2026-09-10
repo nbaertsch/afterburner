@@ -39,5 +39,5 @@ export async function workDirectory(name) {
 }
 
 export async function cleanup(path) {
-    await rm(path, { recursive: true, force: true });
+    await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

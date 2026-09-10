@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
-import { startRequestCompatibilityProxy } from "../extensions/BYOModels/extensions/BYOModels/request-compatibility.mjs";
+import { proxyCapabilityHeader, startRequestCompatibilityProxy } from "../extensions/BYOModels/extensions/BYOModels/request-compatibility.mjs";
+
+function proxyHeaders(proxy, extra = {}) {
+  return { ...extra, [proxyCapabilityHeader]: proxy.capability };
+}
 
 test("compatibility proxy normalizes IDs and refreshes authentication", async () => {
   let received;
@@ -28,10 +32,9 @@ test("compatibility proxy normalizes IDs and refreshes authentication", async ()
     const oversizedId = "x".repeat(496);
     const sendRequest = () => fetch(`${proxy.baseUrl}/responses`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: "******"
-      },
+      headers: proxyHeaders(proxy, {
+        "content-type": "application/json"
+      }),
       body: JSON.stringify({
         input: [
           { type: "tool_search_call", id: oversizedId },
@@ -48,6 +51,54 @@ test("compatibility proxy normalizes IDs and refreshes authentication", async ()
     await sendRequest();
     assert.equal(receivedAuthorization, "Bearer " + ["fresh", "token", "2"].join("-"));
     assert.equal(tokenRequestCount, 2);
+  } finally {
+    await proxy.close();
+    await new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test("compatibility proxy rejects unauthorized callers before token acquisition or forwarding", async () => {
+  let upstreamRequests = 0;
+  let tokenRequests = 0;
+  const upstream = createServer((_request, response) => {
+    upstreamRequests++;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"ok":true}');
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address();
+  const proxy = await startRequestCompatibilityProxy({
+    name: "auth-test",
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    requestCompatibility: { maxInputItemIdLength: 64 }
+  }, {
+    getBearerToken: async () => {
+      tokenRequests++;
+      return "upstream-token";
+    }
+  });
+  try {
+    for (const headers of [{}, { [proxyCapabilityHeader]: "wrong" }, { authorization: "Bearer wrong" }]) {
+      const response = await fetch(`${proxy.baseUrl}/responses`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ input: [{ id: "x".repeat(100) }] })
+      });
+      assert.equal(response.status, 401);
+    }
+    const health = await fetch(`${proxy.baseUrl}${"/__afterburner/byomodels/health"}`);
+    assert.deepEqual(await health.json(), { marker: "afterburner-byomodels-proxy-v1", ready: true });
+    assert.equal(tokenRequests, 0);
+    assert.equal(upstreamRequests, 0);
+
+    const allowed = await fetch(`${proxy.baseUrl}/responses`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${proxy.capability}`, "content-type": "application/json" },
+      body: "{}"
+    });
+    assert.equal(allowed.status, 200);
+    assert.equal(tokenRequests, 1);
+    assert.equal(upstreamRequests, 1);
   } finally {
     await proxy.close();
     await new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
@@ -84,7 +135,7 @@ test("compatibility proxy adapts non-streaming Responses calls for streaming-onl
   try {
     const response = await fetch(`${proxy.baseUrl}/responses?trace=1`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: proxyHeaders(proxy, { "content-type": "application/json" }),
       body: JSON.stringify({ model: "wire-model", input: "hello" })
     });
     assert.equal(response.status, 200);
@@ -133,7 +184,7 @@ test("compatibility proxy preserves caller-requested streaming responses", async
   try {
     const response = await fetch(`${proxy.baseUrl}/responses`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: proxyHeaders(proxy, { "content-type": "application/json" }),
       body: JSON.stringify({ model: "wire-model", stream: true, input: "hello" })
     });
     assert.equal(response.status, 200);
@@ -173,8 +224,8 @@ test("compatibility proxies use process-local ownership when sessions start simu
   try {
     assert.notEqual(sessionA.baseUrl, sessionB.baseUrl);
     assert.equal(new URL(sessionA.baseUrl).port === String(proxyPort) || new URL(sessionB.baseUrl).port === String(proxyPort), true);
-    await fetch(`${sessionA.baseUrl}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-    await fetch(`${sessionB.baseUrl}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    await fetch(`${sessionA.baseUrl}/responses`, { method: "POST", headers: proxyHeaders(sessionA, { "content-type": "application/json" }), body: "{}" });
+    await fetch(`${sessionB.baseUrl}/responses`, { method: "POST", headers: proxyHeaders(sessionB, { "content-type": "application/json" }), body: "{}" });
     assert.deepEqual(new Set(receivedAuthorization), new Set(["Bearer session-a-token", "Bearer session-b-token"]));
   } finally {
     await sessionA.close();
@@ -203,7 +254,7 @@ test("compatibility proxy falls back when the configured port is occupied by sta
   });
   try {
     assert.notEqual(new URL(proxy.baseUrl).port, String(staleAddress.port));
-    const response = await fetch(`${proxy.baseUrl}/responses`);
+    const response = await fetch(`${proxy.baseUrl}/responses`, { headers: proxyHeaders(proxy) });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { ok: true });
   } finally {
@@ -243,8 +294,8 @@ test("providers sharing a configured port each receive an isolated local proxy",
   ]);
   try {
     assert.notEqual(proxyA.baseUrl, proxyB.baseUrl);
-    await fetch(`${proxyA.baseUrl}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-    await fetch(`${proxyB.baseUrl}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    await fetch(`${proxyA.baseUrl}/responses`, { method: "POST", headers: proxyHeaders(proxyA, { "content-type": "application/json" }), body: "{}" });
+    await fetch(`${proxyB.baseUrl}/responses`, { method: "POST", headers: proxyHeaders(proxyB, { "content-type": "application/json" }), body: "{}" });
     assert.deepEqual(received.map(item => item.url).sort(), ["/a/responses", "/b/responses"]);
     assert.deepEqual(new Set(received.map(item => item.authorization)), new Set(["Bearer token-a", "Bearer token-b"]));
   } finally {

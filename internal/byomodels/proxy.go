@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -24,8 +26,9 @@ import (
 )
 
 const (
-	healthPath   = "/__afterburner/byomodels/health"
-	healthMarker = "afterburner-byomodels-proxy-v1"
+	healthPath            = "/__afterburner/byomodels/health"
+	healthMarker          = "afterburner-byomodels-proxy-v1"
+	proxyCapabilityHeader = "x-afterburner-proxy-capability"
 )
 
 type config struct {
@@ -58,6 +61,13 @@ type identity struct {
 	Configuration string `json:"configuration"`
 }
 
+type ProxyEndpoint struct {
+	Provider      string `json:"provider"`
+	BaseURL       string `json:"baseUrl"`
+	Capability    string `json:"capability"`
+	Configuration string `json:"configuration"`
+}
+
 type tokenValue struct {
 	Token        string
 	ExpiresAt    time.Time
@@ -70,16 +80,17 @@ type tokenCache struct {
 }
 
 type service struct {
-	mu       sync.Mutex
-	provider provider
-	upstream *url.URL
-	identity identity
-	tokens   *tokenCache
-	client   *http.Client
-	server   *http.Server
-	listener net.Listener
-	done     chan struct{}
-	closed   bool
+	mu         sync.Mutex
+	provider   provider
+	upstream   *url.URL
+	identity   identity
+	tokens     *tokenCache
+	client     *http.Client
+	capability string
+	server     *http.Server
+	listener   net.Listener
+	done       chan struct{}
+	closed     bool
 }
 
 type Manager struct {
@@ -107,7 +118,7 @@ func Start(configPath string) (*Manager, error) {
 	for _, configured := range value.Providers {
 		compatibility := configured.RequestCompatibility
 		if (compatibility.MaxInputItemIDLength < 16 && !compatibility.ForceStreaming) ||
-			compatibility.ProxyPort == 0 {
+			compatibility.ProxyPort == 0 || !canNativeOwn(configured) {
 			continue
 		}
 		if compatibility.ProxyPort < 1024 || compatibility.ProxyPort > 65535 {
@@ -125,6 +136,11 @@ func Start(configPath string) (*Manager, error) {
 		if upstream.Path == "" {
 			upstream.Path = "/"
 		}
+		capability, err := newCapability()
+		if err != nil {
+			manager.Close()
+			return nil, fmt.Errorf("create BYOModels proxy capability for provider %q: %w", configured.Name, err)
+		}
 		current := &service{
 			provider: configured,
 			upstream: upstream,
@@ -134,9 +150,10 @@ func Start(configPath string) (*Manager, error) {
 				Upstream:      upstream.String(),
 				Configuration: proxyConfiguration(configured),
 			},
-			tokens: tokens,
-			client: &http.Client{},
-			done:   make(chan struct{}),
+			tokens:     tokens,
+			client:     &http.Client{},
+			capability: capability,
+			done:       make(chan struct{}),
 		}
 		if err := current.start(); err != nil {
 			manager.Close()
@@ -145,6 +162,18 @@ func Start(configPath string) (*Manager, error) {
 		manager.services = append(manager.services, current)
 	}
 	return manager, nil
+}
+
+func canNativeOwn(value provider) bool {
+	return value.Auth.Type == "" || value.Auth.Type == "azure-cli"
+}
+
+func newCapability() (string, error) {
+	var data [32]byte
+	if _, err := rand.Read(data[:]); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(data[:]), nil
 }
 
 func proxyConfiguration(value provider) string {
@@ -167,6 +196,23 @@ func (manager *Manager) Close() error {
 	}
 	manager.services = nil
 	return result
+}
+
+func (manager *Manager) Endpoints() []ProxyEndpoint {
+	endpoints := make([]ProxyEndpoint, 0, len(manager.services))
+	for _, current := range manager.services {
+		address, ok := current.listener.Addr().(*net.TCPAddr)
+		if !ok {
+			continue
+		}
+		endpoints = append(endpoints, ProxyEndpoint{
+			Provider:      current.provider.Name,
+			BaseURL:       "http://127.0.0.1:" + strconv.Itoa(address.Port),
+			Capability:    current.capability,
+			Configuration: current.identity.Configuration,
+		})
+	}
+	return endpoints
 }
 
 func (current *service) start() error {
@@ -240,9 +286,18 @@ func (current *service) close() error {
 }
 
 func (current *service) handle(response http.ResponseWriter, request *http.Request) {
+	authorized := current.authorized(request)
 	if request.Method == http.MethodGet && request.URL.Path == healthPath {
 		response.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(response).Encode(current.identity)
+		if authorized {
+			_ = json.NewEncoder(response).Encode(current.identity)
+		} else {
+			_ = json.NewEncoder(response).Encode(map[string]any{"marker": healthMarker, "ready": true})
+		}
+		return
+	}
+	if !authorized {
+		writeUnauthorized(response)
 		return
 	}
 
@@ -278,6 +333,10 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 	upstreamRequest.Header.Del("host")
 	upstreamRequest.Header.Del("content-length")
 	upstreamRequest.Header.Del("accept-encoding")
+	upstreamRequest.Header.Del(proxyCapabilityHeader)
+	if current.authorizationBearer(request) == current.capability {
+		upstreamRequest.Header.Del("authorization")
+	}
 	if current.provider.Auth.Type == "azure-cli" {
 		token, tokenErr := current.tokens.get(request.Context(), current.provider.Auth.Resource)
 		if tokenErr != nil {
@@ -564,6 +623,31 @@ func removeHopByHopHeaders(headers http.Header) {
 	} {
 		headers.Del(name)
 	}
+}
+
+func (current *service) authorized(request *http.Request) bool {
+	return secureEqual(request.Header.Get(proxyCapabilityHeader), current.capability) ||
+		secureEqual(current.authorizationBearer(request), current.capability)
+}
+
+func (current *service) authorizationBearer(request *http.Request) string {
+	fields := strings.Fields(request.Header.Get("authorization"))
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
+		return ""
+	}
+	return fields[1]
+}
+
+func secureEqual(left, right string) bool {
+	return left != "" && right != "" && len(left) == len(right) && subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
+}
+
+func writeUnauthorized(response http.ResponseWriter) {
+	response.Header().Set("content-type", "application/json")
+	response.WriteHeader(http.StatusUnauthorized)
+	_ = json.NewEncoder(response).Encode(map[string]any{
+		"error": map[string]string{"message": "unauthorized BYOModels compatibility proxy request"},
+	})
 }
 
 func writeProxyError(response http.ResponseWriter, err error) {

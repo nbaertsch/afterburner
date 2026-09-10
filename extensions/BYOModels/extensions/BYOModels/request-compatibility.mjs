@@ -1,9 +1,38 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
 
 const healthPath = "/__afterburner/byomodels/health";
 const healthMarker = "afterburner-byomodels-proxy-v1";
+export const proxyCapabilityHeader = "x-afterburner-proxy-capability";
+
+function newProxyCapability() {
+    return randomBytes(32).toString("base64url");
+}
+
+function safeEqual(left, right) {
+    if (typeof left !== "string" || typeof right !== "string" || !left || !right) return false;
+    const leftBytes = Buffer.from(left);
+    const rightBytes = Buffer.from(right);
+    return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
+}
+
+function bearerToken(request) {
+    const authorization = request.headers.authorization;
+    if (typeof authorization !== "string") return "";
+    const match = authorization.match(/^Bearer\s+(.+)$/i);
+    return match?.[1]?.trim() ?? "";
+}
+
+function hasProxyCapability(request, capability) {
+    return safeEqual(request.headers[proxyCapabilityHeader], capability) ||
+        safeEqual(bearerToken(request), capability);
+}
+
+function unauthorized(response) {
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "unauthorized BYOModels compatibility proxy request" } }));
+}
 
 function compatibleInputItemId(id) {
     return `ab_${createHash("sha256").update(id).digest("base64url")}`;
@@ -20,7 +49,7 @@ export function rewriteOversizedInputItemIds(payload, maximumLength) {
     return rewritten;
 }
 
-function proxyIdentity(provider, upstream) {
+export function proxyConfiguration(provider) {
     const maximumLength = Number.isInteger(provider.requestCompatibility?.maxInputItemIdLength)
         ? provider.requestCompatibility.maxInputItemIdLength
         : 0;
@@ -30,11 +59,15 @@ function proxyIdentity(provider, upstream) {
         provider.auth?.type ?? "",
         provider.auth?.resource ?? ""
     ].join("\0");
+    return createHash("sha256").update(configuration).digest("base64url");
+}
+
+function proxyIdentity(provider, upstream) {
     return {
         marker: healthMarker,
         provider: provider.name,
         upstream: upstream.href,
-        configuration: createHash("sha256").update(configuration).digest("base64url")
+        configuration: proxyConfiguration(provider)
     };
 }
 
@@ -79,13 +112,20 @@ function createProxyServer(
     maximumLength,
     forceStreaming,
     identity,
+    capability,
     onRewrite,
-    getBearerToken
+    getBearerToken,
+    getUpstreamHeaders
 ) {
     return createServer(async (request, response) => {
+        const authorized = hasProxyCapability(request, capability);
         if (request.method === "GET" && request.url === healthPath) {
             response.writeHead(200, { "content-type": "application/json" });
-            response.end(JSON.stringify(identity));
+            response.end(JSON.stringify(authorized ? identity : { marker: healthMarker, ready: true }));
+            return;
+        }
+        if (!authorized) {
+            unauthorized(response);
             return;
         }
         try {
@@ -118,7 +158,13 @@ function createProxyServer(
             delete headers["content-length"];
             delete headers.connection;
             delete headers["transfer-encoding"];
-            if (getBearerToken) {
+            delete headers[proxyCapabilityHeader];
+            if (safeEqual(bearerToken(request), capability)) {
+                delete headers.authorization;
+            }
+            if (getUpstreamHeaders) {
+                Object.assign(headers, await getUpstreamHeaders());
+            } else if (getBearerToken) {
                 headers.authorization = `Bearer ${await getBearerToken()}`;
             }
             const upstreamResponse = await fetch(target, {
@@ -174,7 +220,7 @@ function listen(server, port) {
 
 export async function startRequestCompatibilityProxy(
     provider,
-    { onRewrite = () => {}, getBearerToken } = {}
+    { onRewrite = () => {}, getBearerToken, getUpstreamHeaders, capability = newProxyCapability() } = {}
 ) {
     const maximumLength = provider.requestCompatibility?.maxInputItemIdLength;
     const forceStreaming = provider.requestCompatibility?.forceStreaming === true;
@@ -189,6 +235,9 @@ export async function startRequestCompatibilityProxy(
     if (!Number.isInteger(configuredPort) || configuredPort < 0 || configuredPort > 65535) {
         throw new Error(`Provider '${provider.name}' has an invalid requestCompatibility.proxyPort.`);
     }
+    if (typeof capability !== "string" || capability.length < 32) {
+        throw new Error(`Provider '${provider.name}' has an invalid request compatibility proxy capability.`);
+    }
 
     const upstream = new URL(provider.baseUrl);
     const identity = proxyIdentity(provider, upstream);
@@ -202,8 +251,10 @@ export async function startRequestCompatibilityProxy(
             maximumLength,
             forceStreaming,
             identity,
+            capability,
             onRewrite,
-            getBearerToken
+            getBearerToken,
+            getUpstreamHeaders
         );
 
     async function bind(port) {
@@ -235,6 +286,9 @@ export async function startRequestCompatibilityProxy(
         baseUrl: `http://127.0.0.1:${port}`,
         preferredPort: configuredPort,
         port,
+        capability,
+        authorization: `Bearer ${capability}`,
+        capabilityHeader: proxyCapabilityHeader,
         close: async () => {
             if (closed) return;
             closed = true;

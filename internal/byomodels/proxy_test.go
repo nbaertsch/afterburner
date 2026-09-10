@@ -41,7 +41,12 @@ func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 	}
 	defer manager.Close()
 
-	health, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, healthPath))
+	healthRequest, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", port, healthPath), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthRequest.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	health, err := http.DefaultClient.Do(healthRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,11 +60,17 @@ func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 	}
 
 	longID := strings.Repeat("x", 100)
-	response, err := http.Post(
+	request, err := http.NewRequest(
+		http.MethodPost,
 		fmt.Sprintf("http://127.0.0.1:%d/openai/v1/responses", port),
-		"application/json",
 		strings.NewReader(`{"input":[{"id":"`+longID+`"}]}`),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +81,57 @@ func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 	}
 	if receivedID == longID || !strings.HasPrefix(receivedID, "ab_") {
 		t.Fatalf("input ID was not rewritten: %q", receivedID)
+	}
+}
+
+func TestProxyRejectsUnauthorizedRequestsBeforeForwarding(t *testing.T) {
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		upstreamCalls++
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	port := availablePort(t)
+	manager, err := Start(writeConfig(t, upstream.URL, port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	for _, token := range []string{"", "wrong"} {
+		request, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/responses", port), strings.NewReader(`{"input":[{"id":"`+strings.Repeat("x", 100)+`"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("content-type", "application/json")
+		if token != "" {
+			request.Header.Set(proxyCapabilityHeader, token)
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", response.StatusCode)
+		}
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("unauthorized requests reached upstream %d time(s)", upstreamCalls)
+	}
+
+	health, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, healthPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer health.Body.Close()
+	var body map[string]any
+	if err := json.NewDecoder(health.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["marker"] != healthMarker || body["provider"] != nil || body["upstream"] != nil || body["configuration"] != nil {
+		t.Fatalf("unauthenticated health leaked details: %#v", body)
 	}
 }
 
@@ -95,7 +157,12 @@ func TestProxyFallsBackWhenPreferredPortHasUnrelatedListener(t *testing.T) {
 	if actualPort == preferredPort {
 		t.Fatalf("proxy reused occupied preferred port %d", preferredPort)
 	}
-	response, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/responses", actualPort))
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/responses", actualPort), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,8 +197,13 @@ func TestProxyStartsIsolatedOwnersForSimultaneousSessions(t *testing.T) {
 	if ownerPort == standbyPort {
 		t.Fatalf("simultaneous sessions shared proxy port %d", ownerPort)
 	}
-	for _, endpointPort := range []int{ownerPort, standbyPort} {
-		response, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/responses", endpointPort))
+	for index, endpointPort := range []int{ownerPort, standbyPort} {
+		request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/responses", endpointPort), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set(proxyCapabilityHeader, []*Manager{owner, standby}[index].services[0].capability)
+		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,7 +236,12 @@ func TestProvidersSharingPreferredPortEachStartProxy(t *testing.T) {
 		t.Fatalf("providers shared proxy port %d", firstPort)
 	}
 	for index, endpointPort := range []int{firstPort, secondPort} {
-		response, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/responses", endpointPort))
+		request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/responses", endpointPort), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set(proxyCapabilityHeader, manager.services[index].capability)
+		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -180,6 +257,42 @@ func TestProvidersSharingPreferredPortEachStartProxy(t *testing.T) {
 		if body.Path != want {
 			t.Fatalf("path = %q, want %q", body.Path, want)
 		}
+	}
+}
+
+func TestManagerEndpointsExposeAuthoritativeCapabilityAndSkipUnsupportedAuth(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	port := availablePort(t)
+	path := filepath.Join(t.TempDir(), "byomodels.json")
+	value := fmt.Sprintf(`{
+  "version": 1,
+  "providers": [{
+    "name": "native-owner",
+    "baseUrl": %q,
+    "requestCompatibility": { "maxInputItemIdLength": 64, "proxyPort": %d },
+    "auth": { "type": "azure-cli", "resource": "https://resource.example" }
+  }, {
+    "name": "js-owner",
+    "baseUrl": %q,
+    "requestCompatibility": { "maxInputItemIdLength": 64, "proxyPort": %d },
+    "auth": { "type": "api-key-env", "environmentVariable": "TOKEN" }
+  }],
+  "models": []
+}`, upstream.URL, port, upstream.URL, port)
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := Start(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	endpoints := manager.Endpoints()
+	if len(endpoints) != 1 || endpoints[0].Provider != "native-owner" || endpoints[0].BaseURL == "" || endpoints[0].Capability == "" {
+		t.Fatalf("unexpected endpoints: %#v", endpoints)
 	}
 }
 
@@ -202,7 +315,12 @@ func TestProxyDecompressesUpstreamResponses(t *testing.T) {
 	}
 	defer manager.Close()
 
-	response, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/responses", port))
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/responses", port), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,11 +371,17 @@ func TestProxyAdaptsNonStreamingResponsesForStreamingOnlyEndpoints(t *testing.T)
 	}
 	defer manager.Close()
 
-	response, err := http.Post(
+	request, err := http.NewRequest(
+		http.MethodPost,
 		fmt.Sprintf("http://127.0.0.1:%d/responses?trace=1", port),
-		"application/json",
 		strings.NewReader(`{"model":"wire-model","input":"hello"}`),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,11 +440,17 @@ func TestProxyPreservesCallerRequestedStreamingResponse(t *testing.T) {
 	}
 	defer manager.Close()
 
-	response, err := http.Post(
+	request, err := http.NewRequest(
+		http.MethodPost,
 		fmt.Sprintf("http://127.0.0.1:%d/responses", port),
-		"application/json",
 		strings.NewReader(`{"model":"wire-model","stream":true,"input":"hello"}`),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,11 +621,13 @@ func TestLiveAzureProxy(t *testing.T) {
 	body := bytes.NewBufferString(
 		`{"model":"gpt-5.6-sol","input":"Reply with exactly NATIVE_PROXY_OK","max_output_tokens":32}`,
 	)
-	response, err := http.Post(
-		fmt.Sprintf("http://127.0.0.1:%d/openai/v1/responses", port),
-		"application/json",
-		body,
-	)
+	request, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/openai/v1/responses", port), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}

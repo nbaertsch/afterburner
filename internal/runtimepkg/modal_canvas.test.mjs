@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { Script, createContext } from "node:vm";
 import test from "node:test";
@@ -8,7 +11,7 @@ import test from "node:test";
 async function loadModalRuntime(transport, brokerConfig = null) {
   const source = await readFile(new URL("../../src/app.js", import.meta.url), "utf8");
   const modalUI = await import(new URL("../../src/runtime/modal-ui.mjs", import.meta.url));
-  const start = source.indexOf("function normalizeModalBootstrapSurfaces");
+  const start = source.indexOf("function loadModalBrokerConfig");
   const end = source.indexOf("function disposeRuntimeObservers");
   assert.ok(start >= 0 && end > start, "modal runtime block not found");
   const events = [];
@@ -17,6 +20,8 @@ async function loadModalRuntime(transport, brokerConfig = null) {
     JSON: { parse: JSON.parse, stringify: JSON.stringify },
     modalUI,
     process: { env: {} },
+    readFileSync,
+    unlinkSync,
     setTimeout,
     clearTimeout,
     queueMicrotask,
@@ -75,7 +80,7 @@ const modalDiagnostics = {
   quotaFailures: 0,
   lastFailureKind: null
 };`;
-  const body = `${prelude}\n${source.slice(start, end)}\nObject.assign(globalThis, { registerModalCanvas, openModalCanvas, updateModalCanvas, closeModalCanvas, invokeModalAction, subscribeModalCanvas, getModalDiagnostics, getModalFallback, __normalizeNativeIdentityAssertions: normalizeNativeIdentityAssertions, __events: events });`;
+  const body = `${prelude}\n${source.slice(start, end)}\nObject.assign(globalThis, { registerModalCanvas, openModalCanvas, updateModalCanvas, closeModalCanvas, invokeModalAction, subscribeModalCanvas, getModalDiagnostics, getModalFallback, __loadModalBrokerConfig: loadModalBrokerConfig, __normalizeNativeIdentityAssertions: normalizeNativeIdentityAssertions, __events: events });`;
   new Script(body, { filename: "modal-runtime.js" }).runInContext(context);
   return context;
 }
@@ -105,6 +110,28 @@ test("native identity assertions reject coerced or malformed identities", async 
   ]);
   assert.equal(assertions.length, 1);
   assert.equal(assertions[0].extensionId, "valid");
+});
+
+test("native bootstrap session fallback is scoped to each bootstrap file", async () => {
+  const runtime = await loadModalRuntime(async () => ({ ok: true }));
+  const dir = await mkdtemp(join(tmpdir(), "afterburner-bootstrap-scope-"));
+  const first = join(dir, "first.json");
+  const second = join(dir, "second.json");
+  await writeFile(first, JSON.stringify({
+    schemaVersion: 2,
+    sessionId: "sessionAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    modalSurfaces: [{ ownerExtensionId: "test-owner", canvasId: "first", surfaceId: "first", pipe: "pipe-a" }]
+  }), "utf8");
+  await writeFile(second, JSON.stringify({
+    schemaVersion: 2,
+    modalSurfaces: [{ ownerExtensionId: "test-owner", canvasId: "second", surfaceId: "second", pipe: "pipe-b" }]
+  }), "utf8");
+  runtime.process.env.AFTERBURNER_NATIVE_BOOTSTRAP = first;
+  runtime.process.env.AFTERBURNER_MODAL_BOOTSTRAP = second;
+  const config = runtime.__loadModalBrokerConfig();
+  assert.equal(config.sessionId, "sessionAAAAAAAAAAAAAAAAAAAAAAAAAA");
+  assert.equal(config.modalSurfaces.length, 1);
+  assert.equal(config.modalSurfaces[0].canvasId, "first");
 });
 
 function modalSurface(ownerExtensionId, canvasId, surfaceId = canvasId) {

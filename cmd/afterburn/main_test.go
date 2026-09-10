@@ -196,6 +196,17 @@ func TestNativeProxyStartsBeforeCopilot(t *testing.T) {
 	if !got.ProxyReady {
 		t.Fatal("BYOModels proxy was not ready when Copilot started")
 	}
+	var endpoints []struct {
+		Provider   string `json:"provider"`
+		BaseURL    string `json:"baseUrl"`
+		Capability string `json:"capability"`
+	}
+	if err := json.Unmarshal([]byte(got.Env["AFTERBURNER_BYOMODELS_PROXIES"]), &endpoints); err != nil {
+		t.Fatalf("native proxy handoff was not valid JSON: %v", err)
+	}
+	if len(endpoints) != 1 || endpoints[0].Provider != "test" || endpoints[0].Capability == "" || endpoints[0].BaseURL == "" {
+		t.Fatalf("unexpected native proxy handoff: %#v", endpoints)
+	}
 }
 
 func TestChildExitCode(t *testing.T) {

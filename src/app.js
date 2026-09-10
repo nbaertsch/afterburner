@@ -326,8 +326,9 @@ function loadModalBrokerConfig() {
             if (typeof parsed.sessionRoute === "string" && /^[A-Za-z0-9_-]{32,128}$/.test(parsed.sessionRoute) && !process.env.AFTERBURNER_SESSION_ROUTE) {
                 process.env.AFTERBURNER_SESSION_ROUTE = parsed.sessionRoute;
             }
-            if (typeof parsed.sessionId === "string" && /^[A-Za-z0-9_-]{32,128}$/.test(parsed.sessionId)) verifiedBootstrapSessionId = parsed.sessionId;
-            modalSurfaces.push(...normalizeModalBootstrapSurfaces(parsed.modalSurfaces, parsed.pipe, parsed.sessionId ?? verifiedBootstrapSessionId));
+            const fileSessionId = typeof parsed.sessionId === "string" && /^[A-Za-z0-9_-]{32,128}$/.test(parsed.sessionId) ? parsed.sessionId : "";
+            if (fileSessionId) verifiedBootstrapSessionId = fileSessionId;
+            modalSurfaces.push(...normalizeModalBootstrapSurfaces(parsed.modalSurfaces, parsed.pipe, fileSessionId));
             verifiedExtensions.push(...normalizeNativeIdentityAssertions(parsed.verifiedExtensions));
         } catch {}
     }

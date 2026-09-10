@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -651,6 +652,13 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 			return 1, err
 		}
 		defer proxyManager.Close()
+		if endpoints := proxyManager.Endpoints(); len(endpoints) > 0 {
+			encoded, err := json.Marshal(endpoints)
+			if err != nil {
+				return 1, err
+			}
+			env = setEnv(env, "AFTERBURNER_BYOMODELS_PROXIES", string(encoded))
+		}
 	}
 	traceStartup("byomodels-proxy")
 	validated := preflight.Result{Package: selected, Profile: selection.Profile, Prepared: prepared}

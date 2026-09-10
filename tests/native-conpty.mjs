@@ -294,8 +294,12 @@ child.onData(data => {
     const byomodelsReady = text.includes("Registered 9 BYOModels model(s)") &&
       text.includes("colosseum-prod/gpt-5-5 <- gpt-5.5") &&
       text.includes("colosseum-alt/luna-long <- gpt-5.6-luna");
-    const targetQuery = byomodelsReady ? "colosseum-prod/gpt-5-5" : "GPT-5.6 Sol";
-    const expectedModel = byomodelsReady ? "colosseum-prod/gpt-5-5" : "gpt-5.6-sol";
+    if (!byomodelsReady) {
+      finish("BYOModels registration did not complete; refusing built-in model-picker fallback");
+      return;
+    }
+    const targetQuery = "colosseum-prod/gpt-5-5";
+    const expectedModel = "colosseum-prod/gpt-5-5";
     const interactionOffset = raw.length;
     setTimeout(() => child.write(targetQuery), 1200);
     setTimeout(() => child.write("\x1b[D"), 3200);
@@ -312,7 +316,7 @@ child.onData(data => {
     setTimeout(() => {
       const interaction = stripAnsi(raw.slice(interactionOffset));
       const current = stripAnsi(raw);
-      const requirements = byomodelsReady ? [
+      const requirements = [
         [current, "Registered 9 BYOModels model(s)"],
         [current, "colosseum-prod/gpt-5-5 <- gpt-5.5"],
         [current, "colosseum-alt/luna-long <- gpt-5.6-luna"],
@@ -330,16 +334,6 @@ child.onData(data => {
         [interaction, "768K"],
         [interaction, "512K"],
         [interaction, "256K"]
-      ] : [
-        [current, "Auto"],
-        [current, "Claude Sonnet 5"],
-        [current, "GPT-5.6 Sol"],
-        [interaction, "None"],
-        [interaction, "Low"],
-        [interaction, "Medium"],
-        [interaction, "High"],
-        [interaction, "Extra"],
-        [interaction, "reasoning effort"]
       ];
       const missing = requirements.filter(([haystack, needle]) => !haystack.includes(needle)).map(([, needle]) => needle);
       if (missing.length === 0) {
