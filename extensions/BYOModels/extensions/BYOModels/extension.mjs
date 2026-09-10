@@ -81,6 +81,12 @@ function validateConfig() {
                 `Provider '${provider.name}' must define requestCompatibility.legacyTools as a boolean.`
             );
         }
+        const bufferResponses = provider.requestCompatibility?.bufferResponses;
+        if (bufferResponses !== undefined && typeof bufferResponses !== "boolean") {
+            throw new Error(
+                `Provider '${provider.name}' must define requestCompatibility.bufferResponses as a boolean.`
+            );
+        }
         const proxyPort = provider.requestCompatibility?.proxyPort;
         if (proxyPort !== undefined &&
             (!Number.isInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535)) {

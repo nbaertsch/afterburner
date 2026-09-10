@@ -1,7 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { rewriteLegacyTools } from "./legacy-tools.mjs";
+import { readResponseStream, ResponseStreamError, terminalResponseFromEventStream } from "./response-stream.mjs";
 
 const healthPath = "/__afterburner/byomodels/health";
 const healthMarker = "afterburner-byomodels-proxy-v1";
@@ -65,7 +67,8 @@ export function proxyConfiguration(provider) {
         provider.auth?.type ?? "",
         provider.auth?.resource ?? "",
         configuredHeaders,
-        ...(provider.requestCompatibility?.legacyTools === true ? ["legacyTools"] : [])
+        ...(provider.requestCompatibility?.legacyTools === true ? ["legacyTools"] : []),
+        ...(provider.requestCompatibility?.bufferResponses === true ? ["bufferResponses"] : [])
     ].join("\0");
     return createHash("sha256").update(configuration).digest("base64url");
 }
@@ -122,30 +125,6 @@ function upstreamClientHeaders(requestHeaders) {
     return headers;
 }
 
-function completedResponseFromEventStream(source) {
-    let completed;
-    for (const block of source.split(/\r?\n\r?\n/)) {
-        const data = block
-            .split(/\r?\n/)
-            .filter((line) => line.startsWith("data:"))
-            .map((line) => line.slice(5).trimStart())
-            .join("\n");
-        if (!data || data === "[DONE]") continue;
-        const event = JSON.parse(data);
-        if ((event.type === "response.completed" || event.type === "response.failed") &&
-            event.response && typeof event.response === "object") {
-            completed = event.response;
-        }
-        if (event.type === "error") {
-            throw new Error(event.error?.message ?? event.message ?? "upstream streaming response failed");
-        }
-    }
-    if (!completed) {
-        throw new Error("upstream streaming response did not include a terminal response event");
-    }
-    return completed;
-}
-
 function createProxyServer(
     provider,
     upstream,
@@ -168,6 +147,12 @@ function createProxyServer(
             unauthorized(response);
             return;
         }
+        const abort = new AbortController();
+        const onClose = () => {
+            if (!response.writableFinished) abort.abort();
+        };
+        response.once("close", onClose);
+        let upstreamRequestId;
         try {
             const chunks = [];
             for await (const chunk of request) chunks.push(chunk);
@@ -214,33 +199,56 @@ function createProxyServer(
                 method: request.method,
                 headers,
                 body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
+                signal: abort.signal,
                 duplex: "half"
             });
+            upstreamRequestId = upstreamResponse.headers.get("x-request-id") ??
+                upstreamResponse.headers.get("apim-request-id") ?? upstreamResponse.headers.get("request-id");
             const responseHeaders = Object.fromEntries(upstreamResponse.headers);
             delete responseHeaders["content-length"];
             delete responseHeaders["content-encoding"];
             delete responseHeaders["transfer-encoding"];
-            if (translatedStreamingResponse && upstreamResponse.ok &&
+            const responsesRequest = request.method === "POST" &&
+                new URL(request.url ?? "/", "http://127.0.0.1").pathname.endsWith("/responses");
+            if ((translatedStreamingResponse || (responsesRequest && provider.requestCompatibility?.bufferResponses)) &&
+                upstreamResponse.ok &&
                 upstreamResponse.headers.get("content-type")?.includes("text/event-stream")) {
-                const completed = completedResponseFromEventStream(await upstreamResponse.text());
-                responseHeaders["content-type"] = "application/json";
+                const stream = await readResponseStream(upstreamResponse);
+                const completed = terminalResponseFromEventStream(stream);
+                const refusals = (completed.output ?? []).flatMap(item =>
+                    (item.content ?? []).filter(part => part.type === "refusal" && typeof part.refusal === "string")
+                        .map(part => part.refusal));
+                if (refusals.length) {
+                    throw new ResponseStreamError(refusals.join("\n"), "upstream_refusal", 422);
+                }
+                if (translatedStreamingResponse) responseHeaders["content-type"] = "application/json";
                 response.writeHead(upstreamResponse.status, responseHeaders);
-                response.end(JSON.stringify(completed));
+                response.end(translatedStreamingResponse ? JSON.stringify(completed) :
+                    `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: completed })}\n\n`);
                 return;
             }
             response.writeHead(upstreamResponse.status, responseHeaders);
             if (upstreamResponse.body) {
-                Readable.fromWeb(upstreamResponse.body).pipe(response);
+                await pipeline(Readable.fromWeb(upstreamResponse.body), response);
             } else {
                 response.end();
             }
         } catch (error) {
-            response.writeHead(502, { "content-type": "application/json" });
+            if (response.destroyed || abort.signal.aborted) return;
+            if (response.headersSent) {
+                response.destroy(error);
+                return;
+            }
+            const requestId = upstreamRequestId ? ` (upstream request: ${upstreamRequestId})` : "";
+            response.writeHead(error instanceof ResponseStreamError ? error.status : 502, { "content-type": "application/json" });
             response.end(JSON.stringify({
                 error: {
-                    message: `BYOModels request compatibility proxy failed: ${error?.message ?? String(error)}`
+                    code: error instanceof ResponseStreamError ? error.code : "byomodels_proxy_error",
+                    message: `BYOModels '${provider.name}': ${error?.message ?? String(error)}${requestId}`
                 }
             }));
+        } finally {
+            response.off("close", onClose);
         }
     });
 }
@@ -268,6 +276,10 @@ export async function startRequestCompatibilityProxy(
     const maximumLength = provider.requestCompatibility?.maxInputItemIdLength;
     const forceStreaming = provider.requestCompatibility?.forceStreaming === true;
     const legacyTools = provider.requestCompatibility?.legacyTools;
+    const bufferResponses = provider.requestCompatibility?.bufferResponses;
+    if (bufferResponses !== undefined && typeof bufferResponses !== "boolean") {
+        throw new Error(`Provider '${provider.name}' has an invalid requestCompatibility.bufferResponses.`);
+    }
     if (legacyTools !== undefined && typeof legacyTools !== "boolean") {
         throw new Error(`Provider '${provider.name}' has an invalid requestCompatibility.legacyTools.`);
     }
@@ -277,7 +289,7 @@ export async function startRequestCompatibilityProxy(
             `Provider '${provider.name}' has an invalid requestCompatibility.maxInputItemIdLength.`
         );
     }
-    if ((!Number.isInteger(maximumLength) || maximumLength < 16) && !forceStreaming && !legacyTools) return null;
+    if ((!Number.isInteger(maximumLength) || maximumLength < 16) && !forceStreaming && !legacyTools && !bufferResponses) return null;
     const configuredPort = provider.requestCompatibility?.proxyPort ?? 0;
     if (!Number.isInteger(configuredPort) || configuredPort < 0 || configuredPort > 65535) {
         throw new Error(`Provider '${provider.name}' has an invalid requestCompatibility.proxyPort.`);

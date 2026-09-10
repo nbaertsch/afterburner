@@ -12,6 +12,7 @@
         "maxInputItemIdLength": 64,
         "forceStreaming": false,
         "legacyTools": false,
+        "bufferResponses": false,
         "proxyPort": 61951
       },
       "auth": {

@@ -127,6 +127,30 @@ owned by the session proxy even when a preferred port is configured. Other provi
 Schemas with nested resource IDs, duplicate flattened function names, or non-schema data that still
 exceeds the depth limit fail explicitly rather than silently losing constraints or tools.
 
+For clients that discard Responses SSE failure events, set `"bufferResponses": true` as well.
+The session proxy validates the entire upstream stream before sending response headers. Upstream
+errors, failed responses, and incomplete responses become explicit HTTP errors with the provider
+message and available upstream request ID; they are never turned into successful model responses.
+Deterministic failures use HTTP 422, rate limits use 429, and server/transport failures use 5xx.
+Successful terminal response objects and tool calls are preserved. Refusal blocks are surfaced
+as explicit `upstream_refusal` errors with their original text, rather than empty successful replies.
+This opt-in mode delays visible output until the upstream response finishes and limits buffering to
+64 MiB. Cancellation closes the upstream request. Providers without this setting retain live streaming.
+Restricted's recommended compatibility settings are:
+
+```json
+"requestCompatibility": {
+  "forceStreaming": true,
+  "legacyTools": true,
+  "bufferResponses": true
+}
+```
+
+From the repository root, run `npm run test:real-responses-client -- <copilot-sdk-directory> <copilot.exe>`
+to exercise the production proxy with the actual native client and a local synthetic provider.
+It verifies explicit failures, incomplete responses, refusals, successful text, and a complete tool
+round trip without contacting any configured provider.
+
 Configured provider `headers` are applied by the owning proxy to every upstream request; they do
 not depend on the Copilot SDK forwarding them through the loopback hop. Keep credentials in
 `auth`; transport, authorization, and Afterburner capability headers are proxy-managed and cannot

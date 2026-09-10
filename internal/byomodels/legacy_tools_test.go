@@ -37,3 +37,21 @@ func TestLegacyToolsRemainSessionOwned(t *testing.T) {
 		t.Fatal("legacy tool settings must participate in proxy identity")
 	}
 }
+
+func TestBufferedResponsesRemainSessionOwned(t *testing.T) {
+	value := provider{
+		Auth: auth{Type: "azure-cli"},
+		RequestCompatibility: requestCompatibility{BufferResponses: true, ForceStreaming: true},
+	}
+	if canNativeOwn(value) {
+		t.Fatal("buffered response validation must remain session-owned")
+	}
+	bufferedIdentity := proxyConfiguration(value)
+	value.RequestCompatibility.BufferResponses = false
+	if bufferedIdentity == proxyConfiguration(value) {
+		t.Fatal("buffered response settings must participate in proxy identity")
+	}
+	if !canNativeOwn(value) {
+		t.Fatal("existing non-buffered native ownership must be preserved")
+	}
+}
