@@ -11,6 +11,7 @@
       "requestCompatibility": {
         "maxInputItemIdLength": 64,
         "forceStreaming": false,
+        "legacyTools": false,
         "proxyPort": 61951
       },
       "auth": {

@@ -11,6 +11,44 @@ function proxyHeaders(proxy, extra = {}) {
   return { ...extra, [proxyCapabilityHeader]: proxy.capability };
 }
 
+test("legacy tool compatibility is opt-in and participates in proxy ownership", async () => {
+  const upstream = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(Buffer.concat(chunks));
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const provider = { name: "legacy", baseUrl: `http://127.0.0.1:${upstream.address().port}` };
+  assert.notEqual(proxyConfiguration(provider), proxyConfiguration({
+    ...provider, requestCompatibility: { legacyTools: true }
+  }));
+  try {
+    for (const legacyTools of [false, true]) {
+      const proxy = await startRequestCompatibilityProxy({
+        ...provider, requestCompatibility: { legacyTools, maxInputItemIdLength: 64 }
+      });
+      try {
+        const tools = [{ type: "namespace", name: "mcp", tools: [
+          { type: "function", name: "mcp_read", defer_loading: true, parameters: { type: "object" } }
+        ] }, { type: "tool_search" }];
+        const response = await fetch(`${proxy.baseUrl}/responses`, {
+          method: "POST", headers: proxyHeaders(proxy, { "content-type": "application/json" }),
+          body: JSON.stringify({ tools })
+        });
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        if (legacyTools) {
+          assert.deepEqual(body.tools.map(tool => tool.name), ["mcp_read"]);
+          assert.equal(body.tools[0].defer_loading, undefined);
+        } else {
+          assert.deepEqual(body.tools, tools);
+        }
+      } finally { await proxy.close(); }
+    }
+  } finally { await new Promise(resolve => upstream.close(resolve)); }
+});
+
 function sendRawRequest(url, { headers, body }) {
   return new Promise((resolve, reject) => {
     const request = httpRequest(url, { method: "POST", headers }, (response) => {

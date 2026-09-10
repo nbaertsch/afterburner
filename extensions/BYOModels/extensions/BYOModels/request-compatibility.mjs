@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
+import { rewriteLegacyTools } from "./legacy-tools.mjs";
 
 const healthPath = "/__afterburner/byomodels/health";
 const healthMarker = "afterburner-byomodels-proxy-v1";
@@ -63,7 +64,8 @@ export function proxyConfiguration(provider) {
         String(provider.requestCompatibility?.forceStreaming === true),
         provider.auth?.type ?? "",
         provider.auth?.resource ?? "",
-        configuredHeaders
+        configuredHeaders,
+        ...(provider.requestCompatibility?.legacyTools === true ? ["legacyTools"] : [])
     ].join("\0");
     return createHash("sha256").update(configuration).digest("base64url");
 }
@@ -180,12 +182,15 @@ function createProxyServer(
                     onRewrite(rewritten);
                 }
                 const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+                const legacyTools = provider.requestCompatibility?.legacyTools === true &&
+                    request.method === "POST" && pathname.endsWith("/responses");
+                if (legacyTools) rewriteLegacyTools(payload);
                 if (forceStreaming && request.method === "POST" &&
                     pathname.endsWith("/responses") && payload.stream !== true) {
                     payload.stream = true;
                     translatedStreamingResponse = true;
                 }
-                if (rewritten > 0 || translatedStreamingResponse) {
+                if (rewritten > 0 || translatedStreamingResponse || legacyTools) {
                     body = Buffer.from(JSON.stringify(payload));
                 }
             }
@@ -262,13 +267,17 @@ export async function startRequestCompatibilityProxy(
 ) {
     const maximumLength = provider.requestCompatibility?.maxInputItemIdLength;
     const forceStreaming = provider.requestCompatibility?.forceStreaming === true;
+    const legacyTools = provider.requestCompatibility?.legacyTools;
+    if (legacyTools !== undefined && typeof legacyTools !== "boolean") {
+        throw new Error(`Provider '${provider.name}' has an invalid requestCompatibility.legacyTools.`);
+    }
     if (maximumLength !== undefined &&
         (!Number.isInteger(maximumLength) || maximumLength < 16)) {
         throw new Error(
             `Provider '${provider.name}' has an invalid requestCompatibility.maxInputItemIdLength.`
         );
     }
-    if ((!Number.isInteger(maximumLength) || maximumLength < 16) && !forceStreaming) return null;
+    if ((!Number.isInteger(maximumLength) || maximumLength < 16) && !forceStreaming && !legacyTools) return null;
     const configuredPort = provider.requestCompatibility?.proxyPort ?? 0;
     if (!Number.isInteger(configuredPort) || configuredPort < 0 || configuredPort > 65535) {
         throw new Error(`Provider '${provider.name}' has an invalid requestCompatibility.proxyPort.`);

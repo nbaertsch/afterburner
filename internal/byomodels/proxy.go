@@ -65,6 +65,7 @@ type requestCompatibility struct {
 	MaxInputItemIDLength int  `json:"maxInputItemIdLength"`
 	ProxyPort            int  `json:"proxyPort"`
 	ForceStreaming       bool `json:"forceStreaming"`
+	LegacyTools          bool `json:"legacyTools"`
 }
 
 type auth struct {
@@ -187,7 +188,8 @@ func Start(configPath string) (*Manager, error) {
 }
 
 func canNativeOwn(value provider) bool {
-	return value.Auth.Type == "" || value.Auth.Type == "azure-cli"
+	// Schema relocation is owned by the session proxy, including when a preferred port is configured.
+	return !value.RequestCompatibility.LegacyTools && (value.Auth.Type == "" || value.Auth.Type == "azure-cli")
 }
 
 func newCapability() (string, error) {
@@ -214,6 +216,9 @@ func proxyConfiguration(value provider) string {
 		value.Auth.Resource,
 		strings.Join(configuredHeaders, "\n"),
 	}, "\x00")
+	if value.RequestCompatibility.LegacyTools {
+		configuration += "\x00legacyTools"
+	}
 	hash := sha256.Sum256([]byte(configuration))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }

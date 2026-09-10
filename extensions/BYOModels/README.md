@@ -118,6 +118,15 @@ response expected by Copilot. Configure it as:
 ```
 
 The proxy preserves path-prefixed base URLs and query parameters.
+For Restricted gateways with a JSON depth limit of 16 and no native namespace/tool-search support,
+also set `"legacyTools": true` in `requestCompatibility`. This eagerly exposes namespaced functions
+under their existing callable names and relocates deep tool schemas into shallow `$defs` references,
+preserving their constraints. Existing native tool-search history is removed because all functions
+are now supplied directly. Function calls and results remain intact. This compatibility mode is
+owned by the session proxy even when a preferred port is configured. Other providers are unchanged.
+Schemas with nested resource IDs, duplicate flattened function names, or non-schema data that still
+exceeds the depth limit fail explicitly rather than silently losing constraints or tools.
+
 Configured provider `headers` are applied by the owning proxy to every upstream request; they do
 not depend on the Copilot SDK forwarding them through the loopback hop. Keep credentials in
 `auth`; transport, authorization, and Afterburner capability headers are proxy-managed and cannot
