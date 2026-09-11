@@ -4,7 +4,7 @@ import { buildModalFrame, hashDisplayPath } from "../lib/modal-surface.mjs";
 
 const INSTANCE = Symbol.for("afterburner.black-box.runtime");
 const LIVE_MODAL_ID = "afterburner-black-box-live";
-export const MODAL_ACTIVATION_POLL_MS = 100;
+export const MODAL_ACTIVATION_POLL_MS = 2000;
 const MODAL_REFRESH_THROTTLE_MS = 1000;
 
 function isolatedWarning(code) {

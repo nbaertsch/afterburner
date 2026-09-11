@@ -86,6 +86,32 @@ async function safeAction(action) {
     catch { return { ok: false, error: "black-box-unavailable" }; }
 }
 
+function startupError(error) {
+    return String(error?.message ?? error ?? "unknown error").replace(/[\r\n\t]+/g, " ").slice(0, 500);
+}
+
+class BlackBoxStartupError extends Error {
+    constructor(cause) {
+        super(startupError(cause));
+        this.name = "BlackBoxStartupError";
+    }
+}
+
+function deferredService(servicePromise) {
+    const call = method => async (...args) => {
+        const service = await servicePromise;
+        return service[method](...args);
+    };
+    return {
+        status: call("status"),
+        tail: call("tail"),
+        requestModalOpen: call("requestModalOpen"),
+        exportBundle: call("exportBundle"),
+        doctor: call("doctor"),
+        close: call("close")
+    };
+}
+
 export async function buildSessionRegistration({ service, joinSession }) {
     let session;
     let liveTailTimer = null;
@@ -112,7 +138,10 @@ export async function buildSessionRegistration({ service, joinSession }) {
     };
     const logSafely = async action => {
         try { await action(); }
-        catch { await session?.log("Black Box operation failed without affecting the session."); }
+        catch (error) {
+            const prefix = error instanceof BlackBoxStartupError ? "Black Box startup failed" : "Black Box operation failed";
+            await session?.log(`${prefix}: ${startupError(error)}.`);
+        }
     };
     const openRuntimeModal = async () => {
         try {
@@ -196,26 +225,54 @@ export async function buildSessionRegistration({ service, joinSession }) {
 }
 
 export async function startSessionExtension(options = {}) {
-    const service = options.service ?? await startBlackBoxService({
-        env: options.env,
-        mode: "session",
-        startTailer: options.startTailer
+    let disposed = false;
+    let startedService;
+    let serviceClosed = false;
+    const closeService = async () => {
+        if (!startedService || serviceClosed) return;
+        serviceClosed = true;
+        await startedService.close().catch(() => {});
+    };
+    const servicePromise = Promise.resolve().then(async () => {
+        let service;
+        try {
+            service = options.service ?? await (options.startService ?? startBlackBoxService)({
+                env: options.env,
+                mode: "session",
+                startTailer: options.startTailer
+            });
+        } catch (error) {
+            throw new BlackBoxStartupError(error);
+        }
+        startedService = service;
+        if (disposed) await closeService();
+        return service;
     });
+    servicePromise.catch(() => {});
+    const service = deferredService(servicePromise);
     try {
         const registration = await buildSessionRegistration({
             service,
             joinSession: options.joinSession,
         });
+        servicePromise.catch(error => {
+            if (!disposed) {
+                void Promise.resolve(registration.session?.log(`Black Box startup failed: ${startupError(error)}.`)).catch(() => {});
+            }
+        });
         return {
             service,
+            ready: servicePromise,
             ...registration,
             async dispose() {
+                disposed = true;
                 registration.stopLiveTail();
-                await service.close();
+                await closeService();
             }
         };
     } catch (error) {
-        await service.close().catch(() => {});
+        disposed = true;
+        await closeService();
         throw error;
     }
 }

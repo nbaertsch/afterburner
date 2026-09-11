@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nbaertsch/afterburner/internal/home"
 	"github.com/nbaertsch/afterburner/internal/registry"
@@ -21,6 +22,7 @@ func TestReconcilePreservesOrdinaryPluginsAndRemovesStaleManaged(t *testing.T) {
 	if err := os.MkdirAll(active, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(active, "plugin.json"), []byte(`{"name":"afterburner-example","version":"1.2.3"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -170,5 +172,35 @@ func TestReconcilePreservesLegacyOpenAIServerIdentityUntilInstallation(t *testin
 	plugins := got["installedPlugins"].([]any)
 	if len(plugins) != 1 || plugins[0].(map[string]any)["name"] != "afterburner-copilot-openai" {
 		t.Fatalf("legacy plugin identity changed before installation: %#v", plugins)
+	}
+}
+
+func TestReconcileDoesNotRewriteUnchangedConfig(t *testing.T) {
+	root := t.TempDir()
+	layout := home.Layout{
+		Root: root, CopilotHome: filepath.Join(root, "copilot-home"),
+		Extensions: filepath.Join(root, "extensions"),
+	}
+	if err := os.MkdirAll(layout.CopilotHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reconcile(layout, registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{}}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(layout.CopilotHome, "config.json")
+	first, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := Reconcile(layout, registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{}}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.ModTime().Equal(first.ModTime()) {
+		t.Fatal("unchanged session configuration was rewritten")
 	}
 }

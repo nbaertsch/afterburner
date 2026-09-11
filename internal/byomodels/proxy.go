@@ -32,6 +32,8 @@ const (
 	proxyCapabilityHeader = "x-afterburner-proxy-capability"
 )
 
+var upstreamRequestTimeout = 5 * time.Minute
+
 var proxyManagedHeaders = map[string]bool{
 	"accept-encoding":     true,
 	"authorization":       true,
@@ -135,6 +137,7 @@ func Start(configPath string) (*Manager, error) {
 
 	manager := &Manager{}
 	tokens := &tokenCache{values: map[string]tokenValue{}}
+	var pending []*service
 	for _, configured := range value.Providers {
 		if err := validateProviderHeaders(configured); err != nil {
 			manager.Close()
@@ -179,11 +182,29 @@ func Start(configPath string) (*Manager, error) {
 			capability: capability,
 			done:       make(chan struct{}),
 		}
-		if err := current.start(); err != nil {
-			manager.Close()
+		pending = append(pending, current)
+	}
+
+	startErrors := make([]error, len(pending))
+	var wait sync.WaitGroup
+	wait.Add(len(pending))
+	for index, current := range pending {
+		go func() {
+			defer wait.Done()
+			startErrors[index] = current.start()
+		}()
+	}
+	wait.Wait()
+	for index, current := range pending {
+		if startErrors[index] == nil {
+			manager.services = append(manager.services, current)
+		}
+	}
+	for _, err := range startErrors {
+		if err != nil {
+			_ = manager.Close()
 			return nil, err
 		}
-		manager.services = append(manager.services, current)
 	}
 	return manager, nil
 }
@@ -389,6 +410,9 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 		return
 	}
 
+	requestContext, cancel := context.WithTimeout(request.Context(), upstreamRequestTimeout)
+	defer cancel()
+
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		writeProxyError(response, err)
@@ -411,7 +435,7 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 		}
 	}
 	target := upstreamTarget(current.upstream, request.URL)
-	upstreamRequest, err := http.NewRequestWithContext(request.Context(), request.Method, target.String(), bytes.NewReader(body))
+	upstreamRequest, err := http.NewRequestWithContext(requestContext, request.Method, target.String(), bytes.NewReader(body))
 	if err != nil {
 		writeProxyError(response, err)
 		return
@@ -429,7 +453,7 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 		upstreamRequest.Header.Set(strings.TrimSpace(name), value)
 	}
 	if current.provider.Auth.Type == "azure-cli" {
-		token, tokenErr := current.tokens.get(request.Context(), current.provider.Auth.Resource)
+		token, tokenErr := current.tokens.get(requestContext, current.provider.Auth.Resource)
 		if tokenErr != nil {
 			writeProxyError(response, tokenErr)
 			return

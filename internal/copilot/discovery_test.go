@@ -47,6 +47,7 @@ func TestDiscoverCachesAndInvalidatesPackageHashes(t *testing.T) {
 	if err := os.WriteFile(appPath, []byte("first"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(path, "prebuilds", runtimePlatform(), "runtime.node"), []byte("runtime"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -117,4 +118,38 @@ func findPackageByPath(packages []Package, path string) Package {
 		}
 	}
 	return Package{}
+}
+
+func TestDiscoverDoesNotRewriteUnchangedHashCache(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(t.TempDir(), "package-hashes.json")
+	path := filepath.Join(root, "1.0.0")
+	if err := os.MkdirAll(filepath.Join(path, "prebuilds", runtimePlatform()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "app.js"), []byte("app"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "prebuilds", runtimePlatform(), "runtime.node"), []byte("runtime"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	options := DiscoveryOptions{AdditionalRoots: []string{root}, OnlyAdditionalRoots: true, HashCachePath: cachePath}
+	if _, err := Discover(options); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.Stat(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if _, err := Discover(options); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.Stat(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.ModTime().Equal(first.ModTime()) {
+		t.Fatal("unchanged discovery cache was rewritten")
+	}
 }

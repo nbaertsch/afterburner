@@ -1,6 +1,7 @@
 package copilot
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -219,11 +220,14 @@ func loadHashCache(path string) hashCache {
 }
 
 func saveHashCache(path string, cache hashCache) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	data, err := json.Marshal(cache)
 	if err != nil {
+		return err
+	}
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".package-hashes-*.tmp")

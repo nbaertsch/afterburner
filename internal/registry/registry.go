@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -130,6 +131,12 @@ func Load(root string) (Registry, error) {
 	if value.Extensions == nil {
 		value.Extensions = map[string]Entry{}
 	}
+	type verificationResult struct {
+		manifestHash string
+		treeHash     string
+		err          error
+	}
+	verifiedPackages := make(map[string]verificationResult)
 	for id, entry := range value.Extensions {
 		normalizeManifestNames(&entry.Manifest)
 		if entry.Manifest.ID != id {
@@ -143,8 +150,14 @@ func Load(root string) (Registry, error) {
 		}
 		entry.Verified = false
 		if !entry.Identity.IsZero() {
-			if manifestHash, treeHash, verifyErr := VerifyActivePackage(entry); verifyErr == nil {
-				entry.Verified = entry.Identity.ValidateForContent(root, entry, manifestHash, treeHash) == nil
+			key := strings.ToLower(filepath.Clean(entry.ActivePath))
+			result, ok := verifiedPackages[key]
+			if !ok {
+				result.manifestHash, result.treeHash, result.err = VerifyActivePackage(entry)
+				verifiedPackages[key] = result
+			}
+			if result.err == nil {
+				entry.Verified = entry.Identity.ValidateForContent(root, entry, result.manifestHash, result.treeHash) == nil
 			}
 		}
 		if IsReservedBuiltinID(id) && !allowedReservedBuiltinEntry(id, entry) {
@@ -289,13 +302,12 @@ func validVisibility(visibility string) bool {
 }
 
 func VerifyActivePackage(entry Entry) (manifestHash, treeHash string, err error) {
-	manifestHash, err = HashFile(filepath.Join(entry.ActivePath, "afterburner.json"))
-	if err != nil {
-		return "", "", fmt.Errorf("hash manifest: %w", err)
-	}
-	treeHash, err = HashTree(entry.ActivePath)
+	manifestHash, treeHash, err = hashPackageTree(entry.ActivePath)
 	if err != nil {
 		return "", "", fmt.Errorf("hash package tree: %w", err)
+	}
+	if manifestHash == "" {
+		return "", "", fmt.Errorf("hash manifest: afterburner.json is missing")
 	}
 	return "sha256:" + manifestHash, "sha256:" + treeHash, nil
 }
@@ -310,8 +322,14 @@ func HashFile(path string) (string, error) {
 }
 
 func HashTree(root string) (string, error) {
+	_, treeHash, err := hashPackageTree(root)
+	return treeHash, err
+}
+
+func hashPackageTree(root string) (manifestHash, treeHash string, err error) {
 	hash := sha256.New()
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+	var manifest []byte
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -337,11 +355,21 @@ func HashTree(root string) (string, error) {
 		if err != nil {
 			return err
 		}
+		if filepath.ToSlash(relative) == "afterburner.json" {
+			manifest = data
+		}
 		hash.Write(data)
 		hash.Write([]byte{0})
 		return nil
 	})
-	return hex.EncodeToString(hash.Sum(nil)), err
+	if err != nil {
+		return "", "", err
+	}
+	if manifest != nil {
+		manifestSum := sha256.Sum256(manifest)
+		manifestHash = hex.EncodeToString(manifestSum[:])
+	}
+	return manifestHash, hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func Save(root string, value Registry) error {
@@ -351,6 +379,9 @@ func Save(root string, value Registry) error {
 	}
 	data = append(data, '\n')
 	path := Path(root)
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create registry directory: %w", err)
 	}

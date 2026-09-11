@@ -22,6 +22,7 @@ func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 		if got := request.Header.Get("x-provider-routing"); got != "required" {
 			t.Fatalf("configured provider header = %q", got)
 		}
+
 		var payload struct {
 			Input []struct {
 				ID string `json:"id"`
@@ -85,6 +86,51 @@ func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 	}
 	if receivedID == longID || !strings.HasPrefix(receivedID, "ab_") {
 		t.Fatalf("input ID was not rewritten: %q", receivedID)
+	}
+}
+
+func TestProxyReportsUpstreamTimeout(t *testing.T) {
+	previousTimeout := upstreamRequestTimeout
+	upstreamRequestTimeout = 30 * time.Millisecond
+	t.Cleanup(func() {
+		upstreamRequestTimeout = previousTimeout
+	})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		time.Sleep(250 * time.Millisecond)
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	manager, err := Start(writeConfig(t, upstream.URL, availablePort(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	request, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/responses", managerPort(t, manager, 0)),
+		strings.NewReader(`{}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s", response.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "context deadline exceeded") {
+		t.Fatalf("timeout was not visible: %s", body)
 	}
 }
 

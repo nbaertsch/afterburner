@@ -29,6 +29,14 @@ type Prepared struct {
 	Path    string
 }
 
+func Validate(prepared Prepared, base copilot.Package) error {
+	if prepared.Version == "" || prepared.Path == "" ||
+		!validPreparedPackage(prepared.Path, prepared.Version, base) {
+		return fmt.Errorf("prepared runtime package no longer matches embedded runtime or base package")
+	}
+	return nil
+}
+
 func Digest() string {
 	sum := sha256.Sum256(append(append([]byte{}, runtimeHost...), runtimeAssetsDigest()...))
 	return "sha256:" + hex.EncodeToString(sum[:])
@@ -42,6 +50,9 @@ func Prepare(layout home.Layout, base copilot.Package) (Prepared, error) {
 	target := filepath.Join(root, version)
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return Prepared{}, fmt.Errorf("create runtime package root: %w", err)
+	}
+	if validPreparedPackage(target, version, base) {
+		return Prepared{Version: version, Path: target}, nil
 	}
 	release, err := platform.AcquireDirectoryLock(filepath.Join(root, ".afterburner-prepare.lock"), 30*time.Second)
 	if err != nil {

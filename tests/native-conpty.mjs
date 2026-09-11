@@ -89,8 +89,8 @@ const autoApprovePluginPermissions = activePath => {
     'import { approveAll, joinSession } from "@github/copilot-sdk/extension";'
   );
   source = source.replace(
-    "session = await joinSession({",
-    "session = await joinSession({\n    onPermissionRequest: approveAll,"
+    "joinSession({",
+    "joinSession({\n        onPermissionRequest: approveAll,"
   );
   writeFileSync(entrypoint, source, "utf8");
 };

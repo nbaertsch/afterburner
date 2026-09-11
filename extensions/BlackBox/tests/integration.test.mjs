@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { DEFAULT_MAX_BYTES, DEFAULT_SEGMENT_BYTES, loadBlackBoxConfig, resolveNativeEventsPath } from "../lib/config.mjs";
-import { buildSessionRegistration } from "../lib/session-extension.mjs";
+import { buildSessionRegistration, startSessionExtension } from "../lib/session-extension.mjs";
 import { startBlackBoxService } from "../lib/service.mjs";
 import { buildModalFrame } from "../lib/modal-surface.mjs";
 import { MODAL_ACTIVATION_POLL_MS, activate } from "../runtime/extension.mjs";
@@ -183,7 +183,6 @@ test("modal activation acknowledgement wakes without waiting for polling fallbac
     globalThis.setTimeout = (handler, delayMs, ...args) => originalSetTimeout(handler, delayMs === 100 ? 1000 : delayMs, ...args);
     t.after(() => { globalThis.setTimeout = originalSetTimeout; });
 
-    const startedAt = Date.now();
     const pending = service.requestModalOpen({ timeoutMs: 2000 });
     const requestDeadline = Date.now() + 1000;
     let requests = [];
@@ -192,9 +191,10 @@ test("modal activation acknowledgement wakes without waiting for polling fallbac
         if (requests.length === 0) await delay(10);
     }
     assert.equal(requests.length, 1);
+    const acknowledgedAt = Date.now();
     await service.completeModalOpenRequest(requests[0], { ok: true });
     assert.equal((await pending).ok, true);
-    assert.ok(Date.now() - startedAt < 500, "acknowledgement should resolve before the inflated polling fallback");
+    assert.ok(Date.now() - acknowledgedAt < 500, "acknowledgement should resolve before the inflated polling fallback");
 });
 
 test("runtime observer ignores Black Box modal self-noise", async t => {
@@ -378,6 +378,46 @@ test("session registration preserves command panels without registering a generi
     assert.match(logs[0], /1 anomalie/);
 });
 
+test("session commands register while optional Black Box startup is blocked", async () => {
+    let releaseStartup;
+    const blockedStartup = new Promise(resolve => { releaseStartup = resolve; });
+    let registration;
+    const logs = [];
+    const activation = startSessionExtension({
+        startService: () => blockedStartup,
+        joinSession: async value => {
+            registration = value;
+            return { log: async message => logs.push(message) };
+        }
+    });
+    const instance = await Promise.race([
+        activation,
+        delay(250).then(() => assert.fail("Black Box activation waited for optional service startup"))
+    ]);
+    assert.ok(command(registration, "black-box"));
+
+    const pendingCommand = command(registration, "black-box").handler();
+    releaseStartup(Promise.reject(new Error("native recovery blocked")));
+    await pendingCommand;
+    await waitFor(() => logs.length > 0);
+    assert.ok(logs.some(message => /Black Box startup failed: native recovery blocked/.test(message)));
+    await instance.dispose();
+});
+
+test("disposing before deferred Black Box startup closes the eventual service", async () => {
+    let releaseStartup;
+    const blockedStartup = new Promise(resolve => { releaseStartup = resolve; });
+    let closeCount = 0;
+    const instance = await startSessionExtension({
+        startService: () => blockedStartup,
+        joinSession: async () => ({ log: async () => {} })
+    });
+    await instance.dispose();
+    releaseStartup({ ...fakePanelService(), close: async () => { closeCount++; } });
+    await instance.ready;
+    assert.equal(closeCount, 1);
+});
+
 test("session registration renders the visible panel without canvas support", async () => {
     const { registration, logs } = await captureSessionRegistration({ withoutCanvas: true });
     assert.deepEqual(registration.canvases, []);
@@ -539,7 +579,7 @@ test("installed-like activation uses only the native modal runtime API", async t
     await instance.dispose();
 });
 
-test("runtime modal activation poll stays inside interactive latency budget", async t => {
+test("runtime modal activation uses a low-frequency reconciliation poll", async t => {
     await configureRuntimeEnvironment(t, "runtime-modal-activation-latency");
     const intervals = [];
     const originalSetInterval = globalThis.setInterval;
@@ -556,7 +596,7 @@ test("runtime modal activation poll stays inside interactive latency budget", as
     });
     t.after(() => instance?.dispose());
 
-    assert.ok(MODAL_ACTIVATION_POLL_MS <= 100, `modal activation poll ${MODAL_ACTIVATION_POLL_MS}ms exceeds latency budget`);
+    assert.ok(MODAL_ACTIVATION_POLL_MS >= 1000, `modal activation poll ${MODAL_ACTIVATION_POLL_MS}ms is unexpectedly frequent`);
     assert.ok(intervals.includes(MODAL_ACTIVATION_POLL_MS));
     const opened = await instance.service.requestModalOpen({ timeoutMs: 2000 });
     assert.equal(opened.ok, true);

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func signedReleaseSource(id string) Source {
@@ -17,6 +18,29 @@ func signedReleaseSource(id string) Source {
 		Digest:            "sha256:" + strings.Repeat("b", 64),
 		ManifestDigest:    "sha256:" + strings.Repeat("c", 64),
 		SignerFingerprint: "sha256:" + strings.Repeat("d", 64),
+	}
+}
+
+func TestSaveDoesNotRewriteUnchangedRegistry(t *testing.T) {
+	root := t.TempDir()
+	value := Registry{SchemaVersion: 1, Extensions: map[string]Entry{}}
+	if err := Save(root, value); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.Stat(Path(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := Save(root, value); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.Stat(Path(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.ModTime().Equal(first.ModTime()) {
+		t.Fatal("unchanged registry was rewritten")
 	}
 }
 

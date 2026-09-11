@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -52,55 +53,121 @@ func Ensure(
 	extensionRegistry *registry.Registry,
 	stderr io.Writer,
 ) (Result, error) {
-	fingerprint, err := registryFingerprint(layout.Root)
-	if err != nil {
-		return Result{}, err
-	}
 	if os.Getenv("AFTERBURNER_SKIP_PREFLIGHT") == "1" {
 		return Result{Package: selection.Package, Profile: selection.Profile, Prepared: prepared}, nil
 	}
-	state, _ := load(layout.Root)
+	fingerprint, err := registryFingerprint(extensionRegistry)
+	if err != nil {
+		return Result{}, err
+	}
+	if deepValidationRequested(layout.Root) {
+		result, err := ensureDeep(ctx, layout, executable, selection, prepared, env, extensionRegistry, stderr, fingerprint)
+		if err == nil {
+			_ = os.Remove(deepValidationRequestPath(layout.Root))
+		}
+		return result, err
+	}
+	state, _ := loadCompatible(layout.Root)
 	if tupleMatches(state, selection, prepared, fingerprint) {
 		return Result{Package: selection.Package, Profile: selection.Profile, Prepared: prepared}, nil
 	}
-	if err := validate(ctx, executable, prepared.Version, env, extensionRegistry); err == nil {
-		tuple := Tuple{
-			SchemaVersion:       1,
-			Package:             selection.Package,
-			ProfileID:           selection.Profile.ID,
-			RuntimeVersion:      prepared.Version,
-			RuntimePath:         prepared.Path,
-			RegistryFingerprint: fingerprint,
-			ValidatedAt:         time.Now().UTC(),
-		}
-		if err := save(layout.Root, tuple); err != nil {
+	tuple := tupleFor(selection, prepared, fingerprint)
+	if err := validateTuple(tuple); err == nil {
+		if err := saveCompatible(layout.Root, tuple); err != nil {
 			return Result{}, err
 		}
 		return Result{Package: selection.Package, Profile: selection.Profile, Prepared: prepared}, nil
 	} else {
 		failure := err.Error()
-		fallback, loadErr := load(layout.Root)
-		if loadErr != nil {
-			return Result{}, fmt.Errorf("runtime preflight failed (%s) and no last-known-good tuple is available: %w", failure, loadErr)
-		}
-		if validateErr := validateTuple(fallback); validateErr != nil {
-			return Result{}, fmt.Errorf("runtime preflight failed (%s) and last-known-good tuple is invalid: %w", failure, validateErr)
-		}
-		if fallback.RegistryFingerprint != fingerprint {
-			return Result{}, fmt.Errorf("runtime preflight failed (%s) and the last-known-good tuple was validated with a different extension registry", failure)
-		}
-		profile, ok := compatibility.FindProfile(fallback.ProfileID)
-		if !ok {
-			return Result{}, fmt.Errorf("last-known-good compatibility profile %q is unavailable", fallback.ProfileID)
-		}
-		fmt.Fprintf(stderr, "Warning: Copilot %s failed Afterburner preflight; falling back to validated %s. Run 'afterburn doctor'.\n", selection.Package.Version, fallback.Package.Version)
-		return Result{
-			Package:      fallback.Package,
-			Profile:      profile,
-			Prepared:     runtimepkg.Prepared{Version: fallback.RuntimeVersion, Path: fallback.RuntimePath},
-			UsedFallback: true,
-			Failure:      failure,
-		}, nil
+		return fallbackResult(layout.Root, selection.Package.Version, fingerprint, failure, stderr)
+	}
+}
+
+func ensureDeep(
+	ctx context.Context,
+	layout home.Layout,
+	executable string,
+	selection compatibility.Selection,
+	prepared runtimepkg.Prepared,
+	env []string,
+	extensionRegistry *registry.Registry,
+	stderr io.Writer,
+	fingerprint string,
+) (Result, error) {
+	if err := DeepValidate(ctx, layout, executable, selection, prepared, env, extensionRegistry); err != nil {
+		return fallbackResult(layout.Root, selection.Package.Version, fingerprint, err.Error(), stderr)
+	}
+	return Result{Package: selection.Package, Profile: selection.Profile, Prepared: prepared}, nil
+}
+
+func DeepValidate(
+	ctx context.Context,
+	layout home.Layout,
+	executable string,
+	selection compatibility.Selection,
+	prepared runtimepkg.Prepared,
+	env []string,
+	extensionRegistry *registry.Registry,
+) error {
+	fingerprint, err := registryFingerprint(extensionRegistry)
+	if err != nil {
+		return err
+	}
+	tuple := tupleFor(selection, prepared, fingerprint)
+	if err := validateTuple(tuple); err != nil {
+		return fmt.Errorf("static runtime validation failed: %w", err)
+	}
+	if err := validate(ctx, executable, prepared.Version, env, extensionRegistry); err != nil {
+		return err
+	}
+	if err := save(layout.Root, tuple); err != nil {
+		return err
+	}
+	return saveCompatible(layout.Root, tuple)
+}
+
+func RequestDeepValidation(root string) error {
+	path := deepValidationRequestPath(root)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte("requested\n"), 0o600)
+}
+
+func fallbackResult(root, selectedVersion, fingerprint, failure string, stderr io.Writer) (Result, error) {
+	fallback, loadErr := load(root)
+	if loadErr != nil {
+		return Result{}, fmt.Errorf("runtime validation failed (%s) and no last-known-good tuple is available: %w", failure, loadErr)
+	}
+	if validateErr := validateTuple(fallback); validateErr != nil {
+		return Result{}, fmt.Errorf("runtime validation failed (%s) and last-known-good tuple is invalid: %w", failure, validateErr)
+	}
+	if fallback.RegistryFingerprint != fingerprint {
+		return Result{}, fmt.Errorf("runtime validation failed (%s) and the last-known-good tuple was validated with a different extension registry", failure)
+	}
+	profile, ok := compatibility.FindProfile(fallback.ProfileID)
+	if !ok {
+		return Result{}, fmt.Errorf("last-known-good compatibility profile %q is unavailable", fallback.ProfileID)
+	}
+	fmt.Fprintf(stderr, "Warning: Copilot %s failed Afterburner validation; falling back to validated %s. Run 'afterburn doctor'.\n", selectedVersion, fallback.Package.Version)
+	return Result{
+		Package:      fallback.Package,
+		Profile:      profile,
+		Prepared:     runtimepkg.Prepared{Version: fallback.RuntimeVersion, Path: fallback.RuntimePath},
+		UsedFallback: true,
+		Failure:      failure,
+	}, nil
+}
+
+func tupleFor(selection compatibility.Selection, prepared runtimepkg.Prepared, fingerprint string) Tuple {
+	return Tuple{
+		SchemaVersion:       1,
+		Package:             selection.Package,
+		ProfileID:           selection.Profile.ID,
+		RuntimeVersion:      prepared.Version,
+		RuntimePath:         prepared.Path,
+		RegistryFingerprint: fingerprint,
+		ValidatedAt:         time.Now().UTC(),
 	}
 }
 
@@ -218,8 +285,11 @@ func validateTuple(tuple Tuple) error {
 		}
 	}
 
-	if _, err := os.Stat(filepath.Join(tuple.RuntimePath, "app.js")); err != nil {
-		return fmt.Errorf("prepared runtime is unavailable: %w", err)
+	if err := runtimepkg.Validate(
+		runtimepkg.Prepared{Version: tuple.RuntimeVersion, Path: tuple.RuntimePath},
+		tuple.Package,
+	); err != nil {
+		return fmt.Errorf("prepared runtime is invalid: %w", err)
 	}
 	return nil
 }
@@ -234,7 +304,15 @@ func metadataMatches(path string, size, modified int64) bool {
 }
 
 func load(root string) (Tuple, error) {
-	data, err := os.ReadFile(statePath(root))
+	return loadFrom(statePath(root))
+}
+
+func loadCompatible(root string) (Tuple, error) {
+	return loadFrom(compatibleStatePath(root))
+}
+
+func loadFrom(path string) (Tuple, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return Tuple{}, err
 	}
@@ -246,7 +324,14 @@ func load(root string) (Tuple, error) {
 }
 
 func save(root string, tuple Tuple) error {
-	path := statePath(root)
+	return saveTo(statePath(root), tuple)
+}
+
+func saveCompatible(root string, tuple Tuple) error {
+	return saveTo(compatibleStatePath(root), tuple)
+}
+
+func saveTo(path string, tuple Tuple) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -276,6 +361,19 @@ func statePath(root string) string {
 	return filepath.Join(root, "state", "last-known-good.json")
 }
 
+func compatibleStatePath(root string) string {
+	return filepath.Join(root, "state", "compatible-selection.json")
+}
+
+func deepValidationRequestPath(root string) string {
+	return filepath.Join(root, "state", "deep-validation-requested")
+}
+
+func deepValidationRequested(root string) bool {
+	_, err := os.Stat(deepValidationRequestPath(root))
+	return err == nil
+}
+
 func ValidateStored(root string) error {
 	tuple, err := load(root)
 	if err != nil {
@@ -284,11 +382,36 @@ func ValidateStored(root string) error {
 	return validateTuple(tuple)
 }
 
-func registryFingerprint(root string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(root, "registry.json"))
-	if os.IsNotExist(err) {
-		data = []byte("{}")
-	} else if err != nil {
+func registryFingerprint(value *registry.Registry) (string, error) {
+	type runtimeEntry struct {
+		ID         string                   `json:"id"`
+		Enabled    bool                     `json:"enabled"`
+		Verified   bool                     `json:"verified"`
+		ActivePath string                   `json:"activePath"`
+		Manifest   registry.Manifest        `json:"manifest"`
+		Source     registry.Source          `json:"source"`
+		Identity   registry.IdentityBinding `json:"identity"`
+	}
+	entries := make([]runtimeEntry, 0)
+	if value != nil {
+		ids := make([]string, 0, len(value.Extensions))
+		for id, entry := range value.Extensions {
+			if entry.Enabled {
+				ids = append(ids, id)
+			}
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			entry := value.Extensions[id]
+			entries = append(entries, runtimeEntry{
+				ID: id, Enabled: entry.Enabled, Verified: entry.Verified,
+				ActivePath: filepath.Clean(entry.ActivePath), Manifest: entry.Manifest,
+				Source: entry.Source, Identity: entry.Identity,
+			})
+		}
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(data)

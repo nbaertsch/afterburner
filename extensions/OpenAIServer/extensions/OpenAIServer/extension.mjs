@@ -3,6 +3,7 @@ import { joinSession } from "@github/copilot-sdk/extension";
 import { CopilotSessionAdapter, createBridge, loadConfig } from "./bridge.mjs";
 import { completeBridgeActionRequest, consumeBridgeActionRequests, requestModalOpen, writeBridgeState } from "./modal-ipc.mjs";
 import { configuredPathCandidates, displayConfigPath } from "./names.mjs";
+import { registerThenInitialize } from "./session-startup.mjs";
 
 let activeConfigPath = displayConfigPath();
 
@@ -24,6 +25,7 @@ async function readConfig() {
 let session;
 let bridge;
 let lastStart;
+let bridgeStartPromise;
 
 function status() {
     return {
@@ -34,17 +36,25 @@ function status() {
 }
 
 async function startBridge() {
-    if (!bridge) {
-        const config = loadConfig(await readConfig());
-        bridge = createBridge({
-            adapter: new CopilotSessionAdapter(session, config),
-            config,
-            logger: console,
-            identity: { sessionId: process.env.COPILOT_AGENT_SESSION_ID, routeId: process.env.AFTERBURNER_SESSION_ROUTE }
-        });
+    if (bridgeStartPromise) return bridgeStartPromise;
+    bridgeStartPromise = (async () => {
+        if (!bridge) {
+            const config = loadConfig(await readConfig());
+            bridge = createBridge({
+                adapter: new CopilotSessionAdapter(session, config),
+                config,
+                logger: console,
+                identity: { sessionId: process.env.COPILOT_AGENT_SESSION_ID, routeId: process.env.AFTERBURNER_SESSION_ROUTE }
+            });
+        }
+        lastStart = await bridge.start();
+        return lastStart;
+    })();
+    try {
+        return await bridgeStartPromise;
+    } finally {
+        bridgeStartPromise = undefined;
     }
-    lastStart = await bridge.start();
-    return lastStart;
 }
 
 function formatStatus(snapshot = status()) {
@@ -80,6 +90,8 @@ async function handleBridgeAction(request) {
 }
 
 let actionPump;
+let startup;
+let disposed = false;
 async function pollBridgeActions() {
     const requests = await consumeBridgeActionRequests().catch(() => []);
     for (const request of requests) await handleBridgeAction(request);
@@ -108,31 +120,46 @@ async function handleMenuCommand(input = {}) {
     }
 }
 
-session = await joinSession({
-    commands: [
-        {
-            name: "openai-server",
-            description: "Open the interactive OpenAI Server management menu.",
-            handler: handleMenuCommand
-        },
-        {
-            name: "copilot-openai",
-            description: "Deprecated alias for /openai-server.",
-            hidden: true,
-            handler: handleMenuCommand
+startup = await registerThenInitialize({
+    joinSession,
+    registration: {
+        commands: [
+            {
+                name: "openai-server",
+                description: "Open the interactive OpenAI Server management menu.",
+                handler: handleMenuCommand
+            },
+            {
+                name: "copilot-openai",
+                description: "Deprecated alias for /openai-server.",
+                hidden: true,
+                handler: handleMenuCommand
+            }
+        ],
+        canvases: []
+    },
+    initialize: async joinedSession => {
+        if (disposed) return;
+        session = joinedSession;
+        startActionPump();
+        const config = await readConfig();
+        if (disposed) return;
+        if (config.enabled === true) {
+            await startBridge();
+            if (disposed) {
+                await bridge?.stop?.();
+                return;
+            }
+            await writeBridgeState(status(), "auto-started");
+            await session.log(formatStatus(lastStart));
         }
-    ],
-    canvases: []
+    }
 });
-startActionPump();
-
-if ((await readConfig()).enabled === true) {
-    await startBridge();
-    await writeBridgeState(status(), "auto-started");
-    await session.log(formatStatus(lastStart));
-}
+session = startup.session;
 
 export async function dispose() {
+    disposed = true;
+    startup?.dispose();
     if (actionPump) clearInterval(actionPump);
     await bridge?.stop?.();
 }

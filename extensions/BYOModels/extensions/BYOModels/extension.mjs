@@ -4,9 +4,19 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { createCanvas } from "@github/copilot-sdk";
 import { joinSession } from "@github/copilot-sdk/extension";
+import { activateModelRegistration } from "./activation.mjs";
+import {
+    capabilityCache,
+    configuredRegistration,
+    withDeadline
+} from "./model-metadata.mjs";
 import { proxyConfiguration, startRequestCompatibilityProxy } from "./request-compatibility.mjs";
 
 const execFileAsync = promisify(execFile);
+const rpcTimeoutMs = 10_000;
+const sessionTimeoutMs = 30_000;
+const azureCliTimeoutMs = 30_000;
+const refreshTimeoutMs = 120_000;
 const afterburnerHome = process.env.AFTERBURNER_HOME ??
     join(process.env.USERPROFILE ?? "", ".afterburner");
 const configuredPath = process.env.AFTERBURNER_BYOMODELS_CONFIG?.trim() ||
@@ -132,6 +142,13 @@ function validateConfig() {
         if (modelIds.has(selectionId)) {
             throw new Error(`Duplicate BYOModels model selection ID: ${selectionId}`);
         }
+        const hasConfiguredCapabilities = ["maxPromptTokens", "maxContextWindowTokens", "maxOutputTokens", "capabilities"]
+            .some((field) => Object.hasOwn(model, field));
+        if (hasConfiguredCapabilities && !configuredRegistration(model)) {
+            throw new Error(
+                `Model '${selectionId}' must define complete numeric token limits and boolean vision/reasoning support.`
+            );
+        }
         modelIds.add(selectionId);
     }
 }
@@ -248,7 +265,8 @@ async function acquireAzureCliToken(resource) {
                 encoding: "utf8",
                 maxBuffer: 1024 * 1024,
                 shell: process.platform === "win32",
-                windowsHide: true
+                windowsHide: true,
+                timeout: azureCliTimeoutMs
             }
         );
 
@@ -403,6 +421,20 @@ function buildRuntimeMetadata(models, catalog) {
     });
 }
 
+let metadataReadWarning;
+async function readRuntimeMetadata() {
+    try {
+        return JSON.parse(await readFile(runtimeMetadataPath, "utf8"));
+    } catch (error) {
+        if (error?.code === "ENOENT") return null;
+        if (error instanceof SyntaxError) {
+            metadataReadWarning = `Ignored invalid BYOModels capability cache '${runtimeMetadataPath}': ${error.message}`;
+            return null;
+        }
+        throw error;
+    }
+}
+
 async function writeRuntimeMetadata(metadata) {
     const content = `${JSON.stringify(metadata, null, 2)}\n`;
     let existing;
@@ -495,36 +527,85 @@ const modelsCanvas = createCanvas({
 
 let session;
 const hydratedProviders = await Promise.all(config.providers.map(hydrateProvider));
-session = await joinSession({
-    providers: hydratedProviders,
-    commands: [
-        {
-            name: "byomodels",
-            description: "List registered BYOModels deployments and status.",
-            handler: async () => {
-                const status = getStatus();
-                await session.log(
-                    `BYOModels status: ${status.providerCount} provider(s), ${status.modelCount} model(s), ` +
-                    `token cache ${status.activeTokenCache ? "active" : "empty"}, ` +
-                    `plugin data ${status.pluginDataAvailable ? "available" : "unavailable"}. ` +
-                    `Models: ${formatModelSummary()}`
-                );
+session = await withDeadline(
+    joinSession({
+        providers: hydratedProviders,
+        commands: [
+            {
+                name: "byomodels",
+                description: "List registered BYOModels deployments and status.",
+                handler: async () => {
+                    const status = getStatus();
+                    await logVisible(
+                        `BYOModels status: ${status.providerCount} provider(s), ${status.modelCount} model(s), ` +
+                        `token cache ${status.activeTokenCache ? "active" : "empty"}, ` +
+                        `plugin data ${status.pluginDataAvailable ? "available" : "unavailable"}. ` +
+                        `Models: ${formatModelSummary()}`
+                    );
+                }
             }
-        }
-    ],
-    canvases: [modelsCanvas]
-});
-
-const catalog = await session.rpc.model.list();
-const catalogModels = catalog.list ?? [];
-registeredModels = config.models.map((model) => hydrateModelFromCatalog(model, catalogModels));
-await writeRuntimeMetadata({
-    version: 1,
-    models: buildRuntimeMetadata(config.models, catalogModels)
-});
-await session.rpc.provider.add({ models: registeredModels });
-
-await session.log(
-    `Registered ${registeredModels.length} BYOModels model(s) from live upstream capabilities: ` +
-        registeredModels.map((model) => `${model.provider}/${model.id} <- ${model.modelId}`).join(", ")
+        ],
+        canvases: [modelsCanvas]
+    }),
+    sessionTimeoutMs,
+    "BYOModels session connection"
 );
+
+async function logVisible(message) {
+    try {
+        await withDeadline(session.log(message), rpcTimeoutMs, "BYOModels status reporting");
+    } catch (error) {
+        console.error(`${message} (status reporting failed: ${error?.message ?? String(error)})`);
+    }
+}
+
+const cachedMetadata = await readRuntimeMetadata();
+if (metadataReadWarning) {
+    await logVisible(metadataReadWarning);
+}
+
+async function refreshCapabilities() {
+    const catalog = await withDeadline(
+        session.rpc.model.list(),
+        rpcTimeoutMs,
+        "BYOModels live capability discovery"
+    );
+    const catalogModels = catalog.list ?? [];
+    const refreshedModels = config.models.map((model) => hydrateModelFromCatalog(model, catalogModels));
+    const runtimeModels = buildRuntimeMetadata(config.models, catalogModels);
+    await withDeadline(
+        session.rpc.provider.add({ models: refreshedModels }),
+        rpcTimeoutMs,
+        "BYOModels refreshed model registration"
+    );
+    registeredModels = refreshedModels;
+    await writeRuntimeMetadata(capabilityCache(config.models, refreshedModels, runtimeModels));
+    await logVisible(
+        `Registered ${registeredModels.length} BYOModels model(s) from live upstream capabilities: ` +
+            registeredModels.map((model) => `${model.provider}/${model.id} <- ${model.modelId}`).join(", ")
+    );
+}
+
+registeredModels = await activateModelRegistration({
+    models: config.models,
+    cache: cachedMetadata,
+    register: (models) => withDeadline(
+        session.rpc.provider.add({ models }),
+        rpcTimeoutMs,
+        "BYOModels cached/configured model registration"
+    ),
+    report: logVisible,
+    refresh: async (immediate) => {
+        registeredModels = immediate;
+        try {
+            await withDeadline(refreshCapabilities(), refreshTimeoutMs, "BYOModels capability refresh");
+        } catch (error) {
+            const retained = registeredModels.length > 0
+                ? ` Retaining ${registeredModels.length} validated cached/configured model(s).`
+                : " No BYOModels models were registered.";
+            await logVisible(
+                `BYOModels capability refresh failed: ${error?.message ?? String(error)}.${retained}`
+            );
+        }
+    }
+});

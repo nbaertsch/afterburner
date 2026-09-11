@@ -1200,6 +1200,8 @@ if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
     process.stderr.write(`[runtime-extension-host] loaded from ${wrapperDir}; base ${copilotRoot}\n`);
 }
 const pickerAdapters = [];
+const pickerAdapterOrders = new WeakMap();
+let pickerAdapterRegistrationSequence = 0;
 const appSourceTransforms = [];
 const externalTaskProviders = new Map();
 const externalTaskSubscriptions = new Map();
@@ -2076,11 +2078,21 @@ function installPickerBridge() {
     };
 }
 
-function registerModelPickerAdapter(adapter) {
+function registerModelPickerAdapter(adapter, activationOrder = Number.MAX_SAFE_INTEGER) {
     if (!adapter || typeof adapter.matches !== "function" || typeof adapter.upstreamModelId !== "function") {
         throw new Error("A model picker adapter must define matches() and upstreamModelId().");
     }
+    pickerAdapterOrders.set(adapter, {
+        activationOrder: Number.isSafeInteger(activationOrder) ? activationOrder : Number.MAX_SAFE_INTEGER,
+        registrationSequence: pickerAdapterRegistrationSequence++
+    });
     pickerAdapters.push(adapter);
+    pickerAdapters.sort((left, right) => {
+        const leftOrder = pickerAdapterOrders.get(left);
+        const rightOrder = pickerAdapterOrders.get(right);
+        return leftOrder.activationOrder - rightOrder.activationOrder ||
+            leftOrder.registrationSequence - rightOrder.registrationSequence;
+    });
     let selectionIds = [];
     try { selectionIds = adapter.selectionIds?.() ?? []; }
     catch (error) { reportInstrumentationFailure("registerModelPickerAdapter", error); }
@@ -2094,11 +2106,70 @@ function registerModelPickerAdapter(adapter) {
     }
 }
 
-function registerAppSourceTransform(transform) {
+function registerAppSourceTransform(transform, extensionId = "runtime", activationOrder = Number.MAX_SAFE_INTEGER) {
     if (typeof transform !== "function") {
         throw new Error("An app source transform must be a function.");
     }
-    appSourceTransforms.push(transform);
+    appSourceTransforms.push({ transform, extensionId, activationOrder });
+}
+
+function runtimePhaseStartedAt() {
+    return process.hrtime.bigint();
+}
+
+function runtimePhaseDurationMs(startedAt) {
+    return Number(((Number(process.hrtime.bigint() - startedAt) / 1e6).toFixed(3)));
+}
+
+async function runTimedRuntimePhase(eventType, metadata, operation) {
+    const startedAt = runtimePhaseStartedAt();
+    emitRuntimeEvent(`${eventType}.started`, metadata);
+    try {
+        const result = await operation();
+        const durationMs = runtimePhaseDurationMs(startedAt);
+        emitRuntimeEvent(`${eventType}.completed`, { ...metadata, durationMs });
+        if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
+            const subject = metadata?.extensionId ? ` '${metadata.extensionId}'` : "";
+            process.stderr.write(`[runtime-extension-host] ${eventType}${subject} completed in ${durationMs}ms\n`);
+        }
+        return { result, durationMs };
+    } catch (error) {
+        emitRuntimeEvent(`${eventType}.failed`, {
+            ...metadata,
+            durationMs: runtimePhaseDurationMs(startedAt),
+            failureKind: error?.name ?? "Error"
+        });
+        throw error;
+    }
+}
+
+async function runSerialRuntimeActivationLane(activations) {
+    for (const activate of activations) await activate();
+}
+
+async function activateRuntimeExtensionLanes(copilotActivations, afterburnerActivations) {
+    await Promise.all([
+        runSerialRuntimeActivationLane(copilotActivations),
+        runSerialRuntimeActivationLane(afterburnerActivations)
+    ]);
+}
+
+async function activateRuntimeExtensionGroups(copilotActivations, blockingAfterburnerActivations,
+    deferredAfterburnerActivations) {
+    const deferredCompletion = runSerialRuntimeActivationLane(deferredAfterburnerActivations);
+    await activateRuntimeExtensionLanes(copilotActivations, blockingAfterburnerActivations);
+    return { deferredCompletion };
+}
+
+function immutableNativeRuntimeExtension(assertion, manifest) {
+    return assertion?.trustedBuiltin === true &&
+        trustedBuiltinSourceTypes.has(assertion.sourceType) &&
+        manifest?.visibility === "builtin";
+}
+
+function runtimeExtensionBlocksAppImport(manifest) {
+    return Array.isArray(manifest?.capabilities) &&
+        manifest.capabilities.includes("application-source-transform");
 }
 
 function parseJsonc(text) {
@@ -2320,6 +2391,10 @@ function runtimeExtensionApi(pluginRoot, options = {}) {
     const runtimeObserverAllowed = runtimeObserverGrantDecision(context, grantResolver).allowed === true;
     const modalSurfaceIds = declaredModalSurfaceIds(context);
     const modalAllowed = nativeIdentityVerified(context) && modalSurfaceIds.size > 0;
+    const scopedRegisterModelPickerAdapter = (adapter) =>
+        registerModelPickerAdapter(adapter, options.activationOrder);
+    const scopedRegisterAppSourceTransform = (transform) =>
+        registerAppSourceTransform(transform, context.extensionId, options.activationOrder);
     const scopedRegisterRuntimeObserver = (definition) => {
         assertRuntimeObserverGrant(context, grantResolver);
         return registerRuntimeObserver(definition, ownerOptions);
@@ -2359,8 +2434,8 @@ function runtimeExtensionApi(pluginRoot, options = {}) {
             return typeof value === "string" && /^[A-Za-z0-9_-]{32,128}$/.test(value) ? value : undefined;
         })(),
         ui,
-        registerModelPickerAdapter,
-        registerAppSourceTransform,
+        registerModelPickerAdapter: scopedRegisterModelPickerAdapter,
+        registerAppSourceTransform: scopedRegisterAppSourceTransform,
         registerExternalTaskProvider,
         ...(runtimeObserverAllowed ? {
             registerRuntimeObserver: scopedRegisterRuntimeObserver,
@@ -2395,6 +2470,8 @@ async function loadRuntimeExtensions() {
         }
         config = {};
     }
+    const copilotActivations = [];
+    let activationOrder = 0;
     for (const plugin of config.installedPlugins ?? []) {
         if (plugin.enabled !== true || typeof plugin.cache_path !== "string") continue;
         const metadata = {
@@ -2416,26 +2493,34 @@ async function loadRuntimeExtensions() {
         }
         if (afterburnerManifest) continue;
         const entrypoint = join(plugin.cache_path, "runtime/extension.mjs");
-        try {
-            await access(entrypoint, fsConstants.R_OK);
-            emitRuntimeEvent("extension.discovered", metadata);
-            emitRuntimeEvent("extension.activation.started", metadata);
-            const module = await import(pathToFileURL(entrypoint).href);
-            if (typeof module.activate !== "function") throw new Error("runtime/extension.mjs must export activate().");
-            await module.activate(runtimeExtensionApi(plugin.cache_path, { ...metadata, manifest: afterburnerManifest }));
-            emitRuntimeEvent("extension.activated", metadata);
-            if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
-                process.stderr.write(`[runtime-extension-host] activated '${plugin.name}'\n`);
+        const extensionActivationOrder = activationOrder++;
+        copilotActivations.push(async () => {
+            try {
+                await access(entrypoint, fsConstants.R_OK);
+                emitRuntimeEvent("extension.discovered", metadata);
+                const imported = await runTimedRuntimePhase("extension.import", metadata,
+                    () => import(pathToFileURL(entrypoint).href));
+                if (typeof imported.result.activate !== "function") throw new Error("runtime/extension.mjs must export activate().");
+                const activated = await runTimedRuntimePhase("extension.activation", metadata,
+                    () => imported.result.activate(runtimeExtensionApi(plugin.cache_path, {
+                        ...metadata,
+                        activationOrder: extensionActivationOrder,
+                        manifest: afterburnerManifest
+                    })));
+                emitRuntimeEvent("extension.activated", { ...metadata, durationMs: activated.durationMs });
+                if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1") {
+                    process.stderr.write(`[runtime-extension-host] activated '${plugin.name}' in ${activated.durationMs}ms\n`);
+                }
+            } catch (error) {
+                if (error?.code !== "ENOENT") {
+                    emitRuntimeEvent("extension.failed", {
+                        ...metadata,
+                        failureKind: error?.name ?? "Error"
+                    });
+                    process.stderr.write(`Warning: runtime extension '${plugin.name}' failed: ${error?.message ?? String(error)}\n`);
+                }
             }
-        } catch (error) {
-            if (error?.code !== "ENOENT") {
-                emitRuntimeEvent("extension.failed", {
-                    ...metadata,
-                    failureKind: error?.name ?? "Error"
-                });
-                process.stderr.write(`Warning: runtime extension '${plugin.name}' failed: ${error?.message ?? String(error)}\n`);
-            }
-        }
+        });
     }
     const registryPath = join(process.env.AFTERBURNER_HOME ?? join(process.env.USERPROFILE ?? "", ".afterburner"),
         "registry.json");
@@ -2454,9 +2539,13 @@ async function loadRuntimeExtensions() {
     }
     const disabledExtensions = new Set((process.env.AFTERBURNER_DISABLED_EXTENSIONS ?? "")
         .split(",").map(value => value.trim()).filter(Boolean));
+    const blockingAfterburnerActivations = [];
+    const deferredAfterburnerActivations = [];
     for (const [id, entry] of Object.entries(registry.extensions ?? {})) {
         if (disabledExtensions.has("*") || disabledExtensions.has(id)) continue;
         if (entry?.enabled !== true || typeof entry.activePath !== "string") continue;
+        const extensionActivationOrder = activationOrder++;
+        const assertion = nativeIdentityAssertionFor(id, entry.activePath);
         let metadata = {
             extensionId: safeRuntimeIdentifier(id, "ext"),
             extensionKind: "afterburner"
@@ -2464,36 +2553,49 @@ async function loadRuntimeExtensions() {
         try {
             const manifestData = await readFile(join(entry.activePath, "afterburner.json"), "utf8");
             const manifest = safeJSONParse(manifestData);
-            const assertion = nativeIdentityAssertionFor(id, entry.activePath);
-            const verifiedIdentity = await verifyRuntimePackageIdentity(entry.activePath, manifestData, assertion);
+            const immutableIdentity = immutableNativeRuntimeExtension(assertion, manifest);
+            const verified = await runTimedRuntimePhase("extension.identity", metadata,
+                () => verifyRuntimePackageIdentity(entry.activePath, manifestData, assertion));
+            const verifiedIdentity = verified.result;
             const identityMetadata = {
-                manifestHash: verifiedIdentity?.manifestHash,
-                packageTreeHash: verifiedIdentity?.treeHash,
-                registrySource: assertion ? { type: assertion.sourceType, value: assertion.sourceValue } : undefined,
+                manifestHash: verifiedIdentity.manifestHash,
+                packageTreeHash: verifiedIdentity.treeHash,
+                registrySource: { type: assertion.sourceType, value: assertion.sourceValue },
                 nativeIdentityAssertion: assertion
             };
             metadata = {
                 ...metadata,
                 version: typeof manifest.version === "string" ? manifest.version : undefined
             };
-            emitRuntimeEvent("extension.discovered", metadata);
-            emitRuntimeEvent("extension.activation.started", metadata);
-            const entrypoint = join(entry.activePath, manifest.runtime.entrypoint);
-            const module = await import(pathToFileURL(entrypoint).href);
-            if (typeof module.activate !== "function")
-                throw new Error(`Afterburner extension '${id}' must export activate().`);
-            const finalManifestData = await readFile(join(entry.activePath, "afterburner.json"), "utf8");
-            const finalIdentity = await verifyRuntimePackageIdentity(entry.activePath, finalManifestData, assertion);
-            await module.activate(runtimeExtensionApi(entry.activePath, {
-                ...metadata,
-                ...identityMetadata,
-                manifestHash: finalIdentity?.manifestHash,
-                packageTreeHash: finalIdentity?.treeHash,
-                manifest
-            }));
-            emitRuntimeEvent("extension.activated", metadata);
-            if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1")
-                process.stderr.write(`[runtime-extension-host] activated Afterburner extension '${id}'\n`);
+            const activationLane = immutableIdentity && !runtimeExtensionBlocksAppImport(manifest)
+                ? deferredAfterburnerActivations
+                : blockingAfterburnerActivations;
+            activationLane.push(async () => {
+                try {
+                emitRuntimeEvent("extension.discovered", metadata);
+                const entrypoint = join(entry.activePath, manifest.runtime.entrypoint);
+                const imported = await runTimedRuntimePhase("extension.import", metadata,
+                    () => import(pathToFileURL(entrypoint).href));
+                if (typeof imported.result.activate !== "function")
+                    throw new Error(`Afterburner extension '${id}' must export activate().`);
+                const activated = await runTimedRuntimePhase("extension.activation", metadata,
+                    () => imported.result.activate(runtimeExtensionApi(entry.activePath, {
+                        ...metadata,
+                        ...identityMetadata,
+                        activationOrder: extensionActivationOrder,
+                        manifest
+                    })));
+                emitRuntimeEvent("extension.activated", { ...metadata, durationMs: activated.durationMs });
+                if (process.env.COPILOT_RUNTIME_EXTENSION_DEBUG === "1")
+                    process.stderr.write(`[runtime-extension-host] activated Afterburner extension '${id}' in ${activated.durationMs}ms\n`);
+                } catch (error) {
+                    emitRuntimeEvent("extension.failed", {
+                        ...metadata,
+                        failureKind: error?.name ?? "Error"
+                    });
+                    process.stderr.write(`Warning: Afterburner extension '${id}' failed: ${error?.message ?? String(error)}\n`);
+                }
+            });
         } catch (error) {
             emitRuntimeEvent("extension.failed", {
                 ...metadata,
@@ -2502,26 +2604,62 @@ async function loadRuntimeExtensions() {
             process.stderr.write(`Warning: Afterburner extension '${id}' failed: ${error?.message ?? String(error)}\n`);
         }
     }
+    const { deferredCompletion } = await activateRuntimeExtensionGroups(
+        copilotActivations, blockingAfterburnerActivations, deferredAfterburnerActivations);
+    appSourceTransforms.sort((left, right) => left.activationOrder - right.activationOrder);
+    return { deferredCompletion };
 }
 
 async function transformedAppPath() {
     if (appSourceTransforms.length === 0) return originalAppPath;
     let source = await readFile(originalAppPath, "utf8");
-    for (const transform of appSourceTransforms) {
-        source = await transform(source, { copilotRoot, originalAppPath });
-        if (typeof source !== "string") {
-            throw new Error("An app source transform returned a non-string value.");
-        }
+    for (let index = 0; index < appSourceTransforms.length; index++) {
+        const { transform, extensionId } = appSourceTransforms[index];
+        const transformed = await runTimedRuntimePhase("app.transform", {
+            extensionId,
+            transformIndex: index
+        }, async () => {
+            const result = await transform(source, { copilotRoot, originalAppPath });
+            if (typeof result !== "string") {
+                throw new Error("An app source transform returned a non-string value.");
+            }
+            return result;
+        });
+        source = transformed.result;
     }
     const outputPath = join(copilotRoot, ".afterburner-app.mjs");
-    await writeFile(outputPath, source, "utf8");
+    const cacheHit = !(await writeRuntimeOutputIfChanged(outputPath, source));
+    emitRuntimeEvent("app.transform.output", {
+        transformCount: appSourceTransforms.length,
+        cacheHit
+    });
     return outputPath;
+}
+
+async function writeRuntimeOutputIfChanged(outputPath, source) {
+    let existingSource;
+    try {
+        existingSource = await readFile(outputPath, "utf8");
+    } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+    }
+    if (existingSource === source) return false;
+    await writeFile(outputPath, source, "utf8");
+    return true;
 }
 
 installRuntimeObserverSeams();
 installPickerBridge();
-await loadRuntimeExtensions();
-runtimeBootstrapSealed = true;
+const { deferredCompletion: deferredRuntimeActivations } = await loadRuntimeExtensions();
+if (process.env.COPILOT_RUNTIME_EXTENSION_SELF_TEST === "1") await deferredRuntimeActivations;
+if (deferredRuntimeActivations) {
+    void deferredRuntimeActivations.then(
+        () => { runtimeBootstrapSealed = true; },
+        () => { runtimeBootstrapSealed = true; }
+    );
+} else {
+    runtimeBootstrapSealed = true;
+}
 const runtimeBootstrapLastSequence = runtimeEventSequence;
 process.once("exit", disposeRuntimeObservers);
 if (process.env.COPILOT_RUNTIME_EXTENSION_SELF_TEST === "1") {
@@ -2724,4 +2862,6 @@ Object.defineProperty(globalThis, "__copilotRuntimeAddon__", {
         })
     }
 });
-await import(pathToFileURL(await transformedAppPath()).href);
+const transformedPath = await transformedAppPath();
+await runTimedRuntimePhase("app.import", { transformed: transformedPath !== originalAppPath },
+    () => import(pathToFileURL(transformedPath).href));

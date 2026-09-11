@@ -61,7 +61,7 @@ async function loadRuntimeAuthority(stubs = {}) {
 async function installRuntimeGlobal() {
   const source = await readFile(new URL("../../src/app.js", import.meta.url), "utf8");
   const start = source.indexOf("Object.defineProperty(globalThis, \"__copilotRuntimeAddon__\"");
-  const end = source.indexOf("await import(pathToFileURL(await transformedAppPath()).href);");
+  const end = source.indexOf("const transformedPath = await transformedAppPath();");
   assert.ok(start >= 0 && end > start, "runtime global block not found");
   const context = createContext({
     runtime: { native: true },

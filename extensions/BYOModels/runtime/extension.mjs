@@ -140,14 +140,25 @@ export async function activate({ pluginRoot, registerModelPickerAdapter, registe
     const upstreamBySelectionId = new Map(
         config.models.map((model) => [`${model.provider}/${model.id}`, model.modelId])
     );
-    const runtimeMetadata = (selectionId) => {
-        try {
-            const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-            return metadata.models?.find((model) => model.selectionId === selectionId) ?? null;
-        } catch {
-            return null;
-        }
+    let metadataBySelectionId = new Map();
+    const installMetadata = (metadata) => {
+        metadataBySelectionId = new Map(
+            (metadata.models ?? [])
+                .filter((model) =>
+                    upstreamBySelectionId.get(model.selectionId) === model.upstreamModelId)
+                .map((model) => [model.selectionId, model])
+        );
     };
+    try {
+        installMetadata(JSON.parse(readFileSync(metadataPath, "utf8")));
+    } catch {}
+    const metadataRefresh = setInterval(() => {
+        void readFile(metadataPath, "utf8")
+            .then((content) => installMetadata(JSON.parse(content)))
+            .catch(() => {});
+    }, 1_000);
+    metadataRefresh.unref?.();
+    const runtimeMetadata = (selectionId) => metadataBySelectionId.get(selectionId) ?? null;
 
     registerModelPickerAdapter({
         matches: (selectionId) => upstreamBySelectionId.has(selectionId),

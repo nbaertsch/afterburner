@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -152,6 +153,9 @@ func saveConfig(path, prefix string, value map[string]any) error {
 		return err
 	}
 	data = append(append([]byte(prefix), data...), '\n')
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}

@@ -1,5 +1,5 @@
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, realpath } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { afterburnerHome, CANONICAL_ID } from "./names.mjs";
 import { appendRouteRecord, claimRouteRecords, cleanupRouteArtifacts, newRequestId, readRouteState, requireTrustedRoute, routeQueuePath, waitForRouteAck, writeRouteAck, writeRouteState } from "../../shared/route-ipc.mjs";
 
@@ -75,6 +75,16 @@ export async function consumeModalOpenRequests() {
         maxRecordAgeMs: MAX_REQUEST_AGE_MS,
         predicate: request => request.surfaceId === CANONICAL_ID
     });
+}
+
+export async function modalActivationWatch() {
+    const env = { ...process.env };
+    if (!routeOrUnavailable(env)) return null;
+    const path = modalActivationPath(CANONICAL_ID, env);
+    await mkdir(dirname(path), { recursive: true });
+    let directory = dirname(path);
+    try { directory = await realpath(directory); } catch {}
+    return { directory, file: "modal-activation.jsonl" };
 }
 
 export async function completeModalOpenRequest(request, result = {}) {

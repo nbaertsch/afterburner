@@ -1,8 +1,9 @@
-import { completeModalOpenRequest, consumeModalOpenRequests, readBridgeState, requestBridgeAction } from "../extensions/OpenAIServer/modal-ipc.mjs";
+import { watch } from "node:fs";
+import { completeModalOpenRequest, consumeModalOpenRequests, modalActivationWatch, readBridgeState, requestBridgeAction } from "../extensions/OpenAIServer/modal-ipc.mjs";
 import { MENU_ID, modalFrame } from "../extensions/OpenAIServer/menu.mjs";
 import { CANONICAL_TITLE, displayConfigPath } from "../extensions/OpenAIServer/names.mjs";
 
-const POLL_MS = 100;
+export const MODAL_ACTIVATION_FALLBACK_MS = 2000;
 
 function modalRegistrar(api = {}) {
     if (typeof api.ui?.registerSurface === "function") return { target: api.ui, fn: api.ui.registerSurface };
@@ -71,13 +72,18 @@ export async function activate(api = {}) {
             opening = false;
         }
     };
-    const timer = setInterval(poll, POLL_MS);
+    const timer = setInterval(poll, MODAL_ACTIVATION_FALLBACK_MS);
     timer.unref?.();
     let watcher;
     try {
-        const target = await import("../extensions/OpenAIServer/modal-ipc.mjs");
-        // Polling is the correctness path; best-effort wakeup comes from the timer in all environments.
-        void target;
+        const target = await modalActivationWatch();
+        if (target) {
+            watcher = watch(target.directory, { persistent: false }, (_event, filename) => {
+                if (!filename || String(filename) === target.file) void poll();
+            });
+            watcher.unref?.();
+            watcher.on?.("error", () => {});
+        }
     } catch {}
     await poll();
     return {

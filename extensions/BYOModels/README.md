@@ -27,6 +27,16 @@ afterburn
 Open `/model` to select a configured model. Use left/right arrows to change reasoning effort, Tab to
 focus the context-window control, and left/right arrows to change context size.
 
+Validated capability metadata is cached outside the configuration file. On later launches,
+BYOModels registers that metadata immediately and refreshes the live Copilot model catalog in the
+background after extension activation has resolved, so provider discovery and its RPC are not on
+the UI/plugin-readiness critical path. The session log reports the immediate registration count
+before the detached refresh is scheduled. A cache is accepted only
+when its model identity still matches the current configuration. Models with complete
+token limits and boolean vision/reasoning support configured directly in `models` can also register
+immediately. Discovery and registration have bounded RPC deadlines; failures are reported in the
+session log while already validated registrations remain available.
+
 ## Configuration
 
 The canonical user-owned configuration is:
@@ -118,6 +128,9 @@ response expected by Copilot. Configure it as:
 ```
 
 The proxy preserves path-prefixed base URLs and query parameters.
+Proxy listener binding is concurrent across providers. Listener setup, Azure CLI authentication,
+capability RPCs, and upstream requests use explicit deadlines; timeout failures are returned or
+logged with the provider/operation name rather than silently falling back to missing models.
 For Restricted gateways with a JSON depth limit of 16 and no native namespace/tool-search support,
 also set `"legacyTools": true` in `requestCompatibility`. This eagerly exposes namespaced functions
 under their existing callable names and relocates deep tool schemas into shallow `$defs` references,

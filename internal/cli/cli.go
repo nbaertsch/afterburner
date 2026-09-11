@@ -67,6 +67,7 @@ func Classify(args []string) Route {
 }
 
 func Run(ctx context.Context, args []string, opts Options) (int, error) {
+	defer drainTelemetry()
 	route := Classify(args)
 	if !(route.Command == "core" && len(route.Args) > 0 && route.Args[0] == "replace") {
 		if layout, resolveErr := home.Resolve(); resolveErr == nil {
@@ -106,6 +107,14 @@ func Run(ctx context.Context, args []string, opts Options) (int, error) {
 	default:
 		return 2, fmt.Errorf("native command %q is not implemented yet", route.Command)
 	}
+}
+
+const telemetryDrainTimeout = 500 * time.Millisecond
+
+func drainTelemetry() {
+	ctx, cancel := context.WithTimeout(context.Background(), telemetryDrainTimeout)
+	defer cancel()
+	_ = telemetry.Shutdown(ctx)
 }
 
 func warnCoreUpdateStatus(opts Options) {
@@ -835,11 +844,10 @@ func runCompatibility(args []string, opts Options) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		path := filepath.Join(layout.Root, "state", "last-known-good.json")
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if err := preflight.RequestDeepValidation(layout.Root); err != nil {
 			return 1, err
 		}
-		fmt.Fprintln(opts.Stdout, "Compatibility preflight will run on the next launch.")
+		fmt.Fprintln(opts.Stdout, "Compatibility deep validation will run on the next launch.")
 	}
 	return 0, nil
 }

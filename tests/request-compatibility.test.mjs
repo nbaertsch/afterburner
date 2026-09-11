@@ -94,6 +94,7 @@ test("compatibility proxy normalizes IDs and refreshes authentication", async ()
     response.writeHead(200, { "content-type": "application/json" });
     response.end('{"ok":true}');
   });
+
   await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
   const address = upstream.address();
   const proxy = await startRequestCompatibilityProxy({
@@ -129,6 +130,34 @@ test("compatibility proxy normalizes IDs and refreshes authentication", async ()
   } finally {
     await proxy.close();
     await new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test("compatibility proxy reports an explicit upstream timeout", async () => {
+  const upstream = createServer((_request, response) => {
+    setTimeout(() => {
+      response.writeHead(200);
+      response.end();
+    }, 250);
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const proxy = await startRequestCompatibilityProxy({
+    name: "slow-provider",
+    baseUrl: `http://127.0.0.1:${upstream.address().port}`,
+    requestCompatibility: { maxInputItemIdLength: 64 }
+  }, { upstreamTimeout: 30 });
+  try {
+    const response = await fetch(`${proxy.baseUrl}/responses`, {
+      method: "POST",
+      headers: proxyHeaders(proxy, { "content-type": "application/json" }),
+      body: "{}"
+    });
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.match(body.error.message, /slow-provider.*timed out after 30ms/);
+  } finally {
+    await proxy.close();
+    await new Promise(resolve => upstream.close(resolve));
   }
 });
 

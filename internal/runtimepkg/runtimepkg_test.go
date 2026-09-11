@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nbaertsch/afterburner/internal/copilot"
 	"github.com/nbaertsch/afterburner/internal/home"
@@ -18,6 +19,7 @@ func TestEmbeddedRuntimeMatchesCanonicalSource(t *testing.T) {
 	if !bytes.Equal(runtimeHost, canonical) {
 		t.Fatal("embedded runtime host is stale; copy src/app.js to internal/runtimepkg/app.js")
 	}
+
 	canonicalUI, err := os.ReadFile(filepath.Join("..", "..", "src", "runtime", "modal-ui.mjs"))
 	if err != nil {
 		t.Fatal(err)
@@ -51,5 +53,31 @@ func TestPrepareRepairsStalePackage(t *testing.T) {
 	}
 	if repaired != prepared || !validPreparedPackage(repaired.Path, repaired.Version, base) {
 		t.Fatal("stale prepared runtime was not repaired")
+	}
+}
+
+func TestPrepareValidatesBeforeWaitingForBuildLock(t *testing.T) {
+	layout := home.Layout{CopilotHome: filepath.Join(t.TempDir(), "copilot-home")}
+	base := copilot.Package{
+		Path: filepath.Join(t.TempDir(), "base"), AppSHA256: "app", RuntimeSHA256: "runtime",
+	}
+	prepared, err := Prepare(layout, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(filepath.Dir(prepared.Path), ".afterburner-prepare.lock")
+	if err := os.Mkdir(lockPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	got, err := Prepare(layout, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != prepared {
+		t.Fatalf("prepared = %#v, want %#v", got, prepared)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("valid runtime waited for rebuild lock: %s", elapsed)
 	}
 }

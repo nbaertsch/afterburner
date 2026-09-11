@@ -44,6 +44,35 @@ async function withRouteEnv(home, route, fn) {
     }
 }
 
+async function waitForFile(path, predicate, timeoutMs = 2000) {
+    const deadline = Date.now() + timeoutMs;
+    let lastError;
+    while (Date.now() < deadline) {
+        try {
+            const contents = await readFile(path, "utf8");
+            if (predicate(contents)) return contents;
+        } catch (error) {
+            lastError = error;
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.fail(`timed out waiting for ${path}: ${lastError?.message ?? "condition not met"}`);
+}
+
+async function waitForRemoval(path, timeoutMs = 2000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        try {
+            await readFile(path, "utf8");
+        } catch (error) {
+            if (error?.code === "ENOENT") return;
+            throw error;
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.fail(`timed out waiting for removal of ${path}`);
+}
+
 test("loadConfig enforces localhost binding and valid ports", () => {
     assert.equal(loadConfig({ port: 0 }).host, "127.0.0.1");
     assert.throws(() => loadConfig({ host: "0.0.0.0" }), /localhost/);
@@ -96,7 +125,7 @@ test("session extension exposes one primary management command and legacy alias"
     assert.equal(wrapper.trim(), "export * from \"../../../extensions/OpenAIServer/extension.mjs\";");
     assert.equal(legacyWrapper.trim(), "export * from \"../../../extensions/OpenAIServer/extension.mjs\";");
     assert.doesNotMatch(wrapper, /activateExtension\(|export const instance/);
-    assert.match(source, /session\s*=\s*await joinSession/);
+    assert.match(source, /registerThenInitialize/);
     assert.doesNotMatch(source, /export async function activate/);
 });
 
@@ -174,9 +203,10 @@ test("modal IPC startup cleanup removes stale artifacts without deleting live ro
         await writeFile(stale, "old", "utf8");
         const old = new Date(Date.now() - 172_800_000);
         await utimes(stale, old, old);
+        const queue = routeQueuePath(stateDir, "modal-actions.jsonl");
         const pending = requestBridgeAction("status", { timeoutMs: 2000 });
-        await new Promise(resolve => setTimeout(resolve, 50));
-        await assert.rejects(readFile(stale, "utf8"), /ENOENT/);
+        await waitForFile(queue, contents => contents.includes("\"action\":\"status\""));
+        await waitForRemoval(stale);
         const requests = await consumeBridgeActionRequests();
         assert.equal(requests.length, 1);
         await completeBridgeActionRequest(requests[0], { ok: true, state: { cleaned: true } });
@@ -187,8 +217,10 @@ test("modal IPC startup cleanup removes stale artifacts without deleting live ro
 test("modal IPC does not steal live claimed-but-unacknowledged actions after the lease", async () => {
     const home = join(tmpdir(), `afterburner-openai-claim-${process.pid}-${randomBytes(4).toString("hex")}`);
     await withRouteEnv(home, ROUTE_A, async () => {
+        const stateDir = join(home, "state", "openai-server");
+        const queue = routeQueuePath(stateDir, "modal-actions.jsonl");
         const pending = requestBridgeAction("status", { timeoutMs: 5000 });
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await waitForFile(queue, contents => contents.includes("\"action\":\"status\""));
         const firstClaim = await consumeBridgeActionRequests();
         assert.equal(firstClaim.length, 1);
         assert.deepEqual(await consumeBridgeActionRequests(), []);

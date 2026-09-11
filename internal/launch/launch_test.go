@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nbaertsch/afterburner/internal/registry"
 	"github.com/nbaertsch/afterburner/internal/terminal"
@@ -38,6 +39,22 @@ func TestBrokerRequiresFileStreams(t *testing.T) {
 	}
 	if shouldUseBroker(Options{Stdin: os.Stdin, Stdout: bytes.NewBuffer(nil)}) {
 		t.Fatal("broker enabled for non-file stdout")
+	}
+}
+
+func TestResizePollingBacksOffAndResets(t *testing.T) {
+	interval := minimumResizePollInterval
+	interval = nextResizePollInterval(interval, false)
+	if interval != 400*time.Millisecond {
+		t.Fatalf("first idle interval = %s", interval)
+	}
+	interval = nextResizePollInterval(interval, false)
+	interval = nextResizePollInterval(interval, false)
+	if interval != maximumResizePollInterval {
+		t.Fatalf("maximum idle interval = %s", interval)
+	}
+	if got := nextResizePollInterval(interval, true); got != minimumResizePollInterval {
+		t.Fatalf("changed interval = %s", got)
 	}
 }
 

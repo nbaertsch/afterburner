@@ -45,10 +45,29 @@ test("runtime package hashing matches the native tree contract", async () => {
       manifestHash,
       treeHash: expectedTreeHash
     }), error => error?.code === "extension.identityChanged");
+    await assert.rejects(() => verifyRuntimePackageIdentity(root, manifestData, {
+      manifestHash,
+      treeHash: expectedTreeHash,
+      trustedBuiltin: true,
+      sourceType: "signed-release"
+    }), error => error?.code === "extension.identityChanged");
+
+    await assert.rejects(() => verifyRuntimePackageIdentity(root, manifestData, {
+      manifestHash,
+      treeHash: expectedTreeHash,
+      trustedBuiltin: false,
+      sourceType: "path"
+    }), error => error?.code === "extension.identityChanged");
 
     await assert.rejects(() => verifyRuntimePackageIdentity(root, manifestData, {
       manifestHash,
       treeHash: "sha256:tampered"
+    }), error => error?.code === "extension.identityChanged");
+    await assert.rejects(() => verifyRuntimePackageIdentity(root, "{\"id\":\"changed\"}\n", {
+      manifestHash,
+      treeHash: expectedTreeHash,
+      trustedBuiltin: true,
+      sourceType: "embedded"
     }), error => error?.code === "extension.identityChanged");
   } finally {
     await rm(root, { recursive: true, force: true });

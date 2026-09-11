@@ -116,6 +116,13 @@ func runWithBroker(ctx context.Context, opts Options) (int, error) {
 
 	size := terminal.ConsoleSize(stdout)
 	renderer := terminal.NewTerminalModalRendererWithSize(stdout, size)
+	terminalActivity := make(chan struct{}, 1)
+	noteTerminalActivity := func() {
+		select {
+		case terminalActivity <- struct{}{}:
+		default:
+		}
+	}
 	var modalServer *terminal.ModalServer
 	router := terminal.InputRouterFunc(func(owner terminal.Owner, data []byte, process terminal.Process) (int, error) {
 		if owner == terminal.OwnerModal {
@@ -127,7 +134,10 @@ func runWithBroker(ctx context.Context, opts Options) (int, error) {
 		return process.WriteInput(data)
 	})
 	broker := terminal.NewBroker(terminal.NewConPTYBackend(), terminal.BrokerOptions{
-		OutputSink:  terminal.OutputHandlerFunc(func(output terminal.Output) { renderer.WriteCopilotOutput(output.Data) }),
+		OutputSink: terminal.OutputHandlerFunc(func(output terminal.Output) {
+			renderer.WriteCopilotOutput(output.Data)
+			noteTerminalActivity()
+		}),
 		InputRouter: router,
 	})
 	modalServer, err = terminal.NewModalServer(broker, renderer)
@@ -176,6 +186,7 @@ func runWithBroker(ctx context.Context, opts Options) (int, error) {
 		for {
 			read, readErr := stdin.Read(buffer)
 			if read > 0 {
+				noteTerminalActivity()
 				if writeErr := writeBrokerInput(broker, buffer[:read]); writeErr != nil {
 					return
 				}
@@ -194,20 +205,33 @@ func runWithBroker(ctx context.Context, opts Options) (int, error) {
 		close(waitDone)
 	}()
 
-	resizeTicker := time.NewTicker(200 * time.Millisecond)
-	defer resizeTicker.Stop()
+	resizeInterval := minimumResizePollInterval
+	resizeTimer := time.NewTimer(resizeInterval)
+	defer resizeTimer.Stop()
 	lastSize := size
+	checkResize := func() {
+		next := terminal.ConsoleSize(stdout)
+		changed := next != lastSize
+		if changed {
+			lastSize = next
+			resizeBrokerAndRenderer(broker, renderer, next)
+		}
+		resizeInterval = nextResizePollInterval(resizeInterval, changed)
+	}
 	for {
 		select {
 		case <-interrupts:
 			_ = interruptBrokerIfCopilotOwner(broker)
 		case <-inputDone:
 			inputDone = nil
-		case <-resizeTicker.C:
-			if next := terminal.ConsoleSize(stdout); next != lastSize {
-				lastSize = next
-				resizeBrokerAndRenderer(broker, renderer, next)
+		case <-terminalActivity:
+			if resizeInterval > minimumResizePollInterval {
+				resizeInterval = minimumResizePollInterval
+				resetTimer(resizeTimer, resizeInterval)
 			}
+		case <-resizeTimer.C:
+			checkResize()
+			resetTimer(resizeTimer, resizeInterval)
 		case <-ctx.Done():
 			_ = broker.Close()
 			<-waitDone
@@ -220,6 +244,32 @@ func runWithBroker(ctx context.Context, opts Options) (int, error) {
 			return normalizeExitCode(status.Code, waitErr), waitErr
 		}
 	}
+}
+
+const (
+	minimumResizePollInterval = 200 * time.Millisecond
+	maximumResizePollInterval = 800 * time.Millisecond
+)
+
+func nextResizePollInterval(current time.Duration, changed bool) time.Duration {
+	if changed || current < minimumResizePollInterval {
+		return minimumResizePollInterval
+	}
+	next := current * 2
+	if next > maximumResizePollInterval {
+		return maximumResizePollInterval
+	}
+	return next
+}
+
+func resetTimer(timer *time.Timer, interval time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(interval)
 }
 
 func shouldUseBroker(opts Options) bool {

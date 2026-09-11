@@ -1,11 +1,19 @@
 package cli
 
 import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/nbaertsch/afterburner/internal/preflight"
+	"github.com/nbaertsch/afterburner/internal/telemetry"
 )
 
 func TestClassify(t *testing.T) {
@@ -28,6 +36,94 @@ func TestClassify(t *testing.T) {
 				t.Fatalf("Classify(%q) = %#v, want %#v", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCompatibilityRetryRequestsExplicitDeepValidation(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AFTERBURNER_HOME", root)
+	var stdout bytes.Buffer
+	code, err := runCompatibility([]string{"retry"}, Options{Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if err != nil || code != 0 {
+		t.Fatalf("retry returned code=%d err=%v", code, err)
+	}
+	if !strings.Contains(stdout.String(), "deep validation") {
+		t.Fatalf("retry output = %q", stdout.String())
+	}
+	if err := preflight.ValidateStored(root); !os.IsNotExist(err) {
+		t.Fatalf("retry unexpectedly created or retained a tuple: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "state", "deep-validation-requested")); err != nil {
+		t.Fatalf("retry did not request explicit deep validation: %v", err)
+	}
+}
+
+func TestRunDrainsAcceptedTelemetryBeforeReturning(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AFTERBURNER_HOME", t.TempDir())
+	telemetry.Record(root, "launch.completed", map[string]any{"exitCode": 0})
+
+	code, err := Run(context.Background(), []string{"version"}, Options{
+		Version: "test",
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("Run returned code=%d err=%v", code, err)
+	}
+
+	file, err := os.Open(filepath.Join(root, "state", "launcher.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	if !scanner.Scan() {
+		t.Fatalf("missing final telemetry event: %v", scanner.Err())
+	}
+	var event telemetry.Event
+	if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != "launch.completed" {
+		t.Fatalf("event type = %q", event.Type)
+	}
+}
+
+func TestCLIProcessPersistsFinalTelemetryBeforeExit(t *testing.T) {
+	if os.Getenv("GO_WANT_CLI_TELEMETRY_HELPER") == "1" {
+		telemetry.Record(os.Getenv("AFTERBURNER_TEST_TELEMETRY_ROOT"), "launch.completed", map[string]any{"exitCode": 0})
+		code, err := Run(context.Background(), []string{"version"}, Options{
+			Version: "test",
+			Stdout:  &bytes.Buffer{},
+			Stderr:  &bytes.Buffer{},
+		})
+		if err != nil {
+			os.Exit(2)
+		}
+		os.Exit(code)
+	}
+
+	root := t.TempDir()
+	command := exec.Command(os.Args[0], "-test.run=TestCLIProcessPersistsFinalTelemetryBeforeExit")
+	command.Env = append(os.Environ(),
+		"GO_WANT_CLI_TELEMETRY_HELPER=1",
+		"AFTERBURNER_TEST_TELEMETRY_ROOT="+root,
+		"AFTERBURNER_HOME="+t.TempDir(),
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("helper failed: %v\n%s", err, output)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "state", "launcher.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event telemetry.Event
+	if err := json.Unmarshal(bytes.TrimSpace(data), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != "launch.completed" {
+		t.Fatalf("event type = %q", event.Type)
 	}
 }
 

@@ -174,7 +174,7 @@ func (l *ModalPipeListener) acceptLoop(initial windows.Handle) {
 			}
 			continue
 		}
-		go l.handleConnected(handle)
+		l.handleConnected(handle)
 		handle = 0
 	}
 	l.closeHandle(handle)

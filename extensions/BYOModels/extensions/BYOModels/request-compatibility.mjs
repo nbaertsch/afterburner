@@ -7,6 +7,8 @@ import { readResponseStream, ResponseStreamError, terminalResponseFromEventStrea
 
 const healthPath = "/__afterburner/byomodels/health";
 const healthMarker = "afterburner-byomodels-proxy-v1";
+const listenTimeoutMs = 5_000;
+const upstreamTimeoutMs = 5 * 60_000;
 export const proxyCapabilityHeader = "x-afterburner-proxy-capability";
 
 function newProxyCapability() {
@@ -134,7 +136,8 @@ function createProxyServer(
     capability,
     onRewrite,
     getBearerToken,
-    getUpstreamHeaders
+    getUpstreamHeaders,
+    upstreamTimeout
 ) {
     return createServer(async (request, response) => {
         const authorized = hasProxyCapability(request, capability);
@@ -148,6 +151,11 @@ function createProxyServer(
             return;
         }
         const abort = new AbortController();
+        const upstreamTimer = setTimeout(
+            () => abort.abort(new Error(`Upstream request timed out after ${upstreamTimeout}ms.`)),
+            upstreamTimeout
+        );
+        upstreamTimer.unref?.();
         const onClose = () => {
             if (!response.writableFinished) abort.abort();
         };
@@ -234,21 +242,25 @@ function createProxyServer(
                 response.end();
             }
         } catch (error) {
-            if (response.destroyed || abort.signal.aborted) return;
+            if (response.destroyed) return;
             if (response.headersSent) {
                 response.destroy(error);
                 return;
             }
+            const visibleError = abort.signal.aborted && abort.signal.reason
+                ? abort.signal.reason
+                : error;
             const requestId = upstreamRequestId ? ` (upstream request: ${upstreamRequestId})` : "";
             const errorCode = error instanceof ResponseStreamError ? error.code : "byomodels_proxy_error";
             response.writeHead(error instanceof ResponseStreamError ? error.status : 502, { "content-type": "application/json" });
             response.end(JSON.stringify({
                 error: {
                     code: errorCode,
-                    message: `BYOModels '${provider.name}' [${errorCode}]: ${error?.message ?? String(error)}${requestId}`
+                    message: `BYOModels '${provider.name}' [${errorCode}]: ${visibleError?.message ?? String(visibleError)}${requestId}`
                 }
             }));
         } finally {
+            clearTimeout(upstreamTimer);
             response.off("close", onClose);
         }
     });
@@ -256,12 +268,23 @@ function createProxyServer(
 
 function listen(server, port) {
     return new Promise((resolve, reject) => {
-        const onError = error => {
+        const timeout = setTimeout(() => {
+            cleanup();
+            server.close();
+            reject(new Error(`Compatibility proxy listener timed out after ${listenTimeoutMs}ms.`));
+        }, listenTimeoutMs);
+        timeout.unref?.();
+        const cleanup = () => {
+            clearTimeout(timeout);
+            server.off("error", onError);
             server.off("listening", onListening);
+        };
+        const onError = error => {
+            cleanup();
             reject(error);
         };
         const onListening = () => {
-            server.off("error", onError);
+            cleanup();
             resolve();
         };
         server.once("error", onError);
@@ -272,7 +295,13 @@ function listen(server, port) {
 
 export async function startRequestCompatibilityProxy(
     provider,
-    { onRewrite = () => {}, getBearerToken, getUpstreamHeaders, capability = newProxyCapability() } = {}
+    {
+        onRewrite = () => {},
+        getBearerToken,
+        getUpstreamHeaders,
+        capability = newProxyCapability(),
+        upstreamTimeout = upstreamTimeoutMs
+    } = {}
 ) {
     const maximumLength = provider.requestCompatibility?.maxInputItemIdLength;
     const forceStreaming = provider.requestCompatibility?.forceStreaming === true;
@@ -298,6 +327,9 @@ export async function startRequestCompatibilityProxy(
     if (typeof capability !== "string" || capability.length < 32) {
         throw new Error(`Provider '${provider.name}' has an invalid request compatibility proxy capability.`);
     }
+    if (!Number.isFinite(upstreamTimeout) || upstreamTimeout <= 0) {
+        throw new Error(`Provider '${provider.name}' has an invalid upstream request timeout.`);
+    }
 
     const upstream = new URL(provider.baseUrl);
     const identity = proxyIdentity(provider, upstream);
@@ -314,7 +346,8 @@ export async function startRequestCompatibilityProxy(
             capability,
             onRewrite,
             getBearerToken,
-            getUpstreamHeaders
+            getUpstreamHeaders,
+            upstreamTimeout
         );
 
     async function bind(port) {
