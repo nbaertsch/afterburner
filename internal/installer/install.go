@@ -73,7 +73,11 @@ func Install(layout home.Layout, executable string, stdout io.Writer) (Result, e
 		} else if !os.IsNotExist(err) {
 			return Result{}, err
 		}
-		if err := platform.ReplaceFile(temporaryPath, target); err != nil {
+		retiredExecutable, err := platform.RetiredFilePath(target)
+		if err != nil {
+			return Result{}, fmt.Errorf("prepare retired executable path: %w", err)
+		}
+		if err := platform.ReplaceFileRetiring(temporaryPath, target, retiredExecutable); err != nil {
 			return Result{}, fmt.Errorf("install executable: %w", err)
 		}
 	}
