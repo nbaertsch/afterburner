@@ -503,8 +503,82 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 		_, _ = response.Write(bodyBytes)
 		return
 	}
+	if strings.Contains(upstreamResponse.Header.Get("content-type"), "text/event-stream") &&
+		request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/responses") {
+		if err := streamResponsesWithPreTokenValidation(response, upstreamResponse.Body, upstreamResponse.StatusCode, current.provider.Name); err != nil {
+			writeProxyError(response, err)
+		}
+		return
+	}
 	response.WriteHeader(upstreamResponse.StatusCode)
 	_, _ = io.Copy(response, upstreamResponse.Body)
+}
+
+func streamResponsesWithPreTokenValidation(w http.ResponseWriter, upstreamBody io.ReadCloser, statusCode int, providerName string) error {
+	bufReader := bufio.NewReader(upstreamBody)
+	var initial []byte
+	for {
+		line, err := bufReader.ReadBytes('\n')
+		initial = append(initial, line...)
+		if len(line) == 0 || bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n")) {
+			break
+		}
+		if err != nil {
+			break
+		}
+	}
+	trimmed := strings.TrimSpace(string(initial))
+	if strings.HasPrefix(trimmed, "event: error") || strings.Contains(trimmed, `"type":"error"`) ||
+		strings.Contains(trimmed, `"type":"response.failed"`) {
+		var event struct {
+			Type  string `json:"type"`
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+			Message string `json:"message"`
+			Code    string `json:"code"`
+		}
+		for _, line := range strings.Split(trimmed, "\n") {
+			if strings.HasPrefix(line, "data:") {
+				_ = json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event)
+			}
+		}
+		msg := event.Error.Message
+		if msg == "" {
+			msg = event.Message
+		}
+		if msg == "" {
+			msg = "Upstream Responses streaming error"
+		}
+		code := event.Error.Code
+		if code == "" {
+			code = event.Code
+		}
+		if code == "" {
+			code = "upstream_error"
+		}
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		payload := map[string]any{
+			"error": map[string]string{
+				"code":    code,
+				"message": fmt.Sprintf("BYOModels %q [%s]: %s", providerName, code, msg),
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		_, _ = w.Write(encoded)
+		return nil
+	}
+
+	w.WriteHeader(statusCode)
+	if len(initial) > 0 {
+		if _, err := w.Write(initial); err != nil {
+			return err
+		}
+	}
+	_, err := io.Copy(w, bufReader)
+	return err
 }
 
 func upstreamTarget(upstream, requestURL *url.URL) *url.URL {

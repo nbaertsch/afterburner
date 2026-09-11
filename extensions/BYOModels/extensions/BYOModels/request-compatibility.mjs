@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { rewriteLegacyTools } from "./legacy-tools.mjs";
-import { readResponseStream, ResponseStreamError, terminalResponseFromEventStream } from "./response-stream.mjs";
+import { pipeResponseStreamTokens, readResponseStream, ResponseStreamError, terminalResponseFromEventStream } from "./response-stream.mjs";
 
 const healthPath = "/__afterburner/byomodels/health";
 const healthMarker = "afterburner-byomodels-proxy-v1";
@@ -257,6 +257,11 @@ function createProxyServer(
                 }
                 response.writeHead(upstreamResponse.status, responseHeaders);
                 response.end(errBuffer);
+                return;
+            }
+            if (responsesRequest &&
+                upstreamResponse.headers.get("content-type")?.includes("text/event-stream")) {
+                await pipeResponseStreamTokens(upstreamResponse, response, responseHeaders);
                 return;
             }
             response.writeHead(upstreamResponse.status, responseHeaders);

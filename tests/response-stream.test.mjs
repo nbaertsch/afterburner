@@ -212,3 +212,127 @@ test("buffered proxy catches upstream socket interruption and remains healthy", 
     await new Promise(resolve => upstream.close(resolve));
   }
 });
+
+test("streaming proxy streams tokens live and delivers complete response", async () => {
+  const upstream = createServer(async (request, response) => {
+    for await (const chunk of request) {}
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(sse({ type: "response.created", response: { id: "resp_stream", status: "in_progress" } }));
+    response.write(sse({ type: "response.output_text.delta", delta: "hello " }));
+    response.write(sse({ type: "response.output_text.delta", delta: "streaming!" }));
+    response.end(sse({ type: "response.completed", response: completed }));
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const proxy = await startRequestCompatibilityProxy({
+    name: "streaming-token-test",
+    baseUrl: `http://127.0.0.1:${upstream.address().port}`,
+    requestCompatibility: { forceStreaming: true }
+  });
+  try {
+    const res = await fetch(`${proxy.baseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${proxy.capability}` },
+      body: JSON.stringify({ model: "stream-model", stream: true, input: "hi" })
+    });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type"), /text\/event-stream/);
+    const body = await res.text();
+    assert.match(body, /hello /);
+    assert.match(body, /streaming!/);
+    assert.match(body, /response\.completed/);
+  } finally {
+    await proxy.close();
+    await new Promise(resolve => upstream.close(resolve));
+  }
+});
+
+test("streaming proxy intercepts pre-token error and returns HTTP 422", async () => {
+  const upstream = createServer(async (request, response) => {
+    for await (const chunk of request) {}
+    response.writeHead(200, { "content-type": "text/event-stream", "x-request-id": "req-pre-token-err" });
+    response.write(sse({ type: "response.created", response: { id: "resp_fail", status: "in_progress" } }));
+    response.end(sse({ type: "error", code: "content_policy_violation", message: "Synthetic policy denial." }));
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const proxy = await startRequestCompatibilityProxy({
+    name: "pre-token-err-test",
+    baseUrl: `http://127.0.0.1:${upstream.address().port}`,
+    requestCompatibility: { forceStreaming: true }
+  });
+  try {
+    const res = await fetch(`${proxy.baseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${proxy.capability}` },
+      body: JSON.stringify({ model: "stream-model", stream: true, input: "hi" })
+    });
+    assert.equal(res.status, 422);
+    const err = (await res.json()).error;
+    assert.equal(err.code, "content_policy_violation");
+    assert.match(err.message, /Synthetic policy denial/);
+    assert.match(err.message, /req-pre-token-err/);
+  } finally {
+    await proxy.close();
+    await new Promise(resolve => upstream.close(resolve));
+  }
+});
+
+test("streaming proxy intercepts pre-token refusal and returns HTTP 422", async () => {
+  const upstream = createServer(async (request, response) => {
+    for await (const chunk of request) {}
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end(sse({ type: "response.completed", response: {
+      ...completed, output: [{ type: "message", content: [{ type: "refusal", refusal: "Cannot answer." }] }]
+    } }));
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const proxy = await startRequestCompatibilityProxy({
+    name: "pre-token-refusal-test",
+    baseUrl: `http://127.0.0.1:${upstream.address().port}`,
+    requestCompatibility: { forceStreaming: true }
+  });
+  try {
+    const res = await fetch(`${proxy.baseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${proxy.capability}` },
+      body: JSON.stringify({ model: "stream-model", stream: true, input: "hi" })
+    });
+    assert.equal(res.status, 422);
+    const err = (await res.json()).error;
+    assert.equal(err.code, "upstream_refusal");
+    assert.match(err.message, /Cannot answer/);
+  } finally {
+    await proxy.close();
+    await new Promise(resolve => upstream.close(resolve));
+  }
+});
+
+test("streaming proxy injects mid-stream error text when failure occurs after tokens", async () => {
+  const upstream = createServer(async (request, response) => {
+    for await (const chunk of request) {}
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(sse({ type: "response.created", response: { id: "resp_mid", status: "in_progress" } }));
+    response.write(sse({ type: "response.output_text.delta", delta: "Partial output before crash. " }));
+    response.end(sse({ type: "error", code: "upstream_crashed", message: "Mid-stream connection died." }));
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const proxy = await startRequestCompatibilityProxy({
+    name: "mid-stream-err-test",
+    baseUrl: `http://127.0.0.1:${upstream.address().port}`,
+    requestCompatibility: { forceStreaming: true }
+  });
+  try {
+    const res = await fetch(`${proxy.baseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${proxy.capability}` },
+      body: JSON.stringify({ model: "stream-model", stream: true, input: "hi" })
+    });
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.match(text, /Partial output before crash/);
+    assert.match(text, /Mid-stream connection died/);
+    assert.match(text, /response\.completed/);
+  } finally {
+    await proxy.close();
+    await new Promise(resolve => upstream.close(resolve));
+  }
+});
