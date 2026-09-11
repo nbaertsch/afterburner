@@ -421,3 +421,31 @@ test("providers sharing a configured port each receive an isolated local proxy",
     await new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
   }
 });
+
+test("compatibility proxy maps upstream 429 deployment-unhealthy to 422 with clear message", async () => {
+  const upstream = createServer(async (request, response) => {
+    response.writeHead(429, { "content-type": "application/json" });
+    response.end('{"error":"No healthy deployment found for the request."}');
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const proxy = await startRequestCompatibilityProxy({
+    name: "unhealthy-test",
+    baseUrl: `http://127.0.0.1:${upstream.address().port}`,
+    requestCompatibility: { forceStreaming: true }
+  });
+  try {
+    const response = await fetch(`${proxy.baseUrl}/responses`, {
+      method: "POST",
+      headers: proxyHeaders(proxy, { "content-type": "application/json" }),
+      body: JSON.stringify({ model: "test-model", input: "hello" })
+    });
+    assert.equal(response.status, 422);
+    const data = await response.json();
+    assert.equal(data.error.code, "upstream_deployment_unhealthy");
+    assert.match(data.error.message, /test-model/);
+    assert.match(data.error.message, /unhealthy or unavailable/);
+  } finally {
+    await proxy.close();
+    await new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
+  }
+});

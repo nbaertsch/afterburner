@@ -573,11 +573,15 @@ async function refreshCapabilities() {
     const catalogModels = catalog.list ?? [];
     const refreshedModels = config.models.map((model) => hydrateModelFromCatalog(model, catalogModels));
     const runtimeModels = buildRuntimeMetadata(config.models, catalogModels);
-    await withDeadline(
-        session.rpc.provider.add({ models: refreshedModels }),
-        rpcTimeoutMs,
-        "BYOModels refreshed model registration"
-    );
+    const registeredKeys = new Set(registeredModels.map((m) => `${m.provider}/${m.id}`));
+    const newModels = refreshedModels.filter((m) => !registeredKeys.has(`${m.provider}/${m.id}`));
+    if (newModels.length > 0) {
+        await withDeadline(
+            session.rpc.provider.add({ models: newModels }),
+            rpcTimeoutMs,
+            "BYOModels refreshed model registration"
+        );
+    }
     registeredModels = refreshedModels;
     await writeRuntimeMetadata(capabilityCache(config.models, refreshedModels, runtimeModels));
     await logVisible(

@@ -769,3 +769,46 @@ func TestLiveAzureProxy(t *testing.T) {
 		t.Fatalf("response did not contain expected output: %s", responseBody)
 	}
 }
+
+func TestProxyMapsUpstream429DeploymentUnhealthyTo422(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("content-type", "application/json")
+		response.WriteHeader(http.StatusTooManyRequests)
+		_, _ = response.Write([]byte(`{"error":"No healthy deployment found for the request."}`))
+	}))
+	defer upstream.Close()
+
+	port := availablePort(t)
+	path := writeConfig(t, upstream.URL, port)
+	manager, err := Start(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	request, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/responses", port),
+		strings.NewReader(`{"model":"unhealthy-model","input":"hello"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, expected 422, body = %s", response.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte("upstream_deployment_unhealthy")) {
+		t.Fatalf("expected upstream_deployment_unhealthy in body: %s", body)
+	}
+}

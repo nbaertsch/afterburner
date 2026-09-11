@@ -484,6 +484,25 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 		_, _ = response.Write(completed)
 		return
 	}
+	if upstreamResponse.StatusCode == http.StatusTooManyRequests {
+		bodyBytes, _ := io.ReadAll(upstreamResponse.Body)
+		if bytes.Contains(bytes.ToLower(bodyBytes), []byte("no healthy deployment")) {
+			response.Header().Set("content-type", "application/json")
+			response.WriteHeader(http.StatusUnprocessableEntity)
+			payload := map[string]any{
+				"error": map[string]string{
+					"code":    "upstream_deployment_unhealthy",
+					"message": fmt.Sprintf("BYOModels %q [upstream_deployment_unhealthy]: Upstream deployment is currently unhealthy or unavailable.", current.provider.Name),
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			_, _ = response.Write(encoded)
+			return
+		}
+		response.WriteHeader(upstreamResponse.StatusCode)
+		_, _ = response.Write(bodyBytes)
+		return
+	}
 	response.WriteHeader(upstreamResponse.StatusCode)
 	_, _ = io.Copy(response, upstreamResponse.Body)
 }

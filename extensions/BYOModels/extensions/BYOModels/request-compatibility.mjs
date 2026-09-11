@@ -166,8 +166,9 @@ function createProxyServer(
             for await (const chunk of request) chunks.push(chunk);
             let body = Buffer.concat(chunks);
             let translatedStreamingResponse = false;
+            let payload;
             if (body.length > 0 && request.headers["content-type"]?.includes("application/json")) {
-                const payload = JSON.parse(body.toString("utf8"));
+                payload = JSON.parse(body.toString("utf8"));
                 const rewritten = Number.isInteger(maximumLength)
                     ? rewriteOversizedInputItemIds(payload, maximumLength)
                     : 0;
@@ -233,6 +234,29 @@ function createProxyServer(
                 response.writeHead(upstreamResponse.status, responseHeaders);
                 response.end(translatedStreamingResponse ? JSON.stringify(completed) :
                     `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: completed })}\n\n`);
+                return;
+            }
+            if (!upstreamResponse.ok) {
+                const chunks = [];
+                if (upstreamResponse.body) {
+                    for await (const chunk of Readable.fromWeb(upstreamResponse.body)) {
+                        chunks.push(chunk);
+                    }
+                }
+                const errBuffer = Buffer.concat(chunks);
+                const errText = errBuffer.toString("utf8");
+                if (upstreamResponse.status === 429 && /no healthy deployment/i.test(errText)) {
+                    response.writeHead(422, { "content-type": "application/json" });
+                    response.end(JSON.stringify({
+                        error: {
+                            code: "upstream_deployment_unhealthy",
+                            message: `BYOModels '${provider.name}' [upstream_deployment_unhealthy]: Upstream deployment for model '${payload?.model ?? "unknown"}' is currently unhealthy or unavailable.`
+                        }
+                    }));
+                    return;
+                }
+                response.writeHead(upstreamResponse.status, responseHeaders);
+                response.end(errBuffer);
                 return;
             }
             response.writeHead(upstreamResponse.status, responseHeaders);
