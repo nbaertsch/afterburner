@@ -1,258 +1,372 @@
 # Afterburner
 
-Afterburner is a native control plane and trusted runtime-extension host for GitHub Copilot CLI. The
-single public command, `afterburn.exe`, owns launch isolation, exact argument forwarding,
-compatibility selection, extension lifecycle, recovery, diagnostics, installation, and updates.
-JavaScript remains only where code must execute inside Copilot.
+Afterburner is a native Go control plane, process launcher, and trusted runtime-extension host for GitHub Copilot CLI.
 
-## Install
+Instead of launching `copilot` directly, you run `afterburn`. Afterburner prepares an isolated managed environment, selects a verified compatibility profile for your installed Copilot package, launches the real Copilot CLI with exact argument passthrough, and hosts in-process extensions that add capabilities like custom model providers, privacy-preserving diagnostics, and a local OpenAI-compatible API.
 
-Build from source:
+---
+
+## Architecture & Mental Model
+
+```text
+User / Terminal / Automation
+             │
+             ▼
+┌────────────────────────────────────────────────────────┐
+│ afterburn.exe (Native Go Control Plane)                │
+│                                                        │
+│ • Home & Layout Management (~/.afterburner)            │
+│ • Package Discovery & Profile Compatibility Selection  │
+│ • Tamper-Resistant Extension Registry                  │
+│ • ConPTY Terminal Broker & Native Modal Broker         │
+│ • Atomic In-Place Binary Updates & Rollback            │
+│ • Process Supervision & Signal Forwarding              │
+└───────────────────────────┬────────────────────────────┘
+                            │ launches & supervises
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│ GitHub Copilot CLI Process                             │
+│                                                        │
+│ ┌────────────────────────────────────────────────────┐ │
+│ │ Trusted In-Process JavaScript Runtime Host         │ │
+│ │                                                    │ │
+│ │ • BYOModels (Custom Providers & Context Scaling)   │ │
+│ │ • Black Box (Supported Observability Layer)        │ │
+│ │ • OpenAI Server (Localhost /v1 HTTP Bridge)        │ │
+│ │ • Custom Extensions (.zip or Git sources)          │ │
+│ └────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────┘
+```
+
+- **Native Go Control Plane (`afterburn.exe`):** Runs outside Copilot. Owns launch isolation, process lifecycle, signal handling, terminal brokering, immutable extension verification, self-repair, and atomic updates.
+- **In-Process JavaScript Runtime Host:** Runs inside Copilot CLI. Loads verified extension packages that hook directly into Copilot's SDK and session lifecycle without altering global configuration.
+
+---
+
+## Quickstart
+
+### Option A: Install from a Release Binary (Recommended)
+
+1. Download the latest release archive (`afterburn-windows-amd64.zip` or `afterburn-windows-arm64.zip`) from [GitHub Releases](https://github.com/nbaertsch/afterburner/releases).
+2. Extract the archive into a folder.
+3. Open a PowerShell terminal in that folder and run:
+
+```powershell
+# 1. Install the executable to ~/.afterburner/bin and add to user PATH
+.\afterburn.exe core install
+
+# 2. Download and verify signed built-in extensions (BYOModels, Black Box, OpenAI Server)
+afterburn install
+
+# 3. Verify health and environment compatibility
+afterburn doctor
+```
+
+4. Open a fresh terminal (so the updated `PATH` is active) and launch Copilot:
+
+```powershell
+afterburn
+```
+
+---
+
+### Option B: Build from Source
+
+Prerequisites: Go 1.23+, Node.js 22+, and Git on Windows.
 
 ```powershell
 git clone git@github.com:nbaertsch/afterburner.git
 Set-Location .\afterburner
+
+# Build native binary
 go build -trimpath -o .\afterburn.exe .\cmd\afterburn
+
+# Install core and default extensions
 .\afterburn.exe core install
 afterburn install
+afterburn doctor
+afterburn
 ```
 
-`core install` atomically installs the executable at `~\.afterburner\bin\afterburn.exe`, retains the
-previous core for rollback, and adds that directory to the user PATH. `afterburn install` installs
-and enables BYOModels and Black Box, and installs OpenAI Server disabled until explicitly enabled.
+---
 
-Tagged GitHub Releases publish `afterburn-windows-amd64.zip`,
-`afterburn-windows-arm64.zip`, `black-box.zip`, `byo-models.zip`, `openai-server.zip`,
-`checksums.txt`, `release-manifest.json`, and `release-manifest.sig`.
+### Verify Your Installation
 
-Release publication is manually dispatched from `main` for a version tag that identifies the exact
-current `origin/main` commit. Unsigned assets are built in a secretless job; signing occurs only in
-the `release-signing` GitHub Environment, whose Ed25519 key is restricted to the `main` workflow
-ref.
-
-### Built-in extension updates
-
-Built-in extensions are versioned in lockstep with the Afterburner core release. `afterburn update`
-fetches the signed core archive plus every built-in package listed in that release manifest (for
-example `black-box.zip`, `byo-models.zip`, and `openai-server.zip`) and re-syncs the installed built-ins to the same tag
-before staging the core replacement. If a pinned built-in cannot be fetched or verified, the update
-fails instead of leaving a core/extension mismatch.
-
-`afterburn install <id>` is a repair/bootstrap command backed exclusively by the latest signed
-release. Built-in extension payloads are never embedded in `afterburn.exe`, and installation fails
-closed if the matching signed release package cannot be downloaded and verified. When upgrading
-from a legacy embedded-package release, the first normal launch re-fetches the new core's exact
-signed built-ins and replaces the legacy authorization records before any extension can execute.
-
-## Launch and passthrough
-
-```text
-afterburn                         Copilot with zero user arguments
-afterburn <copilot arguments...>  Exact passthrough
-afterburn run <arguments...>      Forced passthrough for command-name collisions
-afterburn -- <arguments...>       Forced passthrough after --
-```
-
-Afterburner preserves argument boundaries, empty arguments, repeated flags, Unicode, standard I/O,
-interactive terminal behavior, Ctrl+C, and child exit codes. It injects only the prepared runtime
-version required by Copilot's loader. Normal `copilot` remains untouched.
-
-Local interactive Windows launches automatically use the production ConPTY terminal broker. The
-broker forwards Copilot input/output and hosts authenticated extension UI surfaces. Redirected and
-non-interactive launches continue using the direct process path. For emergency diagnostics only,
-set `AFTERBURNER_DISABLE_TERMINAL_BROKER=1` to force direct passthrough.
-
-Recovery launch options:
+Run:
 
 ```powershell
+afterburn version         # Shows core version
+afterburn doctor          # Inspects installation health and Copilot compatibility
+afterburn extension list  # Lists installed and active extensions
+```
+
+---
+
+## Daily CLI Workflows
+
+Afterburner acts as a transparent, high-fidelity wrapper around Copilot CLI. All standard Copilot flags, arguments, prompts, and piping work identically:
+
+```powershell
+# Interactive chat session
+afterburn
+
+# Non-interactive prompt execution
+afterburn -p "Explain how quicksort works in Go"
+
+# Pass arbitrary flags to Copilot
+afterburn --model gpt-5.4 --effort high
+
+# Collision resolution: force arguments directly to Copilot
+afterburn run <copilot-args...>
+afterburn -- <copilot-args...>
+```
+
+### Interactive Terminal Broker
+
+On Windows, interactive launches automatically attach to Afterburner's production ConPTY terminal broker. The broker seamlessly multiplexes Copilot's interactive terminal with authenticated native modal UI dialogs. Non-interactive and piped launches run directly without terminal overhead.
+
+### Safe Mode & Emergency Recovery
+
+If an extension or experimental configuration misbehaves, bypass extensions without losing data:
+
+```powershell
+# Launch Copilot in safe mode with all extensions disabled
 afterburn --safe-mode
+
+# Disable a specific extension for a single run
 afterburn --disable-extension steward-burn
 ```
 
-## Extensions
+---
 
-Manage signed release built-ins:
+## Built-In Extensions (First-Party Product Pillars)
 
-```powershell
-afterburn install
-afterburn install byo-models black-box openai-server
-afterburn enable black-box
-afterburn enable openai-server
-afterburn disable black-box
-afterburn uninstall black-box
+Afterburner ships with three primary first-party extensions versioned in lockstep with the core release:
+
+### 1. OpenAI Server (`openai-server`)
+
+Exposes your active Copilot CLI session as a local OpenAI-compatible HTTP API (`http://127.0.0.1:41425/v1`). This enables local Python scripts, LiteLLM, evaluation harnesses (such as Colosseum), and developer tools to query Copilot models.
+
+- **Status:** Installed disabled by default to avoid unintended local port exposure.
+- **Commands:** Run `afterburn enable openai-server`, then inside a session use `/openai-server`.
+- **Auto-start:** Set `"enabled": true` in `~\.afterburner\config\openai-server.json`.
+- **Documentation:** [**OpenAI Server Deep Dive & Quickstart**](extensions/OpenAIServer/README.md)
+
+---
+
+### 2. BYOModels (`byo-models`)
+
+Enables "Bring Your Own Models" with custom OpenAI/Azure-compatible endpoints and exposes native reasoning effort and context-window scaling controls in Copilot's interactive `/model` picker.
+
+- **Status:** Enabled by default upon `afterburn install`.
+- **Config:** User-owned configuration at `~\.afterburner\config\byomodels.json`.
+- **Usage:** Open `/model` in an interactive session; use arrow keys for reasoning effort and Tab to select context tiers (256K, 512K, 768K, 1.05M).
+- **Features:** Header forwarding allowlists, legacy tool schema flattening, request ID tracking, and real-time streaming with pre-token error propagation.
+- **Documentation:** [**BYOModels Deep Dive**](extensions/BYOModels/README.md)
+
+---
+
+### 3. Black Box (`black-box`)
+
+Afterburner's supported observability layer. Captures bounded, privacy-preserving, metadata-only runtime diagnostics to help debug crashes, latency bottlenecks, and tool failures.
+
+- **Status:** Enabled by default upon `afterburn install`.
+- **Privacy Guarantee:** Never records prompts, model responses, source code, tool arguments/results, or summaries.
+- **Commands:** Use `/black-box`, `/black-box-modal`, `/black-box-tail`, `/black-box-export`, and `/black-box-doctor` inside Copilot.
+- **Data storage:** Stored locally in `~\.afterburner\extension-data\black-box`.
+- **Documentation:** [**Black Box Deep Dive**](extensions/BlackBox/README.md)
+
+---
+
+## Onboarding: Connecting External Tools via OpenAI Server
+
+A common workflow for new engineers is using Afterburner to power local evaluation harnesses, agent loops, or Python scripts:
+
+### 1. Configure the local bridge
+
+Create `~\.afterburner\config\openai-server.json`:
+
+```json
+{
+  "enabled": true,
+  "host": "127.0.0.1",
+  "port": 41425,
+  "requireApiKey": false
+}
 ```
 
-OpenAI Server is installed disabled by default because it exposes a localhost API; enable it explicitly when needed. Uninstall removes managed package registration and immutable package caches while preserving configuration and extension data.
+### 2. Start Afterburner
 
-Manage custom local, packaged, or Git extensions:
-
-```powershell
-afterburn extension pack .\my-extension .\dist\my-extension.zip
-afterburn extension install .\dist\my-extension.zip
-afterburn extension install nbaertsch/steward-burn@main
-afterburn extension enable steward-burn
-afterburn extension update steward-burn
-afterburn extension update --all
-afterburn extension rollback steward-burn
-afterburn extension inspect steward-burn
-afterburn extension list
-```
-
-Git sources are resolved to immutable commits. Installation is disabled by default until explicitly
-enabled. Local ZIP packages are bounded and safely extracted into the same immutable package store;
-the original archive path and SHA-256 digest are retained for updates. Packages execute trusted
-JavaScript in the Copilot process and may optionally provide a session extension from the same
-immutable package. Manifest `requires.afterburner` and `requires.copilotCli` ranges are enforced
-during installation, update, enablement, rollback, and launch.
-
-## BYOModels
-
-BYOModels adds configured providers and model-picker reasoning/context controls. Configuration is
-user-owned at:
-
-```text
-~\.afterburner\config\byomodels.json
-```
-
-Open `/model`, use left/right arrows for reasoning, press Tab to focus context, then use left/right
-for `256K`, `512K`, `768K`, and `1.05M` where supported. See
-[`extensions/BYOModels/README.md`](extensions/BYOModels/README.md).
-
-## Black Box
-
-Black Box records bounded, metadata-only runtime diagnostics under
-`~\.afterburner\extension-data\black-box`. It does not copy prompts, responses, source, tool
-arguments/results, or summaries. See [`extensions/BlackBox/README.md`](extensions/BlackBox/README.md).
-
-## OpenAI Server
-
-OpenAI Server exposes the active Copilot session through a localhost OpenAI-compatible `/v1` API when enabled. Use `/openai-server` in a session to start and manage it. Legacy `/copilot-openai`, `copilot-openai.json`, and `AFTERBURNER_COPILOT_OPENAI_*` names remain compatibility aliases. See [`extensions/OpenAIServer/README.md`](extensions/OpenAIServer/README.md).
-
-## Native terminal UI
-
-Interactive extension views use Afterburner's authenticated native terminal modal broker. Modal
-registration, documents, events, and actions remain scoped to the verified extension identity; no
-parallel browser, panel, or generic canvas host is required. Filesystem or other shared IPC used by
-session commands to ask a live runtime to open/update/ack/action a UI surface must also be scoped by
-the host-issued `AFTERBURNER_SESSION_ROUTE` capability. The route is an opaque per-launch value,
-Windows-safe for paths, redacted from user-facing diagnostics, and required on every queued request,
-acknowledgement, action, and route-owned state record; missing, stale, malformed, legacy-unscoped, or
-mismatched records fail closed and are never consumed as live cross-session work. Extensions declare
-local surface IDs under `ui.surfaces`, then register them through `api.ui.registerSurface`. The V1 API
-uses bounded, revisioned document snapshots with stable component IDs and native keyboard interaction
-for buttons, text fields, selections, toggles, sliders, and tabs.
-
-The zero-dependency author contract and TypeScript declarations are in
-[`sdk`](sdk/README.md). A complete arbitrary-extension example is in
-[`examples/native-ui-extension`](examples/native-ui-extension). The machine-readable contracts are
-[`schemas/extension-ui-v1.schema.json`](schemas/extension-ui-v1.schema.json) for manifest
-declarations and [`schemas/ui-document-v1.schema.json`](schemas/ui-document-v1.schema.json) for
-rendered documents.
+Keep a terminal running:
 
 ```powershell
-afterburn extension validate .\my-extension
-afterburn extension preview .\document.json 100
-afterburn extension pack .\my-extension .\dist\my-extension.zip
+afterburn
 ```
 
-## Compatibility and recovery
+### 3. Query from Python
 
-Afterburner inventories Copilot packages across user, local-app-data, executable-associated, and
-managed roots. Launch trust requires an embedded profile with exact `app.js` and `runtime.node`
-hashes, unique structural source probes, and a bounded real runtime self-test.
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:41425/v1",
+    api_key="local-token",
+)
+
+response = client.chat.completions.create(
+    model="gpt-5.4",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+)
+
+print(response.choices[0].message.content)
+```
+
+### 4. Query from LiteLLM / Evaluation Runners
+
+Point your evaluation runner or LiteLLM router to:
+
+- **API Base:** `http://127.0.0.1:41425/v1`
+- **API Key:** `local-token`
+- **Model:** `openai/gpt-5.4` (or any model reported by `GET /v1/models`)
+
+See [extensions/OpenAIServer/README.md](extensions/OpenAIServer/README.md) for full configuration, streaming examples, and troubleshooting.
+
+---
+
+## Extension Management
+
+### Managing Built-In Extensions
+
+Built-ins are fetched and verified against the current signed release:
+
+| Task | Command |
+|---|---|
+| Install all built-ins | `afterburn install` |
+| Install specific built-in | `afterburn install byo-models openai-server` |
+| Enable built-in | `afterburn enable openai-server` |
+| Disable built-in | `afterburn disable black-box` |
+| Uninstall built-in | `afterburn uninstall black-box` |
+| Sync with new core release | `afterburn update` |
+
+---
+
+### Managing Custom Extensions
+
+You can install third-party or custom extensions from packaged ZIPs or Git repositories:
+
+| Task | Command |
+|---|---|
+| Pack extension directory | `afterburn extension pack .\my-plugin .\dist\my-plugin.zip` |
+| Validate manifest | `afterburn extension validate .\my-plugin` |
+| Install from ZIP | `afterburn extension install .\dist\my-plugin.zip` |
+| Install from Git ref | `afterburn extension install user/repo@main` |
+| Enable custom extension | `afterburn extension enable my-plugin` |
+| Update custom extension | `afterburn extension update my-plugin` |
+| Roll back to previous version | `afterburn extension rollback my-plugin` |
+| List all extensions | `afterburn extension list` |
+
+For custom extension development, TypeScript declarations, and schemas, see the [Extension SDK Guide](sdk/README.md).
+
+---
+
+## Configuration Locations
+
+All Afterburner configuration and state is organized under `~/.afterburner`:
+
+| Component | Path / Location | Purpose |
+|---|---|---|
+| **Root Home** | `~/.afterburner` | Base directory for Afterburner control plane state |
+| **Binaries** | `~/.afterburner\bin\afterburn.exe` | Installed native control plane executable |
+| **Extension Registry** | `~/.afterburner\registry.json` | Verified extension identities, sources, and status |
+| **BYOModels Config** | `~/.afterburner\config\byomodels.json` | Custom model providers, endpoints, and credentials |
+| **OpenAI Server Config** | `~/.afterburner\config\openai-server.json` | Localhost bridge port, startup, and auth settings |
+| **Black Box Config** | `~/.afterburner\config\black-box.json` | Observability storage retention and ring limits |
+| **Black Box Data** | `~/.afterburner\extension-data\black-box` | Sanitized session timelines and diagnostic records |
+| **Copilot Home** | `~/.afterburner\copilot-home` | Isolated loader state (session state linked via junction) |
+
+---
+
+## Troubleshooting & Diagnostics
+
+### Run System Diagnostics
 
 ```powershell
-afterburn compatibility list
-afterburn compatibility status
-afterburn compatibility retry
+# Human-readable report of core, packages, and extensions
 afterburn doctor
+
+# Machine-readable JSON output for automated health checks
 afterburn doctor --json
+
+# Export a sanitized diagnostic bundle for bug reporting
 afterburn doctor --bundle
+```
+
+### Repair Corrupt or Stale State
+
+```powershell
 afterburn repair
 ```
 
-Successful runtime tuples are persisted as last-known-good state. A failed candidate falls back only
-when package files and the extension-registry fingerprint still match. `repair` validates the
-managed session junction and registry, reconciles session components, removes invalid fallback
-state, and cleans abandoned staging directories without deleting user configuration or extension
-data.
+Validates the managed session directory junction, verifies extension registry integrity, purges abandoned update staging directories, and reconciles state without touching user configuration or stored extension data.
 
-## Agentic engineering workflow
-
-Production incidents follow this repository workflow: collect incident evidence, create a minimal
-reproduction, state the invariant being protected, create a feature branch, land the focused fix,
-add deterministic unit/integration regression tests, run pristine local CI-equivalent validation,
-perform an adversarial full-diff review, and only then prepare release readiness. Local testing is
-the first gate; CI and deployment are final release gates, not substitutes for local reproduction.
-
-## Updates and rollback
+### Inspect Package Compatibility
 
 ```powershell
+afterburn compatibility status  # Shows selected Copilot package and profile ID
+afterburn compatibility list    # Lists embedded compatibility profiles
+afterburn compatibility retry   # Invalidates cache to re-run compatibility probes
+```
+
+---
+
+## Updates & Rollback
+
+Afterburner includes an atomic in-place update engine:
+
+```powershell
+# Check for updates without applying
 afterburn update --check
+
+# Download, verify signatures, and install latest core and built-ins
 afterburn update
+
+# Roll back to the previous core and matching extension set
 afterburn rollback core
 ```
 
-Updates use GitHub Releases and private-repository authentication from `GITHUB_TOKEN`, `GH_TOKEN`,
-or `gh auth token`. Before downloading or executing archives, the updater verifies an Ed25519
-signature over a canonical manifest bound to this repository, tag, commit, platform, architecture,
-archive SHA-256, size, and built-in extension package checksums. It syncs built-ins to that exact
-release tag, verifies PE architecture and embedded version, then launches a detached replacement
-helper. The current core is retained, a bounded post-update doctor runs, and validation failure
-restores the previous binary automatically. If Windows reports the executable is locked, the helper
-switches the managed `bin` directory without terminating active sessions. Core rollback restores the
-matching extension registry and package set rather than mixing releases. Interrupted update
-transactions are journaled and recovered on the next command. Failures are recorded in
-`state\core-update-status.json`; subsequent `afterburn version`,
-`afterburn update`, `afterburn install`, and interactive launches print a warning so stale-core
-state is visible until the next successful replacement.
+### Security & Release Verification
 
-## Layout
+1. **Cryptographic Signatures:** Every release publishes a canonical `release-manifest.json` signed with an Ed25519 key restricted to GitHub Actions release workflows.
+2. **Atomic Binary Replacement:** Windows prevents overwriting running executables. Afterburner uses a retiring replacement mechanism to stage and swap binaries atomically without terminating active sessions.
+3. **Automatic Reversion:** Post-update preflight tests verify the new core; if startup fails, the previous working binary is automatically restored.
 
-```text
-~\.afterburner\
-├── bin\                 installed and previous native cores
-├── config\              user-owned configuration
-├── extensions\          immutable installed extension packages
-├── extension-data\      extension-owned durable data
-├── copilot-home\        isolated Copilot state and prepared runtimes
-├── diagnostics\         explicit sanitized doctor bundles
-├── state\               compatibility and update transaction state
-└── registry.json        extension source and enablement registry
-```
+---
 
-The managed Copilot home shares only native session state through a validated directory junction.
-Afterburner never registers its extensions in normal Copilot configuration.
-
-## Develop and test
+## Development & Testing
 
 ```powershell
+# Run full Go unit tests
 go test ./...
+
+# Run static analysis
 go vet -unsafeptr=false ./...
+
+# Run JavaScript extension tests
 npm test
+
+# Verify byte synchronization across runtime mirrors
+npm run check:runtime
+
+# Run full release validation script
 npm run test:release-local
 ```
 
-Windows CI also builds amd64/arm64 binaries and validates exact resume forwarding, Ctrl+C, and
-the modal broker under a real ConPTY. The interactive picker harness is `tests\native-conpty.mjs`.
-For the multi-session release gate on a busy development machine,
-`AFTERBURNER_MULTI_SESSION_READY_TIMEOUT_MS` overrides the default 30-second startup-readiness
-budget; modal interaction assertions and their latency budgets are unchanged.
-For installed end-to-end modal validation, run `npm run test:real-tui:black-box`; it opens a real
-Afterburner/Copilot TUI, bracket-pastes `/black-box-modal` for deterministic command entry, and then
-uses actual keyboard input for arrow/Page/Home/End scrolling, Refresh, Doctor, Export, `q` close,
-reopen, and Escape close. The harness preserves what a keyboard-only user saw after every action in
-`blackbox-modal-tui-operator.json` and `blackbox-modal-tui-operator.md`, and records the full
-bidirectional terminal session as `blackbox-modal-tui.cast` plus `blackbox-modal-tui-io.jsonl` for
-replay/debugging. PNG artifacts are secondary raster evidence: the same run also writes raw ANSI,
-plain text, machine-readable latency/result JSON, a standalone visual evidence manifest JSON, a
-combined PNG report, and per-screen PNG captures under `artifacts\real-tui` by default. The run
-fails unless the operator journey covers every advertised key, each step has a non-empty viewport,
-the replay artifacts exist, every visual evidence entry names generated proof, the modal remains a
-bounded overlay on the Copilot backdrop, accessible cues/status/timeline/export/privacy content are
-visible, no Black Box UI self-noise leaks into the modal, PNGs are valid/nonblank, and all
-open/reopen/scroll/refresh/export/close interactions stay within latency budgets. Run
-`node tests\real-blackbox-modal-tui.mjs --help` for artifact and latency-budget options. Use
-`npm run replay:real-tui:black-box -- <capture-dir> --mode steps` to step through the captured
-operator viewports, `--mode replay` to replay the recorded terminal stream, or `--mode summary` to
-inspect pass/fail state and artifact completeness.
+---
+
+## Documentation Links
+
+- [BYOModels Guide](extensions/BYOModels/README.md)
+- [Black Box Observability Guide](extensions/BlackBox/README.md)
+- [OpenAI Server Bridge Guide](extensions/OpenAIServer/README.md)
+- [Extension Authoring SDK](sdk/README.md)
+- [UI Document Schema](schemas/ui-document-v1.schema.json)
