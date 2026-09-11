@@ -68,6 +68,10 @@ func TestReconcilePreservesOrdinaryPluginsAndRemovesStaleManaged(t *testing.T) {
 	if got["otherSetting"] != true {
 		t.Fatal("unrelated configuration was not preserved")
 	}
+	enabled := got["enabledPlugins"].(map[string]any)
+	if enabled["afterburner-example"] != true {
+		t.Fatalf("managed session plugin was not enabled: %#v", enabled)
+	}
 	if string(data[:2]) != "//" {
 		t.Fatal("managed JSONC header was not preserved")
 	}

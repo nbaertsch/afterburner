@@ -117,6 +117,14 @@ func Reconcile(layout home.Layout, value registry.Registry) error {
 		retained = append(retained, raw)
 	}
 	config["installedPlugins"] = append(retained, desired...)
+	enabled, ok := config["enabledPlugins"].(map[string]any)
+	if !ok {
+		enabled = map[string]any{}
+		config["enabledPlugins"] = enabled
+	}
+	for name := range desiredNames {
+		enabled[name] = true
+	}
 	migrateOpenAIServerPluginState(config, desiredNames)
 	return saveConfig(configPath, prefix, config)
 }
