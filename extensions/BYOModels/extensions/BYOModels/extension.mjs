@@ -378,6 +378,10 @@ async function hydrateProvider(provider) {
 }
 
 function hydrateModelFromCatalog(model, catalog) {
+    const configured = configuredRegistration(model);
+    if (configured) {
+        return configured;
+    }
     const upstream = catalog.find((candidate) => candidate?.id === model.modelId);
     if (!upstream) {
         throw new Error(`Upstream capability source '${model.modelId}' is unavailable.`);
@@ -420,6 +424,7 @@ function hydrateModelFromCatalog(model, catalog) {
 function buildRuntimeMetadata(models, catalog) {
     return models.map((model) => {
         const upstream = catalog.find((candidate) => candidate?.id === model.modelId);
+        const configured = configuredRegistration(model);
         const reasoningProperty = upstream?.configSchema?.properties?.reasoningEffort;
         const reasoningSupport = upstream?.capabilities?.supports?.reasoning_effort;
         const supportedReasoningEfforts = Array.isArray(reasoningSupport)
@@ -430,8 +435,10 @@ function buildRuntimeMetadata(models, catalog) {
         return {
             selectionId: `${model.provider}/${model.id}`,
             upstreamModelId: model.modelId,
-            maxContextWindowTokens: upstream?.capabilities?.limits?.max_context_window_tokens ?? null,
-            maxOutputTokens: upstream?.capabilities?.limits?.max_output_tokens ?? null,
+            maxContextWindowTokens: configured?.maxContextWindowTokens ??
+                upstream?.capabilities?.limits?.max_context_window_tokens ?? null,
+            maxOutputTokens: configured?.maxOutputTokens ??
+                upstream?.capabilities?.limits?.max_output_tokens ?? null,
             supportedReasoningEfforts,
             defaultReasoningEffort: typeof reasoningProperty?.default === "string"
                 ? reasoningProperty.default

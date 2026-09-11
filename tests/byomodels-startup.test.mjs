@@ -60,6 +60,23 @@ test("complete configured metadata takes precedence over cache", () => {
     assert.deepEqual(immediateRegistrations([explicit], cache), [explicit]);
 });
 
+test("custom model IDs can register entirely from configured capabilities", () => {
+    const custom = {
+        provider: "runpod",
+        id: "qwen-custom",
+        name: "Qwen Custom",
+        modelId: "qwen-custom",
+        wireModel: "/models/qwen.gguf",
+        maxPromptTokens: 1_000_000,
+        maxContextWindowTokens: 1_048_576,
+        maxOutputTokens: 48_576,
+        capabilities: {
+            supports: { vision: false, reasoningEffort: false }
+        }
+    };
+    assert.deepEqual(immediateRegistrations([custom], null), [custom]);
+});
+
 test("RPC deadline reports the timed out operation", async () => {
     await assert.rejects(
         withDeadline(new Promise(() => {}), 10, "capability discovery"),
