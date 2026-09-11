@@ -96,7 +96,18 @@ path-prefixed OpenAI-compatible base URLs.
 }
 ```
 
-Never put credentials directly in the configuration file.
+### Bearer token in configuration
+
+```json
+"auth": {
+  "type": "bearer-token",
+  "value": "YOUR_BEARER_TOKEN"
+}
+```
+
+Use this form when the token must be stored in `byomodels.json`. Restrict the file to the current
+user because it now contains a credential. Environment-backed auth remains preferable on shared
+systems.
 
 ## Updates and safety
 

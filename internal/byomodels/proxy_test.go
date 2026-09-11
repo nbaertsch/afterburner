@@ -161,6 +161,20 @@ func TestProxyConfigurationNormalizesHeaderNamesAndIncludesValues(t *testing.T) 
 	if got := proxyConfiguration(configured); got == expected {
 		t.Fatalf("changed header value retained configuration %q", got)
 	}
+	configured = provider{
+		Auth: auth{Type: "bearer-token", Value: "configured-token"},
+		RequestCompatibility: requestCompatibility{
+			MaxInputItemIDLength: 64,
+		},
+	}
+	const bearerExpected = "dwYzmfdNzoCy2mLHJSPbJwr8k85Kp3kK1qZyTRosLyc"
+	if got := proxyConfiguration(configured); got != bearerExpected {
+		t.Fatalf("configured bearer configuration = %q, want %q", got, bearerExpected)
+	}
+	configured.Auth.Value = "changed-token"
+	if got := proxyConfiguration(configured); got == bearerExpected {
+		t.Fatalf("changed bearer token retained configuration %q", got)
+	}
 }
 
 func TestProviderHeaderValidation(t *testing.T) {
@@ -187,6 +201,59 @@ func TestProviderHeaderValidation(t *testing.T) {
 		Headers: map[string]string{"x-ms-scp-use-cell": "true"},
 	}); err != nil {
 		t.Fatalf("valid configured header rejected: %v", err)
+	}
+	if err := validateProviderHeaders(provider{
+		Name: "test",
+		Auth: auth{Type: "bearer-token"},
+	}); err == nil {
+		t.Fatal("expected empty configured bearer token validation failure")
+	}
+}
+
+func TestProxyAppliesConfiguredBearerToken(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("authorization"); got != "Bearer configured-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	port := availablePort(t)
+	path := filepath.Join(t.TempDir(), "byomodels.json")
+	value := fmt.Sprintf(`{
+  "version": 1,
+  "providers": [{
+    "name": "configured-bearer",
+    "baseUrl": %q,
+    "requestCompatibility": { "maxInputItemIdLength": 64, "proxyPort": %d },
+    "auth": { "type": "bearer-token", "value": "configured-token" }
+  }]
+}`, upstream.URL, port)
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := Start(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	endpoints := manager.Endpoints()
+	if len(endpoints) != 1 {
+		t.Fatalf("unexpected endpoints: %#v", endpoints)
+	}
+	request, err := http.NewRequest(http.MethodPost, endpoints[0].BaseURL+"/responses", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("authorization", "Bearer "+endpoints[0].Capability)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
 	}
 }
 

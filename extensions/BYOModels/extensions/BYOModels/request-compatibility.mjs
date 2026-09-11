@@ -63,15 +63,22 @@ export function proxyConfiguration(provider) {
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
         .map(([name, value]) => `${name}:${value}`)
         .join("\n");
-    const configuration = [
+    let configuration = [
         String(maximumLength),
         String(provider.requestCompatibility?.forceStreaming === true),
         provider.auth?.type ?? "",
         provider.auth?.resource ?? "",
-        configuredHeaders,
-        ...(provider.requestCompatibility?.legacyTools === true ? ["legacyTools"] : []),
-        ...(provider.requestCompatibility?.bufferResponses === true ? ["bufferResponses"] : [])
+        configuredHeaders
     ].join("\0");
+    if (provider.auth?.type === "bearer-token") {
+        configuration += `\0${provider.auth.value ?? ""}`;
+    }
+    if (provider.requestCompatibility?.legacyTools === true) {
+        configuration += "\0legacyTools";
+    }
+    if (provider.requestCompatibility?.bufferResponses === true) {
+        configuration += "\0bufferResponses";
+    }
     return createHash("sha256").update(configuration).digest("base64url");
 }
 

@@ -1,17 +1,11 @@
 import { immediateRegistrations } from "./model-metadata.mjs";
 
-export function scheduleDetached(callback) {
-    const handle = setTimeout(callback, 0);
-    handle.unref?.();
-}
-
 export async function activateModelRegistration({
     models,
     cache,
     register,
     report,
-    refresh,
-    schedule = scheduleDetached
+    refresh
 }) {
     const immediate = immediateRegistrations(models, cache);
     if (immediate.length > 0) {
@@ -23,10 +17,7 @@ export async function activateModelRegistration({
         : "";
     await report(
         `Registered ${immediate.length} BYOModels model(s) immediately from validated cached/configured capabilities. ` +
-        `Extension activation is completing before detached live capability refresh.${summary}`
+        `Live capability refresh is completing before extension activation returns.${summary}`
     );
-    schedule(() => {
-        void refresh(immediate).catch(() => {});
-    });
-    return immediate;
+    return await refresh(immediate);
 }

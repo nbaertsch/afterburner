@@ -80,6 +80,16 @@ test("proxy configuration normalizes header names and includes values", () => {
     ...provider,
     headers: { "x-a": "changed", "x-z": "2" }
   }), proxyConfiguration(provider));
+
+  const configuredBearer = {
+    auth: { type: "bearer-token", value: "configured-token" },
+    requestCompatibility: { maxInputItemIdLength: 64 }
+  };
+  assert.equal(proxyConfiguration(configuredBearer), "dwYzmfdNzoCy2mLHJSPbJwr8k85Kp3kK1qZyTRosLyc");
+  assert.notEqual(proxyConfiguration({
+    ...configuredBearer,
+    auth: { ...configuredBearer.auth, value: "changed-token" }
+  }), proxyConfiguration(configuredBearer));
 });
 
 test("compatibility proxy normalizes IDs and refreshes authentication", async () => {

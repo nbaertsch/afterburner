@@ -74,6 +74,7 @@ type requestCompatibility struct {
 type auth struct {
 	Type     string `json:"type"`
 	Resource string `json:"resource"`
+	Value    string `json:"value"`
 }
 
 type identity struct {
@@ -212,7 +213,7 @@ func Start(configPath string) (*Manager, error) {
 func canNativeOwn(value provider) bool {
 	// Schema relocation is owned by the session proxy, including when a preferred port is configured.
 	return !value.RequestCompatibility.LegacyTools && !value.RequestCompatibility.BufferResponses &&
-		(value.Auth.Type == "" || value.Auth.Type == "azure-cli")
+		(value.Auth.Type == "" || value.Auth.Type == "azure-cli" || value.Auth.Type == "bearer-token")
 }
 
 func newCapability() (string, error) {
@@ -239,6 +240,9 @@ func proxyConfiguration(value provider) string {
 		value.Auth.Resource,
 		strings.Join(configuredHeaders, "\n"),
 	}, "\x00")
+	if value.Auth.Type == "bearer-token" {
+		configuration += "\x00" + value.Auth.Value
+	}
 	if value.RequestCompatibility.LegacyTools {
 		configuration += "\x00legacyTools"
 	}
@@ -250,6 +254,9 @@ func proxyConfiguration(value provider) string {
 }
 
 func validateProviderHeaders(value provider) error {
+	if value.Auth.Type == "bearer-token" && strings.TrimSpace(value.Auth.Value) == "" {
+		return fmt.Errorf("provider %q must define a non-empty auth.value", value.Name)
+	}
 	names := map[string]bool{}
 	for name, configuredValue := range value.Headers {
 		normalized := strings.ToLower(strings.TrimSpace(name))
@@ -459,6 +466,8 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 			return
 		}
 		upstreamRequest.Header.Set("authorization", "Bearer "+token)
+	} else if current.provider.Auth.Type == "bearer-token" {
+		upstreamRequest.Header.Set("authorization", "Bearer "+strings.TrimSpace(current.provider.Auth.Value))
 	}
 
 	upstreamResponse, err := current.client.Do(upstreamRequest)

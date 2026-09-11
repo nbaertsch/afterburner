@@ -72,6 +72,10 @@ function validateConfig() {
         if (providerNames.has(provider.name)) {
             throw new Error(`Duplicate BYOModels provider name: ${provider.name}`);
         }
+        if (provider.auth?.type === "bearer-token" &&
+            (typeof provider.auth.value !== "string" || !provider.auth.value.trim())) {
+            throw new Error(`Provider '${provider.name}' must define a non-empty auth.value.`);
+        }
         const maximumLength = provider.requestCompatibility?.maxInputItemIdLength;
         if (maximumLength !== undefined &&
             (!Number.isInteger(maximumLength) || maximumLength < 16)) {
@@ -198,6 +202,14 @@ function requiredEnvironmentValue(provider, auth, field) {
     return value;
 }
 
+function requiredConfiguredValue(provider, auth, field) {
+    const value = typeof auth.value === "string" ? auth.value.trim() : "";
+    if (!value) {
+        throw new Error(`Provider '${provider.name}' requires auth.value for ${field}.`);
+    }
+    return value;
+}
+
 function readJwtExpiry(token) {
     const parts = token.split(".");
     if (parts.length < 2) {
@@ -307,6 +319,8 @@ async function hydrateProvider(provider) {
         ? () => ({ "api-key": requiredEnvironmentValue(provider, auth, "API-key authentication") })
         : auth?.type === "bearer-token-env"
             ? () => ({ authorization: `Bearer ${requiredEnvironmentValue(provider, auth, "bearer-token authentication")}` })
+            : auth?.type === "bearer-token"
+                ? () => ({ authorization: `Bearer ${requiredConfiguredValue(provider, auth, "bearer-token authentication")}` })
             : undefined;
     let compatibilityProxy;
     const nativeProxy = nativeProxyEndpoints.get(provider.name);
@@ -352,6 +366,11 @@ async function hydrateProvider(provider) {
             return {
                 ...sdkProvider,
                 bearerToken: requiredEnvironmentValue(provider, auth, "bearer-token authentication")
+            };
+        case "bearer-token":
+            return {
+                ...sdkProvider,
+                bearerToken: requiredConfiguredValue(provider, auth, "bearer-token authentication")
             };
         default:
             throw new Error(`Unsupported authentication type for provider '${provider.name}': ${auth.type}`);
@@ -611,5 +630,6 @@ registeredModels = await activateModelRegistration({
                 `BYOModels capability refresh failed: ${error?.message ?? String(error)}.${retained}`
             );
         }
+        return registeredModels;
     }
 });
