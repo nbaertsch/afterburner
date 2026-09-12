@@ -1,0 +1,8 @@
+{
+  "name": "afterburner-subagent-policy",
+  "version": "0.1.0",
+  "description": "Session-scoped configurable subagent policies for Afterburner.",
+  "extensions": [
+    "./extensions/SubagentPolicy/extension.mjs"
+  ]
+}

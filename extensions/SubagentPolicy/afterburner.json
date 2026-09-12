@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "subagent-policy",
+  "name": "Subagent Policy",
+  "version": "0.1.0",
+  "visibility": "builtin",
+  "runtime": {
+    "entry": "extensions/SubagentPolicy/extension.mjs"
+  },
+  "permissions": {
+    "filesystem": [
+      "read-config",
+      "runtime-ipc"
+    ],
+    "session": [
+      "commands"
+    ]
+  }
+}
