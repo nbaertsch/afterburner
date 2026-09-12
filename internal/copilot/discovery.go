@@ -68,20 +68,21 @@ func Discover(opts DiscoveryOptions) ([]Package, error) {
 	userHome, _ := os.UserHomeDir()
 	var roots []string
 	if !opts.OnlyAdditionalRoots {
-		roots = append(roots,
-			filepath.Join(userHome, ".copilot", "pkg", platform),
-			filepath.Join(os.Getenv("LOCALAPPDATA"), "copilot", "pkg", platform),
-			filepath.Join(opts.ManagedHome, "pkg", platform),
-		)
+		if value := os.Getenv("AFTERBURNER_COPILOT_PACKAGE_ROOTS"); value != "" {
+			roots = append(roots, filepath.SplitList(value)...)
+		} else {
+			roots = append(roots,
+				filepath.Join(userHome, ".copilot", "pkg", platform),
+				filepath.Join(os.Getenv("LOCALAPPDATA"), "copilot", "pkg", platform),
+				filepath.Join(opts.ManagedHome, "pkg", platform),
+			)
+		}
 		if opts.CopilotExecutable != "" {
 			executableDir := filepath.Dir(opts.CopilotExecutable)
 			roots = append(roots,
 				filepath.Join(executableDir, "pkg", platform),
 				filepath.Join(filepath.Dir(executableDir), "pkg", platform),
 			)
-		}
-		if value := os.Getenv("AFTERBURNER_COPILOT_PACKAGE_ROOTS"); value != "" {
-			roots = append(roots, filepath.SplitList(value)...)
 		}
 	}
 	roots = append(roots, opts.AdditionalRoots...)

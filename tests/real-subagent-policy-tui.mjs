@@ -13,7 +13,6 @@ const repoRoot = process.cwd();
 const root = join(tmpdir(), `afterburn-subagent-policy-${process.pid}-${Date.now()}`);
 const afterburnerHome = join(root, "afterburner");
 const normalCopilotHome = join(root, "normal-copilot");
-const isolatedUserHome = join(root, "user");
 const workspace = join(root, "workspace");
 const startedAt = Date.now();
 const terminalColumns = 140;
@@ -24,7 +23,6 @@ for (const path of [
   join(afterburnerHome, "config"),
   join(afterburnerHome, "copilot-home"),
   normalCopilotHome,
-  isolatedUserHome,
   workspace,
   join(root, "localappdata"),
   join(root, "appdata")
@@ -103,15 +101,18 @@ const isolatedEnvironment = (extra = {}) => {
   for (const key of Object.keys(environment)) {
     if (/^(COPILOT_HOME|COPILOT_AGENT_SESSION_ID|COPILOT_CLI|COPILOT_CLI_BINARY_VERSION|COPILOT_CLI_RESOLVED_DIST_DIR|COPILOT_LOADER_PID|COPILOT_SUPERVISED|AFTERBURNER_HOME|AFTERBURNER_NORMAL_COPILOT_HOME|AFTERBURNER_DISABLED_EXTENSIONS)$/i.test(key)) delete environment[key];
   }
-  environment.USERPROFILE = isolatedUserHome;
-  environment.HOME = isolatedUserHome;
-  environment.LOCALAPPDATA = join(root, "localappdata");
-  environment.APPDATA = join(root, "appdata");
   environment.AFTERBURNER_HOME = afterburnerHome;
   environment.AFTERBURNER_NORMAL_COPILOT_HOME = normalCopilotHome;
   environment.AFTERBURNER_ISOLATE_SESSION_STATE = "1";
-  const packageRoots = discoverPackageRoots();
+  const explicitRoots = (process.env.AFTERBURNER_COPILOT_PACKAGE_ROOTS ?? "").split(delimiter).filter(Boolean);
+  const pinnedPackageRoot = join(process.env.LOCALAPPDATA ?? "", "copilot", "pkg", "win32-x64");
+  const packageRoots = explicitRoots.length
+    ? explicitRoots.map(resolve)
+    : (existingDirectory(join(pinnedPackageRoot, "1.0.84-4")) ? [pinnedPackageRoot] : discoverPackageRoots());
   if (packageRoots.length > 0) environment.AFTERBURNER_COPILOT_PACKAGE_ROOTS = packageRoots.join(delimiter);
+  if (process.env.AFTERBURNER_COPILOT_EXECUTABLE) {
+    environment.AFTERBURNER_COPILOT_EXECUTABLE = process.env.AFTERBURNER_COPILOT_EXECUTABLE;
+  }
   return { ...environment, ...extra };
 };
 

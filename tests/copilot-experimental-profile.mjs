@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import pty from "node-pty";
@@ -29,6 +29,14 @@ export async function bootstrapExperimentalCopilotProfile({
   label = "experimental-profile-bootstrap",
   timeoutMs = 60_000
 }) {
+  mkdirSync(managedCopilotHome, { recursive: true });
+  const managedConfig = join(managedCopilotHome, "config.json");
+  if (!existsSync(managedConfig)) {
+    writeFileSync(managedConfig, `${JSON.stringify({
+      appTipShown: true,
+      askedSetupTerminals: ["windows-terminal"]
+    }, null, 2)}\n`, "utf8");
+  }
   const child = pty.spawn(afterburn, ["--name", `${label}-${process.pid}-${Date.now()}`, "--no-remote"], {
     name: "xterm-256color",
     cols: 140,
@@ -89,7 +97,14 @@ export async function bootstrapExperimentalCopilotProfile({
           return;
         }
       }
-      if (closed) throw new Error("Copilot exited during experimental profile bootstrap");
+      if (closed) {
+        const launchConfig = newestLaunchConfig(managedCopilotHome);
+        if (launchConfig) {
+          cpSync(launchConfig, managedConfig);
+          return;
+        }
+        throw new Error(`Copilot exited during experimental profile bootstrap; tail=${JSON.stringify(stripAnsi(raw).replace(/\s+/g, " ").trim().slice(-1200))}`);
+      }
       await sleep(100);
     }
     throw new Error(`timed out bootstrapping experimental Copilot profile; tail=${JSON.stringify(stripAnsi(raw).replace(/\s+/g, " ").trim().slice(-1200))}`);
