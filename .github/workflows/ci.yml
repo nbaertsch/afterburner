@@ -44,10 +44,11 @@ jobs:
         shell: pwsh
         run: |
           $release = gh api repos/github/copilot-cli/releases/latest | ConvertFrom-Json
+          $version = $release.tag_name.TrimStart('v')
           New-Item .copilot-current -ItemType Directory -Force | Out-Null
           gh release download $release.tag_name `
             --repo github/copilot-cli `
-            --pattern copilot-win32-x64.zip `
+            --pattern "*win32-x64*" `
             --dir .copilot-current
           Expand-Archive .copilot-current/copilot-win32-x64.zip -DestinationPath .copilot-current/extracted
           $native = Get-ChildItem .copilot-current/extracted -Filter copilot.exe -Recurse |
@@ -55,8 +56,15 @@ jobs:
           if (-not $native) {
             throw "Current Copilot native executable was not present in the release archive."
           }
+          $packageRoot = Join-Path (Resolve-Path .copilot-current) "packages\win32-x64"
+          $packagePath = Join-Path $packageRoot $version
+          New-Item $packagePath -ItemType Directory -Force | Out-Null
+          tar -xf ".copilot-current/github-copilot-$version-win32-x64.tgz" `
+            -C $packagePath `
+            --strip-components=1
           & $native --version
           "AFTERBURNER_COPILOT_EXECUTABLE=$native" | Add-Content $env:GITHUB_ENV
+          "AFTERBURNER_COPILOT_PACKAGE_ROOTS=$packageRoot" | Add-Content $env:GITHUB_ENV
       - name: Verify generated runtime copies are current
         run: npm run check:runtime
       - run: go test ./...
