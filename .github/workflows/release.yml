@@ -107,6 +107,7 @@ jobs:
           go run ./cmd/afterburn extension pack extensions/BlackBox artifacts/black-box.zip
           go run ./cmd/afterburn extension pack extensions/BYOModels artifacts/byo-models.zip
           go run ./cmd/afterburn extension pack extensions/OpenAIServer artifacts/openai-server.zip
+          go run ./cmd/afterburn extension pack extensions/SubagentPolicy artifacts/subagent-policy.zip
           foreach ($architecture in @("amd64", "arm64")) {
             $env:GOOS = "windows"
             $env:GOARCH = $architecture

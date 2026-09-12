@@ -90,6 +90,7 @@ type PackageReference struct {
 
 const (
 	OpenAIServerID       = "openai-server"
+	SubagentPolicyID     = "subagent-policy"
 	LegacyOpenAIServerID = "copilot-openai"
 	OpenAIServerName     = "OpenAI Server"
 	UIProtocol           = "afterburner.ui"
@@ -270,7 +271,7 @@ func ValidVisibility(visibility string) bool {
 
 func IsReservedBuiltinID(id string) bool {
 	switch id {
-	case "black-box", "byo-models", OpenAIServerID:
+	case "black-box", "byo-models", OpenAIServerID, SubagentPolicyID:
 		return true
 	default:
 		return false

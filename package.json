@@ -6,10 +6,11 @@
   "scripts": {
     "sync:runtime": "node scripts/sync-runtime.mjs",
     "check:runtime": "node scripts/sync-runtime.mjs --check",
-    "test": "npm run test:black-box && npm run test:openai-server && npm run test:compatibility",
+    "test": "npm run test:black-box && npm run test:openai-server && npm run test:subagent-policy && npm run test:compatibility",
     "test:native": "go test ./...",
     "test:black-box": "npm test --prefix extensions/BlackBox",
     "test:openai-server": "npm test --prefix extensions/OpenAIServer",
+    "test:subagent-policy": "npm test --prefix extensions/SubagentPolicy",
     "test:compatibility": "node --test internal/runtimepkg/*.test.mjs tests/byomodels-startup.test.mjs tests/request-compatibility.test.mjs tests/legacy-tools.test.mjs tests/response-stream.test.mjs tests/replay-blackbox-tui.test.mjs tests/route-ipc.test.mjs",
     "test:release-local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-release.ps1",
     "test:real-responses-client": "node tests/real-responses-client.mjs",

@@ -1,19 +1,31 @@
 {
+  "$schema": "../../schemas/extension-v1.schema.json",
   "schemaVersion": 1,
   "id": "subagent-policy",
-  "name": "Subagent Policy",
-  "version": "0.1.0",
+  "displayName": "Subagent Policy",
+  "description": "Applies configurable session-scoped model routing, concurrency, depth, and visibility policies to Copilot subagents.",
   "visibility": "builtin",
-  "runtime": {
-    "entry": "extensions/SubagentPolicy/extension.mjs"
+  "requires": {
+    "afterburner": ">=0.1.0 <1.0.0",
+    "copilotCli": [">=1.0.84-4"]
   },
-  "permissions": {
-    "filesystem": [
-      "read-config",
-      "runtime-ipc"
-    ],
-    "session": [
-      "commands"
+  "runtime": {
+    "entrypoint": "runtime/extension.mjs",
+    "execution": "in-process"
+  },
+  "capabilities": ["session-command", "modal-canvas"],
+  "ui": {
+    "protocol": "afterburner.ui",
+    "revision": 1,
+    "surfaces": [
+      {
+        "id": "subagent-policy",
+        "kind": "modal",
+        "title": "Subagent Policy"
+      }
     ]
+  },
+  "sessionExtension": {
+    "entrypoint": "extensions/SubagentPolicy/extension.mjs"
   }
 }

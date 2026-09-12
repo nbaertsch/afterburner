@@ -27,6 +27,7 @@ try {
     Invoke-Checked -FilePath go -Arguments @("run", "./cmd/afterburn", "extension", "pack", "extensions/BlackBox", "artifacts/black-box.zip")
     Invoke-Checked -FilePath go -Arguments @("run", "./cmd/afterburn", "extension", "pack", "extensions/BYOModels", "artifacts/byo-models.zip")
     Invoke-Checked -FilePath go -Arguments @("run", "./cmd/afterburn", "extension", "pack", "extensions/OpenAIServer", "artifacts/openai-server.zip")
+    Invoke-Checked -FilePath go -Arguments @("run", "./cmd/afterburn", "extension", "pack", "extensions/SubagentPolicy", "artifacts/subagent-policy.zip")
 }
 finally {
     if ($null -eq $previousAfterburnerHome) {

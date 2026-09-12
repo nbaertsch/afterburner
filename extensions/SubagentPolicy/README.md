@@ -56,6 +56,12 @@ Path: `~\.afterburner\config\subagent-policy.json`
       "maxDepth": 1,
       "resultExposure": "status-and-final",
       "disabledSubagents": [],
+      "agentFactories": {
+        "maxConcurrentSubagents": 4,
+        "maxTotalSubagents": 12,
+        "timeoutSeconds": 1800,
+        "maxAiCredits": 24
+      },
       "agents": {
         "explore": {
           "model": "doi/qwen38-blackfrost",
@@ -98,6 +104,11 @@ Path: `~\.afterburner\config\subagent-policy.json`
 | `resultExposure` | enum | yes | `final-only`, `status-and-final`, or `detailed`. |
 | `disabledSubagents` | string array | no | Agent names Copilot may not dispatch. |
 | `agents` | object | no | Per-agent live settings keyed by Copilot agent type. |
+| `agentFactories` | object | no | Optional live factory limits: concurrent, total, timeout, and AI credits. |
+
+`agentFactories` is consumed only by policy-managed factory workflows. It does not change ordinary
+Copilot subagent dispatch and is not applied globally because the current Copilot SDK has no live
+global factory-settings mutation API.
 
 Each agent entry may define `model`, `modelPolicy` (`preferred` or `required`), `effortLevel`,
 `contextTier` (`inherit`, `default`, or `long_context`), and `autoInvoke`.
@@ -127,8 +138,10 @@ routing. This avoids assuming a provider exists.
    - `maxDepth`
    - `disabledSubagents`
    - per-agent model, model policy, effort, context, and auto-invocation settings
-5. Clearing calls the API with `settings: null`.
-6. A route-scoped IPC state file supplies the trusted native modal. It contains policy metadata and
+5. Optional factory limits are exposed by Afterburner to policy-managed factory workflows. The
+   installed Copilot SDK does not expose a live global factory-settings mutation API.
+6. Clearing resets live subagent settings.
+7. A route-scoped IPC state file supplies the trusted native modal. It contains policy metadata and
    status only.
 
 `resultExposure` controls extension observability:
@@ -162,4 +175,3 @@ Implementation is complete only when:
    closes and reopens the modal, and verifies a fresh session receives only `defaultPolicy`.
 6. Agentic acceptance launches real subagent work under the applied policy and verifies the
    configured concurrency/model settings through session events or SDK-observable state.
-
