@@ -1,10 +1,10 @@
 {
   "$schema": "../../schemas/extension-v1.schema.json",
   "schemaVersion": 1,
-  "id": "subagent-policy",
+  "id": "subagent-policy-local",
   "displayName": "Subagent Policy",
   "description": "Applies configurable session-scoped model routing, concurrency, depth, and visibility policies to Copilot subagents.",
-  "visibility": "builtin",
+  "visibility": "private",
   "requires": {
     "afterburner": ">=0.1.0 <1.0.0",
     "copilotCli": [">=1.0.84-4"]

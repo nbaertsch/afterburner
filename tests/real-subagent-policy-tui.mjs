@@ -162,7 +162,7 @@ const currentPlain = () => stripAnsi(raw);
 const recentPlain = () => currentPlain().slice(-8000);
 const stagePlain = () => stripAnsi(raw.slice(stageRawLength));
 const promptVisible = value => /\/ commands|tab next tab|\? help|@ files · # issues|Tip:\s*\/usage/i.test(value);
-const modalPattern = /Subagent Policy[\s\S]*Active policy:\s*(none|balanced|burst)[\s\S]*balanced:\s*Balanced[\s\S]*burst:\s*Burst/i;
+const modalPattern = /Subagent Policy[\s\S]*Active:\s*(none|balanced|burst)[\s\S]*Solo[\s\S]*Balanced[\s\S]*Burst/i;
 const recordStep = (name, key, started, completed, assertions) => {
   operatorSteps.push({
     name,
@@ -260,10 +260,10 @@ const finish = (exitCode, message) => {
       usedRequestedArtifact: afterburn.toLowerCase() === resolve("artifacts\\afterburn.exe").toLowerCase(),
       privateTransformedPackageInstalled: entry.manifest?.visibility === "private" && entry.manifest?.id === "subagent-policy-uat",
       nativeModalRendered: operatorSteps.some(step => modalPattern.test(step.viewportText)),
-      balancedApplied: operatorSteps.some(step => /Active policy:\s*balanced/i.test(step.viewportText)),
-      burstApplied: operatorSteps.some(step => /Active policy:\s*burst/i.test(step.viewportText)),
-      durableBurstOnReopen: operatorSteps.some(step => step.name === "reopen and verify current-session state" && /Active policy:\s*burst/i.test(step.viewportText)),
-      cleared: operatorSteps.some(step => step.name === "clear current-session policy" && /Active policy:\s*none/i.test(step.viewportText)),
+      balancedApplied: operatorSteps.some(step => /Active:\s*balanced/i.test(step.viewportText)),
+      burstApplied: operatorSteps.some(step => /Active:\s*burst/i.test(step.viewportText)),
+      durableBurstOnReopen: operatorSteps.some(step => step.name === "reopen and verify current-session state" && /Active:\s*burst/i.test(step.viewportText)),
+      cleared: operatorSteps.some(step => step.name === "clear current-session policy" && /Active:\s*none/i.test(step.viewportText)),
       noCanvasOnlyFallback: !/Canvas opened:\s*Subagent Policy/i.test(plain),
       noTextFallback: !/native menu unavailable|interactive menu could not open/i.test(plain),
       packageHasModalCapability: (entry.manifest?.capabilities ?? []).includes("modal-canvas"),
@@ -351,18 +351,18 @@ child.onData(data => {
   if (/Canvas opened:\s*Subagent Policy/i.test(recent)) return finish(1, "Subagent Policy fell back to generic canvas-open text instead of native rendered UI");
   if (/native menu unavailable|interactive menu could not open/i.test(recent)) return finish(1, "Subagent Policy reported that the native interactive menu could not open");
 
-  if (stage === "opening" && modalPattern.test(text) && /Active policy:\s*none/i.test(text)) {
+  if (stage === "opening" && modalPattern.test(text) && /Active:\s*none/i.test(text)) {
     modalSeenAt = Date.now();
     recordStep("open native modal", "/subagent-policy", commandSentAt, modalSeenAt, ["native modal title rendered", "Balanced and Burst policies visible", "initial active policy is none"]);
     beginStage("balanced", "3", "apply Balanced");
     return;
   }
-  if (stage === "balanced" && /Active policy:\s*balanced/i.test(stagePlain())) {
+  if (stage === "balanced" && /Active:\s*balanced/i.test(stagePlain())) {
     recordStep("apply Balanced", "3", stageSentAt, Date.now(), ["Balanced action applied", "active policy changed to balanced"]);
     beginStage("burst", "4", "apply Burst");
     return;
   }
-  if (stage === "burst" && /Active policy:\s*burst/i.test(stagePlain())) {
+  if (stage === "burst" && /Active:\s*burst/i.test(stagePlain())) {
     recordStep("apply Burst", "4", stageSentAt, Date.now(), ["Burst action applied", "active policy changed to burst"]);
     beginStage("close-before-reopen", "q", "close before reopen");
     return;
@@ -375,12 +375,12 @@ child.onData(data => {
     submitCommand("reopen /subagent-policy", 750);
     return;
   }
-  if (stage === "reopening" && modalPattern.test(stagePlain()) && /Active policy:\s*burst/i.test(stagePlain())) {
+  if (stage === "reopening" && modalPattern.test(stagePlain()) && /Active:\s*burst/i.test(stagePlain())) {
     recordStep("reopen and verify current-session state", "/subagent-policy", stageSentAt, Date.now(), ["native modal reopened", "Burst remained active in the same live session"]);
     beginStage("clearing", "x", "clear session override");
     return;
   }
-  if (stage === "clearing" && /Active policy:\s*none/i.test(stagePlain())) {
+  if (stage === "clearing" && /Active:\s*none/i.test(stagePlain())) {
     recordStep("clear current-session policy", "x", stageSentAt, Date.now(), ["Clear action reset active policy to none"]);
     beginStage("closing", "q", "close cleared modal");
     return;
