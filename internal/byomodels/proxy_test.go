@@ -3,6 +3,7 @@ package byomodels
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -187,6 +189,89 @@ func TestProxyResetsIdleTimeoutWhenUpstreamMakesProgress(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte("response.completed")) {
 		t.Fatalf("completed response missing: %s", body)
+	}
+}
+
+func TestProxyReattachesIdenticalResponseAfterClientDisconnect(t *testing.T) {
+	var mu sync.Mutex
+	upstreamCalls := 0
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		upstreamCalls++
+		mu.Unlock()
+		startedOnce.Do(func() { close(started) })
+		<-release
+		response.Header().Set("content-type", "text/event-stream")
+		_, _ = response.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"reused\"}]}]}}\n\n"))
+	}))
+	defer upstream.Close()
+
+	manager, err := Start(writeConfig(t, upstream.URL, availablePort(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d/responses", managerPort(t, manager, 0))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	first, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(`{"stream":true,"input":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	firstDone := make(chan error, 1)
+	go func() {
+		response, requestErr := http.DefaultClient.Do(first)
+		if response != nil {
+			response.Body.Close()
+		}
+		firstDone <- requestErr
+	}()
+	<-started
+	cancel()
+	<-firstDone
+	time.Sleep(25 * time.Millisecond)
+
+	second, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(`{"stream":true,"input":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	secondDone := make(chan *http.Response, 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		response, requestErr := http.DefaultClient.Do(second)
+		if requestErr != nil {
+			secondErr <- requestErr
+			return
+		}
+		secondDone <- response
+	}()
+	close(release)
+
+	select {
+	case err := <-secondErr:
+		t.Fatal(err)
+	case response := <-secondDone:
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"text":"reused"`)) {
+			t.Fatalf("status = %d, body = %s", response.StatusCode, body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reattached response did not complete")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if upstreamCalls != 1 {
+		t.Fatalf("upstream calls = %d, want 1", upstreamCalls)
 	}
 }
 

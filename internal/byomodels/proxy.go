@@ -30,6 +30,7 @@ const (
 	healthPath            = "/__afterburner/byomodels/health"
 	healthMarker          = "afterburner-byomodels-proxy-v1"
 	proxyCapabilityHeader = "x-afterburner-proxy-capability"
+	completedReuseWindow  = 30 * time.Second
 )
 
 var upstreamIdleTimeout = 5 * time.Minute
@@ -122,6 +123,15 @@ type service struct {
 	listener   net.Listener
 	done       chan struct{}
 	closed     bool
+	inflight   map[string]*inflightResponse
+}
+
+type inflightResponse struct {
+	done       chan struct{}
+	statusCode int
+	headers    http.Header
+	body       []byte
+	err        error
 }
 
 type idleDeadline struct {
@@ -207,6 +217,7 @@ func Start(configPath string) (*Manager, error) {
 			client:     &http.Client{},
 			capability: capability,
 			done:       make(chan struct{}),
+			inflight:   map[string]*inflightResponse{},
 		}
 		pending = append(pending, current)
 	}
@@ -460,16 +471,107 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	requestContext, cancel := context.WithCancelCause(request.Context())
-	deadline := newIdleDeadline(upstreamIdleTimeout, cancel)
-	defer deadline.stop()
-	defer cancel(nil)
-
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		writeProxyError(response, err)
 		return
 	}
+	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/responses") {
+		current.handleSharedResponse(response, request, body)
+		return
+	}
+	current.proxy(response, request, body, request.Context())
+}
+
+func (current *service) handleSharedResponse(response http.ResponseWriter, request *http.Request, body []byte) {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(request.Method))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(request.URL.RequestURI()))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write(body)
+	key := base64.RawURLEncoding.EncodeToString(hash.Sum(nil))
+
+	current.mu.Lock()
+	shared, exists := current.inflight[key]
+	if !exists {
+		shared = &inflightResponse{done: make(chan struct{})}
+		current.inflight[key] = shared
+	}
+	current.mu.Unlock()
+
+	if !exists {
+		go func() {
+			recorder := newBufferedResponse()
+			current.proxy(recorder, request.Clone(context.Background()), body, context.Background())
+			shared.statusCode, shared.headers, shared.body, shared.err = recorder.result()
+			close(shared.done)
+			time.AfterFunc(completedReuseWindow, func() {
+				current.mu.Lock()
+				if current.inflight[key] == shared {
+					delete(current.inflight, key)
+				}
+				current.mu.Unlock()
+			})
+		}()
+	}
+
+	select {
+	case <-request.Context().Done():
+		return
+	case <-shared.done:
+		if shared.err != nil {
+			writeProxyError(response, shared.err)
+			return
+		}
+		copyHeaders(response.Header(), shared.headers)
+		response.WriteHeader(shared.statusCode)
+		_, _ = response.Write(shared.body)
+	}
+}
+
+type bufferedResponse struct {
+	header     http.Header
+	statusCode int
+	body       bytes.Buffer
+}
+
+func newBufferedResponse() *bufferedResponse {
+	return &bufferedResponse{header: make(http.Header), statusCode: http.StatusOK}
+}
+
+func (current *bufferedResponse) Header() http.Header {
+	return current.header
+}
+
+func (current *bufferedResponse) WriteHeader(statusCode int) {
+	if current.statusCode == http.StatusOK {
+		current.statusCode = statusCode
+	}
+}
+
+func (current *bufferedResponse) Write(data []byte) (int, error) {
+	return current.body.Write(data)
+}
+
+func (current *bufferedResponse) Flush() {}
+
+func (current *bufferedResponse) result() (int, http.Header, []byte, error) {
+	return current.statusCode, current.header.Clone(), bytes.Clone(current.body.Bytes()), nil
+}
+
+func (current *service) proxy(
+	response http.ResponseWriter,
+	request *http.Request,
+	body []byte,
+	parent context.Context,
+) {
+	requestContext, cancel := context.WithCancelCause(parent)
+	deadline := newIdleDeadline(upstreamIdleTimeout, cancel)
+	defer deadline.stop()
+	defer cancel(nil)
+
+	var err error
 	if len(body) > 0 && strings.Contains(request.Header.Get("content-type"), "application/json") {
 		body, err = rewriteInputItemIDs(body, current.provider.RequestCompatibility.MaxInputItemIDLength)
 		if err != nil {
