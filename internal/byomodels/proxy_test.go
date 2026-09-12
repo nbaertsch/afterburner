@@ -134,6 +134,64 @@ func TestProxyReportsUpstreamTimeout(t *testing.T) {
 	}
 }
 
+func TestProxyNormalizesWireModelCatalogIDs(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("content-type", "application/json")
+		_, _ = response.Write([]byte(`{"object":"list","data":[{"id":"/workspace/models/qwen.gguf","object":"model"},{"id":"qwen-stable","object":"model"}]}`))
+	}))
+	defer upstream.Close()
+
+	port := availablePort(t)
+	path := filepath.Join(t.TempDir(), "byomodels.json")
+	value := fmt.Sprintf(`{
+  "version": 1,
+  "providers": [{
+    "name": "doi",
+    "baseUrl": %q,
+    "requestCompatibility": {
+      "forceStreaming": true,
+      "proxyPort": %d
+    }
+  }],
+  "models": [{
+    "provider": "doi",
+    "id": "qwen-stable",
+    "wireModel": "/workspace/models/qwen.gguf"
+  }]
+}`, upstream.URL, port)
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := Start(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/models", port), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var catalog struct {
+		Object string `json:"object"`
+		Data   []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&catalog); err != nil {
+		t.Fatal(err)
+	}
+	if catalog.Object != "list" || len(catalog.Data) != 1 || catalog.Data[0].ID != "qwen-stable" {
+		t.Fatalf("unexpected normalized catalog: %#v", catalog)
+	}
+}
+
 func TestProxyConfigurationNormalizesHeaderNamesAndIncludesValues(t *testing.T) {
 	configured := provider{
 		Headers: map[string]string{

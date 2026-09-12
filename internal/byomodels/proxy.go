@@ -53,6 +53,13 @@ var proxyManagedHeaders = map[string]bool{
 type config struct {
 	Version   int        `json:"version"`
 	Providers []provider `json:"providers"`
+	Models    []model    `json:"models"`
+}
+
+type model struct {
+	Provider  string `json:"provider"`
+	ID        string `json:"id"`
+	WireModel string `json:"wireModel"`
 }
 
 type provider struct {
@@ -61,6 +68,7 @@ type provider struct {
 	Headers              map[string]string    `json:"headers"`
 	RequestCompatibility requestCompatibility `json:"requestCompatibility"`
 	Auth                 auth                 `json:"auth"`
+	ModelAliases         map[string]string    `json:"-"`
 }
 
 type requestCompatibility struct {
@@ -140,6 +148,7 @@ func Start(configPath string) (*Manager, error) {
 	tokens := &tokenCache{values: map[string]tokenValue{}}
 	var pending []*service
 	for _, configured := range value.Providers {
+		configured.ModelAliases = modelAliases(value.Models, configured.Name)
 		if err := validateProviderHeaders(configured); err != nil {
 			manager.Close()
 			return nil, err
@@ -210,6 +219,16 @@ func Start(configPath string) (*Manager, error) {
 	return manager, nil
 }
 
+func modelAliases(models []model, providerName string) map[string]string {
+	aliases := map[string]string{}
+	for _, current := range models {
+		if current.Provider == providerName && current.WireModel != "" && current.WireModel != current.ID {
+			aliases[current.WireModel] = current.ID
+		}
+	}
+	return aliases
+}
+
 func canNativeOwn(value provider) bool {
 	// Schema relocation is owned by the session proxy, including when a preferred port is configured.
 	return !value.RequestCompatibility.LegacyTools && !value.RequestCompatibility.BufferResponses &&
@@ -248,6 +267,14 @@ func proxyConfiguration(value provider) string {
 	}
 	if value.RequestCompatibility.BufferResponses {
 		configuration += "\x00bufferResponses"
+	}
+	if len(value.ModelAliases) > 0 {
+		aliases := make([]string, 0, len(value.ModelAliases))
+		for wireModel, id := range value.ModelAliases {
+			aliases = append(aliases, wireModel+":"+id)
+		}
+		sort.Strings(aliases)
+		configuration += "\x00modelAliases\n" + strings.Join(aliases, "\n")
 	}
 	hash := sha256.Sum256([]byte(configuration))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
@@ -519,8 +546,60 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 		}
 		return
 	}
+	if request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/models") &&
+		upstreamResponse.StatusCode >= 200 && upstreamResponse.StatusCode < 300 &&
+		strings.Contains(upstreamResponse.Header.Get("content-type"), "application/json") &&
+		len(current.provider.ModelAliases) > 0 {
+		bodyBytes, readErr := io.ReadAll(upstreamResponse.Body)
+		if readErr != nil {
+			writeProxyError(response, readErr)
+			return
+		}
+		rewritten, rewriteErr := rewriteModelCatalog(bodyBytes, current.provider.ModelAliases)
+		if rewriteErr != nil {
+			writeProxyError(response, rewriteErr)
+			return
+		}
+		response.WriteHeader(upstreamResponse.StatusCode)
+		_, _ = response.Write(rewritten)
+		return
+	}
 	response.WriteHeader(upstreamResponse.StatusCode)
 	_, _ = io.Copy(response, upstreamResponse.Body)
+}
+
+func rewriteModelCatalog(body []byte, aliases map[string]string) ([]byte, error) {
+	var catalog map[string]any
+	if err := json.Unmarshal(body, &catalog); err != nil {
+		return nil, fmt.Errorf("decode upstream model catalog: %w", err)
+	}
+	data, ok := catalog["data"].([]any)
+	if !ok {
+		return nil, errors.New("decode upstream model catalog: data must be an array")
+	}
+	seen := map[string]bool{}
+	rewritten := make([]any, 0, len(data))
+	for _, rawEntry := range data {
+		entry, ok := rawEntry.(map[string]any)
+		if !ok {
+			rewritten = append(rewritten, rawEntry)
+			continue
+		}
+		id, _ := entry["id"].(string)
+		if alias := aliases[id]; alias != "" {
+			entry["id"] = alias
+			id = alias
+		}
+		if id != "" && seen[id] {
+			continue
+		}
+		if id != "" {
+			seen[id] = true
+		}
+		rewritten = append(rewritten, entry)
+	}
+	catalog["data"] = rewritten
+	return json.Marshal(catalog)
 }
 
 func streamResponsesWithPreTokenValidation(w http.ResponseWriter, upstreamBody io.ReadCloser, statusCode int, providerName string) error {

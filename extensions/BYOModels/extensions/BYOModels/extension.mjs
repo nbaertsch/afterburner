@@ -310,6 +310,12 @@ async function acquireAzureCliToken(resource) {
 
 async function hydrateProvider(provider) {
     const { auth, requestCompatibility, ...sdkProvider } = provider;
+    const modelAliases = Object.fromEntries(
+        config.models
+            .filter((model) => model.provider === provider.name && model.wireModel !== model.id)
+            .map((model) => [model.wireModel, model.id])
+    );
+    const proxyProvider = { ...provider, modelAliases };
     if (auth?.type === "azure-cli" && !auth.resource) {
         throw new Error(`Provider '${provider.name}' must define auth.resource.`);
     }
@@ -325,10 +331,10 @@ async function hydrateProvider(provider) {
             : undefined;
     let compatibilityProxy;
     const nativeProxy = nativeProxyEndpoints.get(provider.name);
-    if (nativeProxy && nativeProxy.configuration === proxyConfiguration(provider)) {
+    if (nativeProxy && nativeProxy.configuration === proxyConfiguration(proxyProvider)) {
         compatibilityProxy = nativeProxy;
     } else {
-        compatibilityProxy = await startRequestCompatibilityProxy(provider, {
+        compatibilityProxy = await startRequestCompatibilityProxy(proxyProvider, {
             getBearerToken,
             getUpstreamHeaders,
             onRewrite: (rewritten) => {

@@ -133,7 +133,9 @@ runtime self-test before becoming the last-known-good package. Provider
 Responses API input-item IDs without changing message content.
 `requestCompatibility.forceStreaming` supports endpoints that reject non-streaming Responses API
 requests: the proxy requests SSE upstream and converts the terminal response event back to the JSON
-response expected by Copilot. Configure it as:
+response expected by Copilot. The proxy also normalizes `/models` catalog entries from each
+configured `wireModel` to its stable model `id`, preventing duplicate raw deployment rows from
+bypassing the configured model identity. Configure it as:
 
 ```json
 "requestCompatibility": {

@@ -143,6 +143,39 @@ test("compatibility proxy normalizes IDs and refreshes authentication", async ()
   }
 });
 
+test("compatibility proxy normalizes wire model catalog IDs to stable configured IDs", async () => {
+  const upstream = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      object: "list",
+      data: [
+        { id: "/workspace/models/qwen.gguf", object: "model" },
+        { id: "qwen-stable", object: "model" }
+      ]
+    }));
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const proxy = await startRequestCompatibilityProxy({
+    name: "doi",
+    baseUrl: `http://127.0.0.1:${upstream.address().port}`,
+    modelAliases: { "/workspace/models/qwen.gguf": "qwen-stable" },
+    requestCompatibility: { forceStreaming: true }
+  });
+  try {
+    const response = await fetch(`${proxy.baseUrl}/models`, {
+      headers: proxyHeaders(proxy)
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      object: "list",
+      data: [{ id: "qwen-stable", object: "model" }]
+    });
+  } finally {
+    await proxy.close();
+    await new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
+  }
+});
+
 test("compatibility proxy reports an explicit upstream timeout", async () => {
   const upstream = createServer((_request, response) => {
     setTimeout(() => {

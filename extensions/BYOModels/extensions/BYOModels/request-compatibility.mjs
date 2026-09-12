@@ -79,6 +79,12 @@ export function proxyConfiguration(provider) {
     if (provider.requestCompatibility?.bufferResponses === true) {
         configuration += "\0bufferResponses";
     }
+    const modelAliases = Object.entries(provider.modelAliases ?? {})
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([wireModel, id]) => `${wireModel}:${id}`);
+    if (modelAliases.length > 0) {
+        configuration += `\0modelAliases\n${modelAliases.join("\n")}`;
+    }
     return createHash("sha256").update(configuration).digest("base64url");
 }
 
@@ -269,6 +275,23 @@ function createProxyServer(
             if (responsesRequest &&
                 upstreamResponse.headers.get("content-type")?.includes("text/event-stream")) {
                 await pipeResponseStreamTokens(upstreamResponse, response, responseHeaders);
+                return;
+            }
+            if (request.method === "GET" &&
+                new URL(request.url ?? "/", "http://127.0.0.1").pathname.endsWith("/models") &&
+                upstreamResponse.ok &&
+                upstreamResponse.headers.get("content-type")?.includes("application/json") &&
+                Object.keys(provider.modelAliases ?? {}).length > 0) {
+                const catalog = await upstreamResponse.json();
+                const seen = new Set();
+                catalog.data = (catalog.data ?? []).flatMap((model) => {
+                    const id = provider.modelAliases[model?.id] ?? model?.id;
+                    if (typeof id === "string" && seen.has(id)) return [];
+                    if (typeof id === "string") seen.add(id);
+                    return [{ ...model, id }];
+                });
+                response.writeHead(upstreamResponse.status, responseHeaders);
+                response.end(JSON.stringify(catalog));
                 return;
             }
             response.writeHead(upstreamResponse.status, responseHeaders);
