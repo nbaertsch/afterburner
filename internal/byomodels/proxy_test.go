@@ -90,10 +90,10 @@ func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 }
 
 func TestProxyReportsUpstreamTimeout(t *testing.T) {
-	previousTimeout := upstreamRequestTimeout
-	upstreamRequestTimeout = 30 * time.Millisecond
+	previousTimeout := upstreamIdleTimeout
+	upstreamIdleTimeout = 30 * time.Millisecond
 	t.Cleanup(func() {
-		upstreamRequestTimeout = previousTimeout
+		upstreamIdleTimeout = previousTimeout
 	})
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
@@ -129,8 +129,64 @@ func TestProxyReportsUpstreamTimeout(t *testing.T) {
 	if response.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, body = %s", response.StatusCode, body)
 	}
-	if !strings.Contains(string(body), "context deadline exceeded") {
+	if !strings.Contains(string(body), "upstream made no progress for 30ms") {
 		t.Fatalf("timeout was not visible: %s", body)
+	}
+}
+
+func TestProxyResetsIdleTimeoutWhenUpstreamMakesProgress(t *testing.T) {
+	previousTimeout := upstreamIdleTimeout
+	upstreamIdleTimeout = 30 * time.Millisecond
+	t.Cleanup(func() {
+		upstreamIdleTimeout = previousTimeout
+	})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("content-type", "text/event-stream")
+		response.WriteHeader(http.StatusOK)
+		flusher := response.(http.Flusher)
+		for range 5 {
+			_, _ = response.Write([]byte(": ping\n\n"))
+			flusher.Flush()
+			time.Sleep(15 * time.Millisecond)
+		}
+		_, _ = response.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n"))
+	}))
+	defer upstream.Close()
+
+	manager, err := Start(writeConfig(t, upstream.URL, availablePort(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	request, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/responses", managerPort(t, manager, 0)),
+		strings.NewReader(`{"stream":true}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(proxyCapabilityHeader, manager.services[0].capability)
+	started := time.Now()
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.StatusCode, body)
+	}
+	if time.Since(started) <= upstreamIdleTimeout {
+		t.Fatalf("request did not outlive the idle timeout")
+	}
+	if !bytes.Contains(body, []byte("response.completed")) {
+		t.Fatalf("completed response missing: %s", body)
 	}
 }
 

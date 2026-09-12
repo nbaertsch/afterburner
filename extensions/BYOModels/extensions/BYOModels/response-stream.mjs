@@ -102,7 +102,7 @@ export function terminalResponseFromEventStream(source) {
     return terminal;
 }
 
-export async function readResponseStream(response) {
+export async function readResponseStream(response, onProgress = () => {}) {
     const reader = response.body?.getReader();
     if (!reader) throw new ResponseStreamError("Upstream Responses stream has no body.");
     const chunks = [];
@@ -111,6 +111,7 @@ export async function readResponseStream(response) {
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+            if (value.byteLength > 0) onProgress();
             size += value.byteLength;
             if (size > maximumResponseBytes) {
                 await reader.cancel();
@@ -127,7 +128,12 @@ export async function readResponseStream(response) {
     return Buffer.concat(chunks).toString("utf8");
 }
 
-export async function pipeResponseStreamTokens(upstreamResponse, clientResponse, responseHeaders) {
+export async function pipeResponseStreamTokens(
+    upstreamResponse,
+    clientResponse,
+    responseHeaders,
+    onProgress = () => {}
+) {
     const reader = upstreamResponse.body?.getReader();
     if (!reader) throw new ResponseStreamError("Upstream Responses stream has no body.");
     const decoder = new TextDecoder();
@@ -273,6 +279,7 @@ export async function pipeResponseStreamTokens(upstreamResponse, clientResponse,
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+            if (value.byteLength > 0) onProgress();
             buffer += decoder.decode(value, { stream: true });
             const parts = buffer.split(/\r?\n\r?\n/);
             buffer = parts.pop() ?? "";

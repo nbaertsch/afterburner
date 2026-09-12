@@ -146,8 +146,10 @@ bypassing the configured model identity. Configure it as:
 
 The proxy preserves path-prefixed base URLs and query parameters.
 Proxy listener binding is concurrent across providers. Listener setup, Azure CLI authentication,
-capability RPCs, and upstream requests use explicit deadlines; timeout failures are returned or
-logged with the provider/operation name rather than silently falling back to missing models.
+and capability RPCs use explicit deadlines. Upstream requests use a five-minute idle deadline that
+resets whenever headers or response bytes arrive, allowing long full-context inference to continue
+while terminating genuinely stalled connections. Timeout failures are returned or logged with the
+provider/operation name rather than silently falling back to missing models.
 For Restricted gateways with a JSON depth limit of 16 and no native namespace/tool-search support,
 also set `"legacyTools": true` in `requestCompatibility`. This eagerly exposes namespaced functions
 under their existing callable names and relocates deep tool schemas into shallow `$defs` references,

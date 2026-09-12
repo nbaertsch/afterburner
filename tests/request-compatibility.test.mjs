@@ -197,7 +197,43 @@ test("compatibility proxy reports an explicit upstream timeout", async () => {
     });
     assert.equal(response.status, 502);
     const body = await response.json();
-    assert.match(body.error.message, /slow-provider.*timed out after 30ms/);
+    assert.match(body.error.message, /slow-provider.*made no progress for 30ms/);
+  } finally {
+    await proxy.close();
+    await new Promise(resolve => upstream.close(resolve));
+  }
+});
+
+test("compatibility proxy resets its idle timeout on upstream progress", async () => {
+  const upstream = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    let remaining = 6;
+    const interval = setInterval(() => {
+      response.write(": ping\n\n");
+      remaining--;
+      if (remaining === 0) {
+        clearInterval(interval);
+        response.end('event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n');
+      }
+    }, 50);
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const proxy = await startRequestCompatibilityProxy({
+    name: "progress-provider",
+    baseUrl: `http://127.0.0.1:${upstream.address().port}`,
+    requestCompatibility: { maxInputItemIdLength: 64 }
+  }, { upstreamTimeout: 200 });
+  try {
+    const started = Date.now();
+    const response = await fetch(`${proxy.baseUrl}/responses`, {
+      method: "POST",
+      headers: proxyHeaders(proxy, { "content-type": "application/json" }),
+      body: '{"stream":true}'
+    });
+    const body = await response.text();
+    assert.equal(response.status, 200);
+    assert.ok(Date.now() - started > 200);
+    assert.match(body, /response\.completed/);
   } finally {
     await proxy.close();
     await new Promise(resolve => upstream.close(resolve));

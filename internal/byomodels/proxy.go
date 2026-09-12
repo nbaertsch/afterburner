@@ -32,7 +32,7 @@ const (
 	proxyCapabilityHeader = "x-afterburner-proxy-capability"
 )
 
-var upstreamRequestTimeout = 5 * time.Minute
+var upstreamIdleTimeout = 5 * time.Minute
 
 var proxyManagedHeaders = map[string]bool{
 	"accept-encoding":     true,
@@ -122,6 +122,22 @@ type service struct {
 	listener   net.Listener
 	done       chan struct{}
 	closed     bool
+}
+
+type idleDeadline struct {
+	mu      sync.Mutex
+	timer   *time.Timer
+	timeout time.Duration
+	cancel  context.CancelCauseFunc
+	version uint64
+	stopped bool
+	fired   bool
+}
+
+type progressReadCloser struct {
+	io.ReadCloser
+	deadline *idleDeadline
+	ctx      context.Context
 }
 
 type Manager struct {
@@ -444,8 +460,10 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	requestContext, cancel := context.WithTimeout(request.Context(), upstreamRequestTimeout)
-	defer cancel()
+	requestContext, cancel := context.WithCancelCause(request.Context())
+	deadline := newIdleDeadline(upstreamIdleTimeout, cancel)
+	defer deadline.stop()
+	defer cancel(nil)
 
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
@@ -499,8 +517,17 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 
 	upstreamResponse, err := current.client.Do(upstreamRequest)
 	if err != nil {
+		if cause := context.Cause(requestContext); cause != nil {
+			err = cause
+		}
 		writeProxyError(response, err)
 		return
+	}
+	deadline.touch()
+	upstreamResponse.Body = &progressReadCloser{
+		ReadCloser: upstreamResponse.Body,
+		deadline:   deadline,
+		ctx:        requestContext,
 	}
 	defer upstreamResponse.Body.Close()
 	copyHeaders(response.Header(), upstreamResponse.Header)
@@ -566,6 +593,65 @@ func (current *service) handle(response http.ResponseWriter, request *http.Reque
 	}
 	response.WriteHeader(upstreamResponse.StatusCode)
 	_, _ = io.Copy(response, upstreamResponse.Body)
+}
+
+func newIdleDeadline(timeout time.Duration, cancel context.CancelCauseFunc) *idleDeadline {
+	current := &idleDeadline{timeout: timeout, cancel: cancel}
+	current.armLocked()
+	return current
+}
+
+func (current *idleDeadline) touch() {
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	if current.fired || current.stopped {
+		return
+	}
+	current.version++
+	current.timer.Stop()
+	current.armLocked()
+}
+
+func (current *idleDeadline) stop() {
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	if current.fired || current.stopped {
+		return
+	}
+	current.stopped = true
+	current.version++
+	current.timer.Stop()
+}
+
+func (current *idleDeadline) armLocked() {
+	version := current.version
+	current.timer = time.AfterFunc(current.timeout, func() {
+		current.expire(version)
+	})
+}
+
+func (current *idleDeadline) expire(version uint64) {
+	current.mu.Lock()
+	if current.fired || current.stopped || version != current.version {
+		current.mu.Unlock()
+		return
+	}
+	current.fired = true
+	current.mu.Unlock()
+	current.cancel(fmt.Errorf("upstream made no progress for %s", current.timeout))
+}
+
+func (current *progressReadCloser) Read(buffer []byte) (int, error) {
+	count, err := current.ReadCloser.Read(buffer)
+	if count > 0 {
+		current.deadline.touch()
+	}
+	if err != nil {
+		if cause := context.Cause(current.ctx); cause != nil {
+			return count, cause
+		}
+	}
+	return count, err
 }
 
 func rewriteModelCatalog(body []byte, aliases map[string]string) ([]byte, error) {

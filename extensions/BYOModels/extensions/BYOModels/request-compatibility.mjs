@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { rewriteLegacyTools } from "./legacy-tools.mjs";
 import { pipeResponseStreamTokens, readResponseStream, ResponseStreamError, terminalResponseFromEventStream } from "./response-stream.mjs";
@@ -164,11 +164,16 @@ function createProxyServer(
             return;
         }
         const abort = new AbortController();
-        const upstreamTimer = setTimeout(
-            () => abort.abort(new Error(`Upstream request timed out after ${upstreamTimeout}ms.`)),
-            upstreamTimeout
-        );
-        upstreamTimer.unref?.();
+        let upstreamTimer;
+        const touchUpstream = () => {
+            clearTimeout(upstreamTimer);
+            upstreamTimer = setTimeout(
+                () => abort.abort(new Error(`Upstream made no progress for ${upstreamTimeout}ms.`)),
+                upstreamTimeout
+            );
+            upstreamTimer.unref?.();
+        };
+        touchUpstream();
         const onClose = () => {
             if (!response.writableFinished) abort.abort();
         };
@@ -224,6 +229,7 @@ function createProxyServer(
                 signal: abort.signal,
                 duplex: "half"
             });
+            touchUpstream();
             upstreamRequestId = upstreamResponse.headers.get("x-request-id") ??
                 upstreamResponse.headers.get("apim-request-id") ?? upstreamResponse.headers.get("request-id");
             const responseHeaders = Object.fromEntries(upstreamResponse.headers);
@@ -235,7 +241,7 @@ function createProxyServer(
             if ((translatedStreamingResponse || (responsesRequest && provider.requestCompatibility?.bufferResponses)) &&
                 upstreamResponse.ok &&
                 upstreamResponse.headers.get("content-type")?.includes("text/event-stream")) {
-                const stream = await readResponseStream(upstreamResponse);
+                const stream = await readResponseStream(upstreamResponse, touchUpstream);
                 const completed = terminalResponseFromEventStream(stream);
                 const refusals = (completed.output ?? []).flatMap(item =>
                     (item.content ?? []).filter(part => part.type === "refusal" && typeof part.refusal === "string")
@@ -253,6 +259,7 @@ function createProxyServer(
                 const chunks = [];
                 if (upstreamResponse.body) {
                     for await (const chunk of Readable.fromWeb(upstreamResponse.body)) {
+                        if (chunk.length > 0) touchUpstream();
                         chunks.push(chunk);
                     }
                 }
@@ -274,7 +281,7 @@ function createProxyServer(
             }
             if (responsesRequest &&
                 upstreamResponse.headers.get("content-type")?.includes("text/event-stream")) {
-                await pipeResponseStreamTokens(upstreamResponse, response, responseHeaders);
+                await pipeResponseStreamTokens(upstreamResponse, response, responseHeaders, touchUpstream);
                 return;
             }
             if (request.method === "GET" &&
@@ -296,7 +303,13 @@ function createProxyServer(
             }
             response.writeHead(upstreamResponse.status, responseHeaders);
             if (upstreamResponse.body) {
-                await pipeline(Readable.fromWeb(upstreamResponse.body), response);
+                const progress = new Transform({
+                    transform(chunk, _encoding, callback) {
+                        if (chunk.length > 0) touchUpstream();
+                        callback(null, chunk);
+                    }
+                });
+                await pipeline(Readable.fromWeb(upstreamResponse.body), progress, response);
             } else {
                 response.end();
             }
