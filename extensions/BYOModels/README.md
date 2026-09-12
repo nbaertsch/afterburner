@@ -34,7 +34,9 @@ the UI/plugin-readiness critical path. The session log reports the immediate reg
 before the detached refresh is scheduled. A cache is accepted only
 when its model identity still matches the current configuration. Models with complete
 token limits and boolean vision/reasoning support configured directly in `models` can also register
-immediately. Discovery and registration have bounded RPC deadlines; failures are reported in the
+immediately. An explicit `"reasoningEffort": false` is authoritative: the custom model does not
+inherit reasoning controls or a default reasoning level from its `modelId` capability source.
+Discovery and registration have bounded RPC deadlines; failures are reported in the
 session log while already validated registrations remain available.
 
 ## Configuration

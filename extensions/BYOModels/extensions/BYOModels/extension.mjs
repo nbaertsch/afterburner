@@ -11,6 +11,7 @@ import {
     withDeadline
 } from "./model-metadata.mjs";
 import { proxyConfiguration, startRequestCompatibilityProxy } from "./request-compatibility.mjs";
+import { buildRuntimeMetadata } from "./runtime-metadata.mjs";
 
 const execFileAsync = promisify(execFile);
 const rpcTimeoutMs = 10_000;
@@ -419,32 +420,6 @@ function hydrateModelFromCatalog(model, catalog) {
             } : {})
         }
     };
-}
-
-function buildRuntimeMetadata(models, catalog) {
-    return models.map((model) => {
-        const upstream = catalog.find((candidate) => candidate?.id === model.modelId);
-        const configured = configuredRegistration(model);
-        const reasoningProperty = upstream?.configSchema?.properties?.reasoningEffort;
-        const reasoningSupport = upstream?.capabilities?.supports?.reasoning_effort;
-        const supportedReasoningEfforts = Array.isArray(reasoningSupport)
-            ? reasoningSupport.filter((effort) => typeof effort === "string")
-            : Array.isArray(reasoningProperty?.enum)
-                ? reasoningProperty.enum.filter((effort) => typeof effort === "string")
-                : [];
-        return {
-            selectionId: `${model.provider}/${model.id}`,
-            upstreamModelId: model.modelId,
-            maxContextWindowTokens: configured?.maxContextWindowTokens ??
-                upstream?.capabilities?.limits?.max_context_window_tokens ?? null,
-            maxOutputTokens: configured?.maxOutputTokens ??
-                upstream?.capabilities?.limits?.max_output_tokens ?? null,
-            supportedReasoningEfforts,
-            defaultReasoningEffort: typeof reasoningProperty?.default === "string"
-                ? reasoningProperty.default
-                : null
-        };
-    });
 }
 
 let metadataReadWarning;

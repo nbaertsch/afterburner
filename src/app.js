@@ -1422,12 +1422,12 @@ function metadataFor(selectionId) {
     const upstreamId = adapter.upstreamModelId(selectionId);
     const upstream = upstreamMetadata.get(upstreamId);
     return {
-        supportedReasoningEfforts: upstream?.supportedReasoningEfforts ??
-            adapter.supportedReasoningEfforts?.(selectionId) ??
+        supportedReasoningEfforts: adapter.supportedReasoningEfforts?.(selectionId) ??
+            upstream?.supportedReasoningEfforts ??
             runtime.modelSupportedReasoningEfforts(upstreamId),
-        defaultReasoningEffort: upstream?.defaultReasoningEffort ?? adapter.defaultReasoningEffort?.(selectionId) ?? "medium",
-        maxContextWindowTokens: upstream?.capabilities?.limits?.max_context_window_tokens ?? adapter.maxContextWindowTokens?.(selectionId) ?? null,
-        maxOutputTokens: upstream?.capabilities?.limits?.max_output_tokens ?? adapter.maxOutputTokens?.(selectionId) ?? null,
+        defaultReasoningEffort: adapter.defaultReasoningEffort?.(selectionId) ?? upstream?.defaultReasoningEffort ?? "medium",
+        maxContextWindowTokens: adapter.maxContextWindowTokens?.(selectionId) ?? upstream?.capabilities?.limits?.max_context_window_tokens ?? null,
+        maxOutputTokens: adapter.maxOutputTokens?.(selectionId) ?? upstream?.capabilities?.limits?.max_output_tokens ?? null,
         contextWindowOptions: adapter.contextWindowOptions?.(selectionId) ?? []
     };
 }

@@ -7,6 +7,7 @@ import {
     immediateRegistrations,
     withDeadline
 } from "../extensions/BYOModels/extensions/BYOModels/model-metadata.mjs";
+import { buildRuntimeMetadata } from "../extensions/BYOModels/extensions/BYOModels/runtime-metadata.mjs";
 
 const configured = [{
     provider: "provider",
@@ -75,6 +76,44 @@ test("custom model IDs can register entirely from configured capabilities", () =
         }
     };
     assert.deepEqual(immediateRegistrations([custom], null), [custom]);
+});
+
+test("configured non-reasoning models do not inherit upstream reasoning controls", () => {
+    const explicit = {
+        ...registration,
+        capabilities: {
+            supports: { vision: false, reasoningEffort: false }
+        }
+    };
+    const catalog = [{
+        id: "gpt-5.6-sol",
+        capabilities: {
+            limits: {
+                max_context_window_tokens: 400_000,
+                max_output_tokens: 64_000
+            },
+            supports: {
+                reasoning_effort: ["low", "medium", "high"]
+            }
+        },
+        configSchema: {
+            properties: {
+                reasoningEffort: {
+                    enum: ["low", "medium", "high"],
+                    default: "medium"
+                }
+            }
+        }
+    }];
+
+    assert.deepEqual(buildRuntimeMetadata([explicit], catalog), [{
+        selectionId: "provider/model",
+        upstreamModelId: "gpt-5.6-sol",
+        maxContextWindowTokens: 256_000,
+        maxOutputTokens: 32_000,
+        supportedReasoningEfforts: [],
+        defaultReasoningEffort: "none"
+    }]);
 });
 
 test("RPC deadline reports the timed out operation", async () => {
