@@ -112,7 +112,7 @@ test("native identity assertions reject coerced or malformed identities", async 
   assert.equal(assertions[0].extensionId, "valid");
 });
 
-test("native bootstrap session fallback is scoped to each bootstrap file", async () => {
+test("native bootstrap survives supervised worker restarts", async () => {
   const runtime = await loadModalRuntime(async () => ({ ok: true }));
   const dir = await mkdtemp(join(tmpdir(), "afterburner-bootstrap-scope-"));
   const first = join(dir, "first.json");
@@ -132,6 +132,8 @@ test("native bootstrap session fallback is scoped to each bootstrap file", async
   assert.equal(config.sessionId, "sessionAAAAAAAAAAAAAAAAAAAAAAAAAA");
   assert.equal(config.modalSurfaces.length, 1);
   assert.equal(config.modalSurfaces[0].canvasId, "first");
+  assert.doesNotThrow(() => readFileSync(first, "utf8"));
+  assert.doesNotThrow(() => readFileSync(second, "utf8"));
 });
 
 function modalSurface(ownerExtensionId, canvasId, surfaceId = canvasId) {

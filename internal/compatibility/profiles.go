@@ -59,6 +59,18 @@ var profiles = []Profile{
 		},
 		ModelPickerRowRenderer: "U6r",
 	},
+	{
+		ID:                 "copilot-1.0.84-4-win32-x64",
+		Version:            "1.0.84-4",
+		AppSHA256:          "916fa57db9b90245745f1d3b7d8b66f4cccf2bbfcb7b1e21fd2b1a056d99d147",
+		RuntimeSHA256:      "3eb5587f384c709b2833a77b1e72713c4d5ac8c4393047505763b8d4cdfb12c4",
+		BYOModelsTransform: "picker-wn-1084",
+		RequiredAppAnchors: []string{
+			`W=(0,Wn.useRef)(r[0]??null),V=(0,Wn.useRef)(null),{rows:K,columns:oe}=wi()`,
+			`J=(0,Wn.useMemo)(()=>{let Je=new Map;for(let mt of r){let dt=se.get(mt.value);dt&&Je.set(dt.rowKey,mt)}return Je},[r,se])`,
+		},
+		ModelPickerRowRenderer: "oWr",
+	},
 }
 
 type Selection struct {
@@ -87,6 +99,9 @@ func Select(packages []copilot.Package) (Selection, error) {
 		}
 	}
 	if len(matches) == 0 {
+		if pkg, ok := newestForwardCompatible(packages); ok {
+			return Selection{Package: pkg, Profile: ForwardProfile(pkg)}, nil
+		}
 		if os.Getenv("AFTERBURNER_ALLOW_UNPROFILED") == "1" {
 			pkg, err := copilot.SelectNewestComplete(packages)
 			if err != nil {
@@ -107,6 +122,45 @@ func Select(packages []copilot.Package) (Selection, error) {
 		return compareVersion(matches[i].Package.Version, matches[j].Package.Version) > 0
 	})
 	return matches[0], nil
+}
+
+func newestForwardCompatible(packages []copilot.Package) (copilot.Package, bool) {
+	newestKnown := profiles[0].Version
+	for _, profile := range profiles[1:] {
+		if compareVersion(profile.Version, newestKnown) > 0 {
+			newestKnown = profile.Version
+		}
+	}
+	var candidates []copilot.Package
+	for _, pkg := range packages {
+		if pkg.Complete && compareVersion(pkg.Version, newestKnown) > 0 {
+			candidates = append(candidates, pkg)
+		}
+	}
+	if len(candidates) == 0 {
+		return copilot.Package{}, false
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return compareVersion(candidates[i].Version, candidates[j].Version) > 0
+	})
+	return candidates[0], true
+}
+
+func ForwardProfile(pkg copilot.Package) Profile {
+	versionID := strings.Map(func(value rune) rune {
+		if value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' ||
+			value >= '0' && value <= '9' || value == '.' || value == '-' {
+			return value
+		}
+		return '-'
+	}, pkg.Version)
+	return Profile{
+		ID:                 "copilot-forward-" + versionID + "-win32",
+		Version:            pkg.Version,
+		AppSHA256:          pkg.AppSHA256,
+		RuntimeSHA256:      pkg.RuntimeSHA256,
+		BYOModelsTransform: "picker-forward",
+	}
 }
 
 func validateProbes(pkg copilot.Package, profile Profile) error {

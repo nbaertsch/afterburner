@@ -317,6 +317,11 @@ afterburn compatibility list    # Lists embedded compatibility profiles
 afterburn compatibility retry   # Invalidates cache to re-run compatibility probes
 ```
 
+Exact known Copilot package hashes use embedded compatibility profiles. Complete Copilot packages
+newer than the newest embedded profile are accepted through a generated forward-compatibility
+profile, then must pass Afterburner's runtime self-test before they replace the last-known-good
+package. Built-in extensions use the same open-ended minimum-version policy.
+
 ---
 
 ## Updates & Rollback

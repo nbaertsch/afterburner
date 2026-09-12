@@ -9,7 +9,7 @@ import { verifyRuntimePackageIdentity } from "./runtime/extension-identity.mjs";
 
 const require = createRequire(import.meta.url);
 const { createHash } = require("node:crypto");
-const { readFileSync, unlinkSync } = require("node:fs");
+const { readFileSync } = require("node:fs");
 const safeJSONParse = JSON.parse.bind(JSON);
 const safeJSONStringify = JSON.stringify.bind(JSON);
 const wrapperDir = dirname(fileURLToPath(import.meta.url));
@@ -321,7 +321,6 @@ function loadModalBrokerConfig() {
     for (const bootstrapPath of bootstrapPaths) {
         try {
             const parsed = safeJSONParse(readFileSync(bootstrapPath, "utf8"));
-            try { unlinkSync(bootstrapPath); } catch {}
             if (typeof parsed.pipe === "string" && parsed.pipe) legacyPipe = parsed.pipe;
             if (typeof parsed.sessionRoute === "string" && /^[A-Za-z0-9_-]{32,128}$/.test(parsed.sessionRoute) && !process.env.AFTERBURNER_SESSION_ROUTE) {
                 process.env.AFTERBURNER_SESSION_ROUTE = parsed.sessionRoute;

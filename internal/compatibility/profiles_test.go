@@ -25,13 +25,28 @@ func TestSelectKnownProfile(t *testing.T) {
 	}
 }
 
-func TestRejectUnknownProfile(t *testing.T) {
+func TestAcceptNewerProfile(t *testing.T) {
 	t.Setenv("AFTERBURNER_ALLOW_UNPROFILED", "")
-	_, err := Select([]copilot.Package{{
+	selected, err := Select([]copilot.Package{{
 		Version: "9.9.9", AppSHA256: "unknown", RuntimeSHA256: "unknown", Complete: true,
 	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Profile.ID != "copilot-forward-9.9.9-win32" ||
+		selected.Profile.AppSHA256 != "unknown" ||
+		selected.Profile.RuntimeSHA256 != "unknown" {
+		t.Fatalf("forward profile = %#v", selected.Profile)
+	}
+}
+
+func TestRejectUnknownOlderProfile(t *testing.T) {
+	t.Setenv("AFTERBURNER_ALLOW_UNPROFILED", "")
+	_, err := Select([]copilot.Package{{
+		Version: "1.0.82-9", AppSHA256: "unknown", RuntimeSHA256: "unknown", Complete: true,
+	}})
 	if err == nil {
-		t.Fatal("unknown package was accepted")
+		t.Fatal("older unknown package was accepted")
 	}
 }
 

@@ -11,6 +11,42 @@ function replaceRequired(source, search, replacement, label) {
 }
 
 function installContextArrowControls(source) {
+    if (source.includes('W=(0,Wn.useRef)(r[0]??null),V=(0,Wn.useRef)(null)')) {
+        source = replaceRequired(
+            source,
+            'W=(0,Wn.useRef)(r[0]??null),V=(0,Wn.useRef)(null),{rows:K,columns:oe}=wi()',
+            'W=(0,Wn.useRef)(r[0]??null),V=(0,Wn.useRef)(null),[$bbFocus,setBbFocus]=(0,Wn.useState)(!1),{rows:K,columns:oe}=wi()',
+            "context-control focus state"
+        );
+        source = replaceRequired(
+            source,
+            'Ue=(0,Wn.useCallback)(Je=>{let mt=W.current;if(!mt||!d)return;let dt=re(mt),We=Je<0?dt?.previousEffort:dt?.nextEffort;We&&d(mt,We)},[d,re]),$e=(0,Wn.useCallback)(()=>{let Je=W.current;if(!Je||!u)return;let mt=re(Je);mt?.contextToggleable&&mt.nextContextTier&&u(Je,mt.nextContextTier)},[u,re])',
+            'Ue=(0,Wn.useCallback)(Je=>{let mt=W.current;if(!mt)return;let dt=re(mt);if($bbFocus){let We=Je<0?dt?.previousContextTier:dt?.nextContextTier;We&&u&&u(mt,We);return}if(!d)return;let We=Je<0?dt?.previousEffort:dt?.nextEffort;We&&d(mt,We)},[d,u,re,$bbFocus]),$e=(0,Wn.useCallback)(()=>{Xe&&Ne&&setBbFocus(Je=>!Je)},[Xe,Ne])',
+            "context-control arrow routing"
+        );
+        source = replaceRequired(
+            source,
+            'Ft=Ne?rWr(It,dt,{primary:Kt(R),muted:O,selected:Kt(C)}):null,pn=Xe?oWr(It,dt,{primary:Kt(R),muted:O}):null',
+            'Ft=Ne?rWr(It,dt&&!$bbFocus,{primary:Kt(R),muted:O,selected:Kt(C)}):null,pn=Xe?oWr(It,dt&&$bbFocus,{primary:Kt(R),muted:O,selected:Kt(C)}):null',
+            "focused picker control rendering"
+        );
+        source = replaceRequired(
+            source,
+            '[J,re,He,Q,C,P,D,R,O,Ne,Xe,a])',
+            '[J,re,He,Q,C,P,D,R,O,Ne,Xe,a,$bbFocus])',
+            "focused picker control render dependency"
+        );
+        source = replaceRequired(
+            source,
+            'function oWr(e,t,n){return t?Wn.default.createElement(Wn.default.Fragment,null,e.contextSegments.map(r=>Wn.default.createElement(Wn.default.Fragment,{key:r.key},Wn.default.createElement(b,{color:r.active?n.primary:n.muted},r.text)))):Wn.default.createElement(b,{color:n.muted},e.contextCellText)}',
+            'function oWr(e,t,n){return e.contextToggleable?t?Wn.default.createElement(Wn.default.Fragment,null,Wn.default.createElement(b,{color:e.contextCanLower?n.selected:n.muted},"← "),Wn.default.createElement(b,{color:n.primary},e.contextCellText),Wn.default.createElement(b,{color:e.contextCanRaise?n.selected:n.muted}," →")):Wn.default.createElement(b,{color:n.muted},e.contextCellText):Wn.default.createElement(b,{color:n.muted},e.contextCellText)}',
+            "context arrow renderer"
+        );
+        return source.replaceAll('onTab:Xe?$e:void 0,', 'onTab:Xe&&Ne?$e:void 0,').replaceAll(
+            'additionalHints:{"left-right":Ne&&"reasoning effort",tab:Xe&&"context window"',
+            'additionalHints:{"left-right":$bbFocus?"context window":Ne&&"reasoning effort",tab:Xe&&Ne&&"switch control"'
+        );
+    }
     if (source.includes('W=(0,Vn.useRef)(r[0]??null)')) {
         source = replaceRequired(
             source,

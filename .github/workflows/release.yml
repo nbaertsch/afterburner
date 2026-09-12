@@ -55,10 +55,10 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - name: Install supported Copilot CLI
+      - name: Install current Copilot CLI
         shell: pwsh
         run: |
-          npm install --global @github/copilot@1.0.83-3 --no-audit --no-fund
+          npm install --global @github/copilot@latest --no-audit --no-fund
           copilot --version
           $native = Join-Path (npm root --global) "@github\copilot\node_modules\@github\copilot-win32-x64\copilot.exe"
           if (-not (Test-Path -LiteralPath $native)) {

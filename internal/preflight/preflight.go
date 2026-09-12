@@ -71,6 +71,9 @@ func Ensure(
 	if tupleMatches(state, selection, prepared, fingerprint) {
 		return Result{Package: selection.Package, Profile: selection.Profile, Prepared: prepared}, nil
 	}
+	if strings.HasPrefix(selection.Profile.ID, "copilot-forward-") {
+		return ensureDeep(ctx, layout, executable, selection, prepared, env, extensionRegistry, stderr, fingerprint)
+	}
 	tuple := tupleFor(selection, prepared, fingerprint)
 	if err := validateTuple(tuple); err == nil {
 		if err := saveCompatible(layout.Root, tuple); err != nil {
@@ -146,6 +149,10 @@ func fallbackResult(root, selectedVersion, fingerprint, failure string, stderr i
 		return Result{}, fmt.Errorf("runtime validation failed (%s) and the last-known-good tuple was validated with a different extension registry", failure)
 	}
 	profile, ok := compatibility.FindProfile(fallback.ProfileID)
+	if !ok && strings.HasPrefix(fallback.ProfileID, "copilot-forward-") {
+		profile = compatibility.ForwardProfile(fallback.Package)
+		ok = profile.ID == fallback.ProfileID
+	}
 	if !ok {
 		return Result{}, fmt.Errorf("last-known-good compatibility profile %q is unavailable", fallback.ProfileID)
 	}

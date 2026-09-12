@@ -147,6 +147,14 @@ function send(session, data, label) {
   session.child.write(data);
 }
 
+async function focusAndType(session, text, label) {
+  send(session, "\x1b", `${label}: focus prompt`);
+  await new Promise(resolve => setTimeout(resolve, 150));
+  send(session, "\x15", `${label}: clear prompt`);
+  await new Promise(resolve => setTimeout(resolve, 150));
+  send(session, text, `${label}: type text`);
+}
+
 async function waitFor(predicate, description, ms = timeoutMs) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
@@ -321,6 +329,12 @@ async function bootstrapExperimentalProfile() {
     if (!launchHome) throw new Error("experimental profile bootstrap did not produce config.json");
     mkdirSync(join(home, "copilot-home"), { recursive: true });
     cpSync(join(launchHome, "config.json"), join(home, "copilot-home", "config.json"));
+    const settingsPath = join(home, "copilot-home", "settings.json");
+    const settings = existsSync(settingsPath)
+      ? JSON.parse(readFileSync(settingsPath, "utf8"))
+      : {};
+    settings.experimental = true;
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
   } finally {
     await terminateSessions([session]);
   }
@@ -376,22 +390,11 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
         waitForOutputSettled(a, 1_000, 30_000),
         waitForOutputSettled(b, 1_000, 30_000)
       ]);
-      send(b, `\x15passive-${name}-before`, "passive negative control before");
+      await focusAndType(b, `passive-${name}-before`, "passive negative control before");
       await waitFor(() => stripAnsi(b.raw).includes(`passive-${name}-before`), `${name} passive responsiveness before`, 10_000);
       send(b, "\x15", "clear passive input before");
       const command = `/${name === "blackbox" ? "black-box-modal" : "openai-server"}`;
-      const commandDescription = name === "blackbox"
-        ? /Open the registered Black Box live modal/i
-        : /Open the interactive OpenAI Server management menu/i;
-      let lastCommandProbe = 0;
-      await waitFor(() => {
-        if (commandDescription.test(stripAnsi(a.raw))) return true;
-        if (Date.now() - lastCommandProbe >= 2_000) {
-          send(a, `\x15${command}`, `probe ${name} command registration in A`);
-          lastCommandProbe = Date.now();
-        }
-        return false;
-      }, `${name} command registration`, 60_000);
+      await focusAndType(a, command, `type ${name} command in A`);
       send(a, "\r", `open ${name} modal in A`);
       await waitFor(() => activePattern.test(stripAnsi(a.raw)), `${name} modal in A`, 45_000);
       await waitFor(async () => {
@@ -449,7 +452,7 @@ async function runPair(name, activeExtraEnv, activePattern, passiveForbiddenPatt
     await new Promise(resolve => setTimeout(resolve, 1500));
     if (passiveForbiddenPattern.test(stripAnsi(b.raw))) throw new Error(`${name} modal rendered in passive session B`);
     if (!maybeFake) {
-      send(b, `\x15passive-${name}-after`, "passive negative control after");
+      await focusAndType(b, `passive-${name}-after`, "passive negative control after");
       await waitFor(() => stripAnsi(b.raw).includes(`passive-${name}-after`), `${name} passive responsiveness after`, 10_000);
       send(b, "\x15", "clear passive input after");
     }

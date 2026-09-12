@@ -124,7 +124,9 @@ deleted with package versions. Normal `copilot` sessions do not load BYOModels.
 
 ## Compatibility
 
-The bundled package currently supports Copilot CLI `>=1.0.83-1 <1.0.84`. Provider
+The bundled package supports Copilot CLI `>=1.0.83-1`. Known package hashes use exact profiles;
+newer complete packages use a generated forward-compatibility profile and must pass Afterburner's
+runtime self-test before becoming the last-known-good package. Provider
 `requestCompatibility.maxInputItemIdLength` enables a loopback-only proxy that shortens oversized
 Responses API input-item IDs without changing message content.
 `requestCompatibility.forceStreaming` supports endpoints that reject non-streaming Responses API
