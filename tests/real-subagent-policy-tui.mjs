@@ -107,7 +107,7 @@ const isolatedEnvironment = (extra = {}) => {
   const explicitRoots = (process.env.AFTERBURNER_COPILOT_PACKAGE_ROOTS ?? "").split(delimiter).filter(Boolean);
   const pinnedPackageRoot = join(process.env.LOCALAPPDATA ?? "", "copilot", "pkg", "win32-x64");
   const packageRoots = explicitRoots.length
-    ? explicitRoots.map(resolve)
+    ? explicitRoots.map(root => resolve(root))
     : (existingDirectory(join(pinnedPackageRoot, "1.0.84-4")) ? [pinnedPackageRoot] : discoverPackageRoots());
   if (packageRoots.length > 0) environment.AFTERBURNER_COPILOT_PACKAGE_ROOTS = packageRoots.join(delimiter);
   if (process.env.AFTERBURNER_COPILOT_EXECUTABLE) {
@@ -204,7 +204,7 @@ const currentViewport = () => extractModalViewport(raw);
 const recentPlain = () => currentPlain().slice(-8000);
 const stagePlain = () => stripAnsi(raw.slice(stageRawLength));
 const promptVisible = value => /\/ commands|tab next tab|\? help|@ files · # issues|Tip:\s*\/usage/i.test(value);
-const modalPattern = /Subagent Policy[\s\S]*Active:\s*(none|balanced|burst)[\s\S]*Solo[\s\S]*Balanced[\s\S]*Burst/i;
+const modalPattern = /Subagent Configuration[\s\S]*Policy presets[\s\S]*Luna Three/i;
 const recordStep = (name, key, started, completed, assertions) => {
   operatorSteps.push({
     name,
@@ -394,35 +394,15 @@ child.onData(data => {
   if (/Canvas opened:\s*Subagent Policy/i.test(recent)) return finish(1, "Subagent Policy fell back to generic canvas-open text instead of native rendered UI");
   if (/native menu unavailable|interactive menu could not open/i.test(recent)) return finish(1, "Subagent Policy reported that the native interactive menu could not open");
 
-  if (stage === "opening" && modalPattern.test(text) && /Active:\s*none/i.test(text)) {
+  if (stage === "opening" && modalPattern.test(text)) {
     modalSeenAt = Date.now();
     recordStep("open native subagents UI", "/subagents", commandSentAt, modalSeenAt, ["native subagent UI rendered", "policy presets visible"]);
-    beginStage("focus-picker", "\t", "focus native policy selector");
+    beginStage("apply-policy", "\r", "apply Luna Three");
     return;
   }
-  if (stage === "focus-picker" && Date.now() - stageSentAt > 300) {
-    recordStep("focus policy selector", "Tab", stageSentAt, Date.now(), ["Tab assigned focus to the only native policy control"]);
-    beginStage("select-conservative", "2", "select Conservative");
-    return;
-  }
-  if (stage === "select-conservative" && /Active:\s*conservative/i.test(stagePlain())) {
-    recordStep("preview Conservative selection", "Down", stageSentAt, Date.now(), ["arrow navigation moved native policy selector", "active policy remained none"]);
-    beginStage("select-balanced", "3", "select Balanced");
-    return;
-  }
-  if (stage === "select-balanced" && /Active:\s*balanced/i.test(stagePlain())) {
-    recordStep("preview Balanced selection", "Down", stageSentAt, Date.now(), ["selection detail updated to Balanced", "policy not yet applied"]);
-    beginStage("balanced", "\r", "apply selected Balanced policy");
-    return;
-  }
-  if (stage === "balanced" && /Active:\s*balanced/i.test(stagePlain())) {
-    recordStep("apply Balanced", "Enter", stageSentAt, Date.now(), ["Enter activated selected policy", "active policy changed to balanced"]);
-    beginStage("burst", "4", "apply Burst");
-    return;
-  }
-  if (stage === "burst" && /Active:\s*burst/i.test(stagePlain())) {
-    recordStep("apply Burst", "4", stageSentAt, Date.now(), ["Burst action applied", "active policy changed to burst"]);
-    beginStage("close-before-reopen", "q", "close before reopen");
+  if (stage === "apply-policy" && /Applied subagent policy Luna Three/i.test(stagePlain())) {
+    recordStep("apply Luna Three", "Enter", stageSentAt, Date.now(), ["native preset applied", "max concurrency 3 and depth 1 reported"]);
+    beginStage("close-before-reopen", "\x1b", "close native subagents");
     return;
   }
   if (stage === "close-before-reopen" && promptVisible(stagePlain())) {
@@ -433,14 +413,9 @@ child.onData(data => {
     submitCommand("reopen /subagents", 750);
     return;
   }
-  if (stage === "reopening" && modalPattern.test(stagePlain()) && /Active:\s*burst/i.test(stagePlain())) {
-    recordStep("reopen and verify current-session state", "/subagents", stageSentAt, Date.now(), ["native subagents UI reopened", "policy remained active in the same live session"]);
-    beginStage("clearing", "x", "clear session override");
-    return;
-  }
-  if (stage === "clearing" && /Active:\s*none/i.test(stagePlain())) {
-    recordStep("clear current-session policy", "x", stageSentAt, Date.now(), ["Clear action reset active policy to none"]);
-    beginStage("closing", "q", "close cleared modal");
+  if (stage === "reopening" && modalPattern.test(stagePlain()) && /required[\s\S]*colosseum-prod\/gpt-5-6-luna/i.test(stagePlain())) {
+    recordStep("reopen and verify native settings", "/subagents", stageSentAt, Date.now(), ["native subagents UI reopened", "required Luna routing visible"]);
+    beginStage("closing", "\x1b", "close native subagents");
     return;
   }
   if (stage === "closing" && promptVisible(stagePlain())) {

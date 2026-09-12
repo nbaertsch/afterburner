@@ -16,9 +16,9 @@ export function installNativeSubagentPolicy(source, config) {
         description: `${policy.description} · max ${policy.maxConcurrency} concurrent · depth ${policy.maxDepth}`,
         subagents: {
             ...(policy.agents ? { agents: policy.agents } : {}),
-            maxConcurrent: policy.maxConcurrency,
             maxDepth: policy.maxDepth,
-            resultExposure: policy.resultExposure
+            resultExposure: policy.resultExposure,
+            maxConcurrency: policy.maxConcurrency
         }
     }));
     if (!presets.length) throw new Error("Subagent Policy requires at least one policy preset");
@@ -27,7 +27,7 @@ export function installNativeSubagentPolicy(source, config) {
     const pickerReplacement = `if(t){let $abPolicies=${encoded},$abNative=RD.default.createElement(sdn,{builtInAgents:`;
     source = replaceOnce(source, pickerAnchor, pickerReplacement, "native /subagents picker");
     const pickerEnd = 'onCancel:()=>a(!1)});let se=re=>';
-    const policyUI = `onCancel:()=>a(!1)});return RD.default.createElement(RD.default.Fragment,null,$abNative,RD.default.createElement(T,{flexDirection:"column",paddingX:1,marginTop:1},RD.default.createElement(b,{bold:!0},"Policy presets"),RD.default.createElement(b,{color:"gray"},"Apply routing, concurrency, and nesting limits in this session"),RD.default.createElement(Ml,{title:"Policy presets",items:$abPolicies.map(re=>({label:re.label,value:re.id,description:re.description})),escapeItem:{label:"Keep current settings",value:"cancel"},onConfirm:re=>{if(re==="cancel")return;let J=$abPolicies.find(ee=>ee.id===re);J&&(D.current=D.current.then(async()=>{await R.tools.updateSubagentSettings({subagents:J.subagents}),N(ee=>({...ee,subagents:J.subagents})),O({type:"info",text:\`Applied subagent policy \${J.label}: max \${J.subagents.maxConcurrent} concurrent, depth \${J.subagents.maxDepth}\`})}).catch(ee=>O({type:"error",text:\`Failed to apply subagent policy: \${y.errorFormattingFormatUnknown(ee)}\`}))}})));}let se=re=>`;
+    const policyUI = `onCancel:()=>a(!1)});return RD.default.createElement(RD.default.Fragment,null,$abNative,RD.default.createElement(T,{flexDirection:"column",paddingX:1,marginTop:1},RD.default.createElement(b,{bold:!0},"Policy presets"),RD.default.createElement(b,{color:"gray"},"Apply routing, concurrency, and nesting limits in this session"),RD.default.createElement(Ml,{title:"Policy presets",items:$abPolicies.map(re=>({label:re.label,value:re.id,description:re.description})),escapeItem:{label:"Keep current settings",value:"cancel"},onConfirm:re=>{if(re==="cancel")return;let J=$abPolicies.find(ee=>ee.id===re);J&&(D.current=D.current.then(async()=>{await R.tools.updateSubagentSettings({settings:J.subagents}),N(ee=>({...ee,subagents:J.subagents})),O({type:"info",text:\`Applied subagent policy \${J.label}: max \${J.subagents.maxConcurrency} concurrent, depth \${J.subagents.maxDepth}\`})}).catch(ee=>O({type:"error",text:\`Failed to apply subagent policy: \${y.errorFormattingFormatUnknown(ee)}\`})))}})));}let se=re=>`;
     return replaceOnce(source, pickerEnd, policyUI, "native /subagents policy controls");
 }
 
