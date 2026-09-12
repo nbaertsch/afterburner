@@ -16,6 +16,7 @@
     "test:real-responses-client": "node tests/real-responses-client.mjs",
     "test:real-tui:black-box": "node tests/real-blackbox-modal-tui.mjs",
     "test:real-tui:openai-server": "node tests/real-openai-server-menu-tui.mjs artifacts/afterburn.exe",
+    "test:real-tui:subagent-policy": "node tests/real-subagent-policy-tui.mjs artifacts/afterburn.exe artifacts/subagent-policy-tui",
     "test:real-tui:multi-session": "node tests/multi-session-extension-modal-conpty.mjs artifacts/afterburn.exe artifacts/multi-session-conpty",
     "replay:real-tui:black-box": "node tests/replay-blackbox-tui.mjs"
   },

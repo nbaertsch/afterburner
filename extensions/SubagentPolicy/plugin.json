@@ -1,6 +1,12 @@
 {
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "afterburner-subagent-policy",
-  "version": "0.1.0",
   "description": "Session-scoped configurable subagent policies for Afterburner.",
-  "extensions": ["./extensions/SubagentPolicy/extension.mjs"]
+  "version": "0.1.0",
+  "author": {
+    "name": "Afterburner"
+  },
+  "extensions": {
+    "com.github.copilot": {}
+  }
 }

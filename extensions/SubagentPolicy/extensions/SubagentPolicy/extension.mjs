@@ -3,6 +3,7 @@ import { joinSession } from "@github/copilot-sdk/extension";
 import { completeModalOpenRequest, completePolicyAction, consumeModalOpenRequests, consumePolicyActions, requestModalOpen, writePolicyState } from "./policy-ipc.mjs";
 import { configPath } from "./names.mjs";
 import { loadPolicyConfig, sdkSettings } from "./policy.mjs";
+import { updateSubagentSettings } from "./session-api.mjs";
 
 let session;
 let config;
@@ -39,14 +40,14 @@ async function publish(detail) {
 async function applyPolicy(id) {
     const policy = config?.policies?.[id];
     if (!policy) throw new Error(`unknown policy: ${id}`);
-    await session.tools.updateSubagentSettings({ settings: sdkSettings(policy) });
+    await updateSubagentSettings(session, sdkSettings(policy));
     activePolicy = id;
     lastError = null;
     return publish(`${policy.displayName} applied`);
 }
 
 async function clearPolicy() {
-    await session.tools.updateSubagentSettings({ settings: null });
+    await updateSubagentSettings(session, null);
     activePolicy = null;
     lastError = null;
     return publish("session override cleared");

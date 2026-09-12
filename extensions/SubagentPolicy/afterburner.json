@@ -26,6 +26,6 @@
     ]
   },
   "sessionExtension": {
-    "entrypoint": "extensions/SubagentPolicy/extension.mjs"
+    "entrypoint": "com.github.copilot/extensions/SubagentPolicy/extension.mjs"
   }
 }
