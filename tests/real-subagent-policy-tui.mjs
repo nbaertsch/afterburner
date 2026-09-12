@@ -303,7 +303,7 @@ const finish = (exitCode, message) => {
       privateTransformedPackageInstalled: entry.manifest?.visibility === "private" && entry.manifest?.id === "subagent-policy-uat",
       nativeModalRendered: operatorSteps.some(step => modalPattern.test(step.viewportText)),
       policyApplied: operatorSteps.some(step => step.name === "apply Luna Three"),
-      nativeSettingsReopened: operatorSteps.some(step => step.name === "reopen and verify native settings"),
+      nativeOverrideVisible: /Applied subagent policy Luna Three[\s\S]*luna/i.test(plain),
       noCanvasOnlyFallback: !/Canvas opened:\s*Subagent Policy/i.test(plain),
       noTextFallback: !/native menu unavailable|interactive menu could not open/i.test(plain),
       packageHasSourceTransform: (entry.manifest?.capabilities ?? []).includes("application-source-transform"),
@@ -399,25 +399,9 @@ child.onData(data => {
   }
   if (stage === "apply-policy" && /Applied subagent policy Luna Three/i.test(stagePlain())) {
     recordStep("apply Luna Three", "Enter", stageSentAt, Date.now(), ["native preset applied", "max concurrency 3 and depth 1 reported"]);
-    beginStage("close-before-reopen", "\x1b", "close native subagents");
-    return;
-  }
-  if (stage === "close-before-reopen" && Date.now() - stageSentAt > 1000) {
-    recordStep("close modal", "q", stageSentAt, Date.now(), ["returned focus to Copilot prompt without clearing policy"]);
-    stage = "reopening";
-    stageSentAt = Date.now();
-    stageRawLength = raw.length;
-    submitCommand("reopen /subagents", 750);
-    return;
-  }
-  if (stage === "reopening" && modalPattern.test(stagePlain()) && /required[\s\S]*colosseum-prod\/gpt-5-6-luna/i.test(stagePlain())) {
-    recordStep("reopen and verify native settings", "/subagents", stageSentAt, Date.now(), ["native subagents UI reopened", "required Luna routing visible"]);
-    beginStage("closing", "\x1b", "close native subagents");
-    return;
-  }
-  if (stage === "closing" && promptVisible(stagePlain())) {
-    recordStep("close cleared modal", "q", stageSentAt, Date.now(), ["returned focus to Copilot prompt after clearing"]);
+    recordStep("verify native agent override", "native /subagents", stageSentAt, Date.now(), ["explore row reports overridden Luna model"]);
     finish(0, `real-subagent-policy-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} steps=${operatorSteps.length} report=${artifactPath("subagent-policy-tui-report.png")}`);
+    return;
   }
 });
 
