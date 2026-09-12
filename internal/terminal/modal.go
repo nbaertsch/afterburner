@@ -935,6 +935,28 @@ func (s *ModalServer) handleInputKey(key string) {
 		s.requestClose(identity, generation, key)
 		return
 	}
+	if key == "tab" || key == "shift+tab" {
+		if controls, ok := s.renderer.(modalControlInputRenderer); ok {
+			if event, consumed := controls.HandleModalControlInput(key); consumed {
+				if event != nil {
+					s.enqueueEvent(ModalEvent{
+						Type: event.Type, ID: identity.surfaceID, Generation: generation,
+						TargetID: event.TargetID, DocumentRevision: modalDocumentRevision(frame.Document),
+						ActionName: event.ActionName, Key: event.Key, Value: event.Value,
+					}, identity)
+				}
+				return
+			}
+		}
+		if focuser, ok := s.renderer.(modalActionFocusRenderer); ok {
+			delta := 1
+			if key == "shift+tab" {
+				delta = -1
+			}
+			focuser.FocusModalAction(delta)
+		}
+		return
+	}
 	if controls, ok := s.renderer.(modalControlInputRenderer); ok {
 		if event, consumed := controls.HandleModalControlInput(key); consumed {
 			if event != nil {
@@ -957,16 +979,6 @@ func (s *ModalServer) handleInputKey(key string) {
 			}
 			return
 		}
-	}
-	if key == "tab" || key == "shift+tab" {
-		if focuser, ok := s.renderer.(modalActionFocusRenderer); ok {
-			delta := 1
-			if key == "shift+tab" {
-				delta = -1
-			}
-			focuser.FocusModalAction(delta)
-		}
-		return
 	}
 	if (key == "enter" || key == "space") && len(frame.Actions) > 0 {
 		if focuser, ok := s.renderer.(modalActionFocusRenderer); ok {
@@ -1468,6 +1480,9 @@ func (r *TerminalModalRenderer) ShowModal(frame ModalFrame) {
 		// Document controls own keyboard focus; keep the legacy footer actions
 		// visible as shortcut hints without rendering a second focus marker.
 		r.focusedActionIndex = -2
+		if r.focusedDocumentControlIndex() < 0 && len(r.documentControls) == 1 {
+			r.focusedControlID = r.documentControls[0].ID
+		}
 	}
 	r.active = true
 	r.activeFrame = r.frameWithControlState(frame)
@@ -1573,6 +1588,10 @@ func (r *TerminalModalRenderer) HandleModalControlInput(key string) (*modalContr
 	if !r.active || len(r.documentControls) == 0 {
 		return nil, false
 	}
+	if r.focusedDocumentControlIndex() < 0 && len(r.documentControls) == 1 &&
+		(key == "left" || key == "right" || key == "up" || key == "down" || key == "enter" || key == "space") {
+		r.focusedControlID = r.documentControls[0].ID
+	}
 	if key == "tab" || key == "shift+tab" {
 		delta := 1
 		if key == "shift+tab" {
@@ -1656,6 +1675,12 @@ func (r *TerminalModalRenderer) applyDocumentControlInput(control modalDocumentC
 	case "select", "radioGroup", "tabs":
 		if key != "left" && key != "right" && key != "up" && key != "down" && key != "enter" && key != "space" {
 			return nil, false
+		}
+		if key == "enter" || key == "space" {
+			event.Type = "activate"
+			event.Value = r.controlValues[control.ID]
+			event.ActionName = control.ActionName
+			return event, true
 		}
 		value := modalNextControlOption(control, r.controlValues[control.ID], key == "left" || key == "up")
 		r.controlValues[control.ID] = value
@@ -2291,7 +2316,11 @@ func (r *TerminalModalRenderer) reconcileDocumentControls(frame ModalFrame) {
 	r.documentControls = controls
 	nextValues := make(map[string]any, len(controls))
 	for _, control := range controls {
-		nextValues[control.ID] = initialValues[control.ID]
+		if value, ok := r.controlValues[control.ID]; ok {
+			nextValues[control.ID] = value
+		} else {
+			nextValues[control.ID] = initialValues[control.ID]
+		}
 	}
 	r.controlValues = nextValues
 	if r.focusedDocumentControlIndex() < 0 {

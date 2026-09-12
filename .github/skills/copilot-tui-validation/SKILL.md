@@ -33,6 +33,32 @@ dimensions, or incremental ANSI rendering. Redirected stdin/stdout is not equiva
    than exact full-screen snapshots.
 10. Terminate only the pseudo-terminal child created by the harness. Never kill processes by name.
 
+## Native component and event validation
+
+- Choose the native component that owns the interaction. Use `radioGroup`/`select` for arrow-key
+  policy or mode selection instead of rendering one footer action per option.
+- `actionBindings` name semantic actions; they do not replace the registered surface's `onEvent`.
+  Verify `change` updates selection/detail and `activate` or `submit` performs the operation through
+  the actual modal controls API.
+- Keep global accelerators in top-level actions (for example reload, clear, close). Avoid
+  compatibility-frame shortcut walls that duplicate every native choice and hide broken focus/event
+  wiring.
+- Reconstruct and capture the visible terminal viewport after every operator step. Store semantic
+  viewport text, raw ANSI, IO timing, and a visually inspectable PNG/report. Assertions must
+  distinguish focus, selection preview, application, persistence, and close behavior.
+- Inspect the generated PNG yourself. A passing text grep is not enough when stale incremental
+  output can contain both old and new states.
+- For subagent model policies, validate the spawned worker's resolved canonical provider/model ID
+  from runtime events. A successful settings mutation, active-policy badge, or display alias does not
+  prove routing. Reject non-canonical IDs such as `gpt-5.6-luna` when Copilot exposes
+  `colosseum-prod/gpt-5-6-luna`.
+- When Copilot already owns a native command such as `/subagents`, keep it canonical. Do not patch
+  minified UI without a stable hook. Apply/enforce policy behind its native settings API and keep
+  custom surfaces diagnostic or fallback-only.
+- For subagent acceptance, capture `subagent.started`, `subagent.configured`,
+  `subagent.completed`, and `subagent.failed`. Assert `configured.model` and
+  `completed.configuredModelMatchesActual`; derive concurrency from overlapping lifecycle intervals.
+
 ## Cold-start validation
 
 Set `COPILOT_RUNTIME_EXTENSION_DEBUG=1` and require these messages before testing plugin behavior:

@@ -82,3 +82,20 @@ test("rejects duplicate disabled agents and unknown fields", () => {
     assert.throws(() => loadPolicyConfig({ policies: { custom: { ...base, disabledSubagents: ["task", "task"] } } }), /duplicates/);
     assert.throws(() => loadPolicyConfig({ policies: { custom: { ...base, mystery: true } } }), /not supported/);
 });
+
+test("requires canonical provider/model identities", () => {
+    const policy = {
+        displayName: "Custom",
+        description: "Custom",
+        maxConcurrency: 2,
+        maxDepth: 1,
+        resultExposure: "final-only",
+        agents: { explore: { model: "gpt-5.6-luna", modelPolicy: "required" } }
+    };
+    assert.throws(() => loadPolicyConfig({ policies: { custom: policy } }), /canonical provider\/model/);
+    const valid = loadPolicyConfig({ policies: { custom: {
+        ...policy,
+        agents: { explore: { model: "colosseum-prod/gpt-5-6-luna", modelPolicy: "required" } }
+    } } });
+    assert.equal(valid.policies.custom.agents.explore.model, "colosseum-prod/gpt-5-6-luna");
+});

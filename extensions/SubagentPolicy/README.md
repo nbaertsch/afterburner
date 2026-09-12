@@ -23,8 +23,10 @@ controls to GitHub Copilot CLI subagent dispatch.
 
 ## User workflow
 
-Run `/subagent-policy` in an Afterburner-managed Copilot session. The native modal shows the
-current policy and available policies. Keyboard shortcuts select and apply a policy:
+Use Copilot's native `/subagents` screen as the canonical UI. Afterburner policies auto-apply and
+enforce validated session settings behind that native path. `/subagent-policy` is secondary:
+diagnostics, policy state, and compatibility fallback only. Afterburner does not patch Copilot's
+minified `/subagents` implementation.
 
 | Key | Policy | Concurrency | Depth | Result exposure |
 |---|---|---:|---:|---|
@@ -113,6 +115,11 @@ global factory-settings mutation API.
 Each agent entry may define `model`, `modelPolicy` (`preferred` or `required`), `effortLevel`,
 `contextTier` (`inherit`, `default`, or `long_context`), and `autoInvoke`.
 
+`model` must be Copilot's canonical picker identity, including provider, for example
+`colosseum-prod/gpt-5-6-luna` rather than the display/capability alias `gpt-5.6-luna`. The modal
+reports configured and runtime-observed model identities separately; an applied policy is not proof
+that a subsequently spawned worker resolved to that model.
+
 Unknown fields, duplicate disabled-agent names, invalid ranges, invalid enums, and malformed agent
 entries are rejected. An invalid user configuration does not become a partial policy.
 
@@ -130,10 +137,11 @@ routing. This avoids assuming a provider exists.
 
 ## Runtime architecture
 
-1. The extension joins the current Copilot session.
+1. The extension joins the current Copilot session and leaves native `/subagents` untouched.
 2. It loads and validates configuration atomically.
-3. It registers `/subagent-policy`.
-4. Applying a policy calls `session.tools.updateSubagentSettings` with:
+3. Explicit model IDs are checked against `models.list()` or `models.getBuiltInCatalog()`.
+4. It registers `/subagent-policy` only as diagnostics/compatibility fallback.
+5. Applying a policy calls `session.tools.updateSubagentSettings` with:
    - `maxConcurrency`
    - `maxDepth`
    - `disabledSubagents`
@@ -158,6 +166,13 @@ Copilot's internal parent-child result transport.
 - Configuration errors are explicit in session logs and the modal.
 - Applying an invalid or unknown policy fails without changing the current policy.
 - SDK update failures leave the previous policy active and are reported.
+- An SDK response with `ok: false` or an error is treated as rejection, never as a successful apply.
+- Runtime diagnostics remain unverified until a real worker emits its resolved canonical model ID;
+  a mismatch is displayed explicitly.
+- Acceptance evidence uses `subagent.started`, `subagent.configured`, `subagent.completed`, and
+  `subagent.failed`. `configured.model` records the selected route,
+  `completed.configuredModelMatchesActual` proves it was honored, and overlapping lifecycle
+  intervals prove effective concurrency.
 - Closing the modal never clears or changes the policy.
 - Limits queue work; the extension does not turn capacity pressure into cancellation.
 
@@ -174,4 +189,5 @@ Implementation is complete only when:
    `/subagent-policy`, applies multiple policies using actual keys, observes durable state changes,
    closes and reopens the modal, and verifies a fresh session receives only `defaultPolicy`.
 6. Agentic acceptance launches real subagent work under the applied policy and verifies the
-   configured concurrency/model settings through session events or SDK-observable state.
+   spawned worker's resolved canonical model through runtime session events. Merely accepting
+   `updateSubagentSettings` or observing a policy badge is insufficient.

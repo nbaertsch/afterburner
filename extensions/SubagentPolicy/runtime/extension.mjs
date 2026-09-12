@@ -9,10 +9,12 @@ function registrar(api = {}) {
     return null;
 }
 
-async function update(action, controls, ui) {
+async function update(action, controls, ui, viewState) {
     if (action === "close") return controls?.close?.();
     const result = await requestPolicyAction(action);
-    const frame = buildModalFrame(ui, result.state ?? await readPolicyState(), result.ok ? undefined : `action failed: ${result.error ?? "unknown"}`);
+    const state = result.state ?? await readPolicyState();
+    if (result.ok && state.activePolicy) viewState.selectedPolicy = state.activePolicy;
+    const frame = buildModalFrame(ui, state, result.ok ? undefined : `action failed: ${result.error ?? "unknown"}`, viewState.selectedPolicy);
     return typeof controls?.update === "function" ? controls.update(frame) : frame;
 }
 
@@ -20,13 +22,28 @@ export async function activate(api = {}) {
     const ui = api.ui ?? api;
     const register = registrar(api);
     if (!register) return { dispose() {} };
+    const viewState = { selectedPolicy: null };
     const modal = register.fn.call(register.target, {
         id: CANONICAL_ID,
         displayName: CANONICAL_TITLE,
         description: "Apply session-scoped Copilot subagent routing and concurrency policies.",
-        actions: menuActions.map(action => ({ ...action, handler: async (_input, controls) => update(action.name, controls, ui) })),
-        open: async () => buildModalFrame(ui, await readPolicyState(), "interactive menu open"),
-        render: async context => context.state
+        actions: menuActions.map(action => ({
+            ...action,
+            handler: async (_input, controls) => update(action.name === "apply-selected-policy" ? viewState.selectedPolicy : action.name, controls, ui, viewState)
+        })),
+        open: async () => {
+            const state = await readPolicyState();
+            viewState.selectedPolicy = state.activePolicy ?? state.defaultPolicy ?? Object.keys(state.policies ?? {})[0] ?? null;
+            return buildModalFrame(ui, state, "interactive menu open", viewState.selectedPolicy);
+        },
+        render: async context => context.state,
+        onEvent: async (event, controls) => {
+            if (event.targetId !== "sp-policy-picker" || typeof event.value !== "string") return;
+            viewState.selectedPolicy = event.value;
+            if (event.type === "activate" || event.key === "enter" || event.key === "space") {
+                return update(viewState.selectedPolicy, controls, ui, viewState);
+            }
+        }
     });
     const poll = async () => {
         for (const request of await consumeModalOpenRequests().catch(() => [])) {

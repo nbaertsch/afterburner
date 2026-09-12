@@ -5,12 +5,21 @@ export const menuActions = Object.freeze([
     { name: "conservative", label: "Conservative", key: "2", description: "Apply the Conservative policy" },
     { name: "balanced", label: "Balanced", key: "3", description: "Apply the Balanced policy" },
     { name: "burst", label: "Burst", key: "4", description: "Apply the Burst policy" },
+    { name: "apply-selected-policy", label: "Apply", description: "Apply the selected policy" },
     { name: "reload", label: "Reload", key: "r", description: "Reload policy configuration" },
     { name: "clear", label: "Clear", key: "x", description: "Clear the session policy override" },
     { name: "close", label: "Close", key: "q", description: "Close menu" }
 ]);
 
-export function modalFrame(snapshot = {}, detail = undefined) {
+function selectedPolicyID(snapshot, selectedPolicy) {
+    const policies = Object.keys(snapshot.policies ?? {});
+    if (selectedPolicy && policies.includes(selectedPolicy)) return selectedPolicy;
+    if (snapshot.activePolicy && policies.includes(snapshot.activePolicy)) return snapshot.activePolicy;
+    if (snapshot.defaultPolicy && policies.includes(snapshot.defaultPolicy)) return snapshot.defaultPolicy;
+    return policies[0] ?? "";
+}
+
+export function modalFrame(snapshot = {}, detail = undefined, selectedPolicy = undefined) {
     const policies = Object.entries(snapshot.policies ?? {});
     const active = snapshot.activePolicy ?? "none";
     const frame = {
@@ -32,40 +41,43 @@ export function modalFrame(snapshot = {}, detail = undefined) {
     return frame;
 }
 
-export function buildModalFrame(ui, snapshot = {}, detail = undefined) {
-    const frame = modalFrame(snapshot, detail);
+export function buildModalFrame(ui, snapshot = {}, detail = undefined, selectedPolicy = undefined) {
+    const selected = selectedPolicyID(snapshot, selectedPolicy);
+    const frame = modalFrame(snapshot, detail, selected);
     if (!ui?.createUIDocument) return frame;
     const c = ui.components ?? ui;
-    if (!c?.dialog || !c?.panel || !c?.button || !c?.badge || !c?.keyValue) return frame;
+    if (!c?.dialog || !c?.panel || !c?.button || !c?.badge || !c?.radioGroup) return frame;
     const policies = Object.entries(snapshot.policies ?? {});
     const active = snapshot.activePolicy ?? "none";
     const actionBar = c.actionBar ?? c.toolbar;
     try {
         frame.document = ui.createUIDocument(
             c.dialog({ title: CANONICAL_TITLE, status: frame.status, modal: true }, [
-                c.panel({ title: "Current session" }, [
-                    c.row({}, [
-                        c.badge({ label: `Active: ${active}`, tone: active === "none" ? "warning" : "success" }, [], { id: "sp-active-badge" }),
-                        c.badge({ label: `Default: ${snapshot.defaultPolicy ?? "none"}`, tone: "info" }, [], { id: "sp-default-badge" })
-                    ], { id: "sp-status-row" }),
-                    c.keyValue({ items: [
-                        { key: "Configuration", value: snapshot.configPath ?? "built-in defaults" },
-                        { key: "Available policies", value: String(policies.length) }
-                    ] }, [], { id: "sp-session-details" })
-                ], { id: "sp-current-panel" }),
-                c.panel({ title: "Choose a policy" }, [
-                    c.list({
-                        items: policies.map(([id, policy]) => ({
-                            id,
-                            label: policy.displayName,
-                            description: `${policy.description} Concurrency ${policy.maxConcurrency}; depth ${policy.maxDepth}; exposure ${policy.resultExposure}.`,
-                            selected: id === active
+                c.row({}, [
+                    c.badge({ label: active === "none" ? "No session policy" : `Active · ${active}`, tone: active === "none" ? "warning" : "success" }, [], { id: "sp-active-badge" }),
+                    c.badge({ label: `Default · ${snapshot.defaultPolicy ?? "none"}`, tone: "info" }, [], { id: "sp-default-badge" })
+                ], { id: "sp-status-row" }),
+                c.panel({ title: "Policy" }, [
+                    c.radioGroup({
+                        label: "Select with ↑/↓, apply with Enter",
+                        value: selected,
+                        options: policies.map(([id, policy]) => ({
+                            value: id,
+                            label: `${policy.displayName}  ·  ${policy.maxConcurrency} agents  ·  depth ${policy.maxDepth}`,
+                            description: policy.description
                         }))
-                    }, [], { id: "sp-policy-list", accessibility: { role: "list", name: "Available subagent policies" } })
+                    }, [], {
+                        id: "sp-policy-picker",
+                        actionBindings: { change: "preview-policy", activate: "apply-selected-policy" },
+                        accessibility: { role: "radiogroup", name: "Subagent policy" }
+                    })
                 ], { id: "sp-policy-panel" }),
+                c.panel({ title: "Selected policy" }, [
+                    c.markdown({ markdown: selectedPolicyMarkdown(snapshot, selected) }, [], { id: "sp-policy-detail" })
+                ], { id: "sp-detail-panel" }),
                 snapshot.error ? c.alert({ title: "Policy error", message: snapshot.error, tone: "danger" }, [], { id: "sp-error" }) : null,
                 detail ? c.text({ value: detail, tone: "muted" }, [], { id: "sp-detail" }) : null,
-                actionBar({ label: "Policy actions" }, menuActions.map(action =>
+                actionBar({ label: "Policy actions" }, menuActions.filter(action => !["solo", "conservative", "balanced", "burst"].includes(action.name)).map(action =>
                     c.button({
                         label: action.label,
                         actionId: action.name,
@@ -77,10 +89,30 @@ export function buildModalFrame(ui, snapshot = {}, detail = undefined) {
                         actionBindings: { activate: action.name }
                     })
                 ), { id: "sp-action-bar", accessibility: { role: "toolbar", name: "Subagent policy actions" } }),
-                c.help({ title: "Keyboard", text: "1 Solo · 2 Conservative · 3 Balanced · 4 Burst · r Reload · x Clear · q Close" }, [], { id: "sp-help" })
+                c.help({ title: "Keyboard", text: "↑/↓ choose · Enter apply · r reload · x clear · q close · number shortcuts remain available" }, [], { id: "sp-help" })
             ].filter(Boolean), { id: "sp-root", accessibility: { role: "dialog", name: CANONICAL_TITLE } }),
             { surfaceId: CANONICAL_ID, revision: Date.now(), locale: "en-US" }
         );
     } catch {}
     return frame;
+}
+
+function selectedPolicyMarkdown(snapshot, id) {
+    const policy = snapshot.policies?.[id];
+    if (!policy) return "No policy selected.";
+    const models = [...new Set(Object.values(policy.agents ?? {}).map(agent => agent.model).filter(Boolean))];
+    const diagnostics = Object.entries(snapshot.diagnostics ?? {}).map(([agent, value]) =>
+        `- ${agent}: configured **${value.configuredModel ?? "inherit"}**; resolved **${value.resolvedModel ?? "not observed"}**${value.verified ? " ✓" : " ⚠"}`
+    );
+    return [
+        `**${policy.displayName}**`,
+        "",
+        policy.description,
+        "",
+        `- Maximum active subagents: **${policy.maxConcurrency}**`,
+        `- Maximum nesting depth: **${policy.maxDepth}**`,
+        `- Parent visibility: **${policy.resultExposure}**`,
+        `- Required model routing: **${models.length ? models.join(", ") : "inherit parent model"}**`,
+        ...(diagnostics.length ? ["", "**Runtime model diagnostics**", ...diagnostics] : [])
+    ].join("\n");
 }

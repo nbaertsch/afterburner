@@ -3,7 +3,7 @@ import { joinSession } from "@github/copilot-sdk/extension";
 import { completeModalOpenRequest, completePolicyAction, consumeModalOpenRequests, consumePolicyActions, requestModalOpen, writePolicyState } from "./policy-ipc.mjs";
 import { configPath } from "./names.mjs";
 import { loadPolicyConfig, sdkSettings } from "./policy.mjs";
-import { updateSubagentSettings } from "./session-api.mjs";
+import { availableModelIDs, updateSubagentSettings } from "./session-api.mjs";
 
 let session;
 let config;
@@ -11,6 +11,10 @@ let activePolicy = null;
 let lastError = null;
 let actionPump;
 let disposed = false;
+let runtimeObserverDispose;
+const observedModels = new Map();
+const lifecycle = new Map();
+let peakConcurrency = 0;
 
 async function readConfig() {
     const path = configPath();
@@ -29,8 +33,30 @@ function snapshot(detail = undefined) {
         configPath: configPath(),
         policies: config?.policies ?? {},
         detail,
-        error: lastError
+        error: lastError,
+        diagnostics: activePolicy ? policyDiagnostics(config?.policies?.[activePolicy]) : {}
     };
+}
+
+function policyDiagnostics(policy) {
+    const diagnostics = {};
+    for (const [agent, settings] of Object.entries(policy?.agents ?? {})) {
+        diagnostics[agent] = {
+            configuredModel: settings.model ?? null,
+            resolvedModel: observedModels.get(agent) ?? null,
+            verified: settings.model ? observedModels.get(agent) === settings.model : true
+        };
+    }
+
+    return diagnostics;
+}
+
+async function validatePolicyModels(policy) {
+    const configured = [...new Set(Object.values(policy?.agents ?? {}).map(agent => agent.model).filter(Boolean))];
+    if (!configured.length) return;
+    const available = await availableModelIDs(session);
+    const missing = configured.filter(model => !available.has(model));
+    if (missing.length) throw new Error(`unavailable Copilot model ID(s): ${missing.join(", ")}`);
 }
 
 async function publish(detail) {
@@ -40,7 +66,9 @@ async function publish(detail) {
 async function applyPolicy(id) {
     const policy = config?.policies?.[id];
     if (!policy) throw new Error(`unknown policy: ${id}`);
-    await updateSubagentSettings(session, sdkSettings(policy));
+    await validatePolicyModels(policy);
+    const result = await updateSubagentSettings(session, sdkSettings(policy));
+    if (result?.ok === false || result?.error) throw new Error(result.error ?? "Copilot rejected subagent settings");
     activePolicy = id;
     lastError = null;
     return publish(`${policy.displayName} applied`);
@@ -95,6 +123,24 @@ const joined = await joinSession({
     canvases: []
 });
 session = joined.session ?? joined;
+runtimeObserverDispose = session?.registerRuntimeObserver?.({
+    id: "subagent-policy-model-diagnostics",
+    onEvent(event) {
+        if (!["subagent.started", "subagent.configured", "subagent.completed", "subagent.failed"].includes(event?.type)) return;
+        const agent = event.agentType ?? event.agentName ?? event.agentKind;
+        const id = event.agentId ?? `${agent ?? "subagent"}-${Date.now()}`;
+        if (event.type === "subagent.started") lifecycle.set(id, event);
+        if (event.type === "subagent.configured" && typeof agent === "string" && typeof event.configured?.model === "string") {
+            observedModels.set(agent, event.configured.model);
+        }
+        if (event.type === "subagent.completed" || event.type === "subagent.failed") lifecycle.delete(id);
+        peakConcurrency = Math.max(peakConcurrency, lifecycle.size);
+        if (event.type === "subagent.completed" && event.configuredModelMatchesActual === false) {
+            lastError = `resolved subagent model did not match configured policy for ${agent ?? id}`;
+        }
+        void publish(`subagent evidence: ${event.type}; active ${lifecycle.size}; peak ${peakConcurrency}`);
+    }
+});
 config = (await readConfig()).config;
 actionPump = setInterval(() => { void pollActions(); }, 100);
 actionPump.unref?.();
@@ -114,5 +160,9 @@ if (!disposed && config.defaultPolicy) {
 export async function dispose() {
     disposed = true;
     if (actionPump) clearInterval(actionPump);
+    try {
+        if (typeof runtimeObserverDispose === "function") await runtimeObserverDispose();
+        else await runtimeObserverDispose?.dispose?.();
+    } catch {}
     await joined?.dispose?.();
 }

@@ -37,6 +37,46 @@ const stripAnsi = value => value
   .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
   .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
   .replace(/\x1b[()][A-Za-z0-9]/g, "");
+const renderTerminalScreen = (value, columns = terminalColumns, rows = terminalRows) => {
+  const screen = Array.from({ length: rows }, () => Array(columns).fill(" "));
+  let row = 0, column = 0;
+  const clamp = () => { row = Math.max(0, Math.min(rows - 1, row)); column = Math.max(0, Math.min(columns - 1, column)); };
+  for (let index = 0; index < String(value ?? "").length;) {
+    const rest = value.slice(index);
+    const osc = rest.match(/^\x1b\][^\x07]*(?:\x07|\x1b\\)/);
+    if (osc) { index += osc[0].length; continue; }
+    const csi = rest.match(/^\x1b\[([0-9;?]*)([ -/]?)([@-~])/);
+    if (csi) {
+      const params = csi[1].replace(/^\?/, "").split(";").filter(Boolean).map(Number);
+      const final = csi[3];
+      if (final === "H" || final === "f") { row = (params[0] || 1) - 1; column = (params[1] || 1) - 1; }
+      else if (final === "A") row -= params[0] || 1;
+      else if (final === "B") row += params[0] || 1;
+      else if (final === "C") column += params[0] || 1;
+      else if (final === "D") column -= params[0] || 1;
+      else if (final === "G") column = (params[0] || 1) - 1;
+      else if (final === "J" && (params[0] || 0) === 2) screen.forEach(line => line.fill(" "));
+      else if (final === "K") screen[row].fill(" ", column);
+      clamp(); index += csi[0].length; continue;
+    }
+    const char = rest[0];
+    if (char === "\r") column = 0;
+    else if (char === "\n") { row++; column = 0; if (row >= rows) { screen.shift(); screen.push(Array(columns).fill(" ")); row = rows - 1; } }
+    else if (char === "\b") column = Math.max(0, column - 1);
+    else if (char >= " ") { screen[row][column] = char; column++; if (column >= columns) { column = 0; row = Math.min(rows - 1, row + 1); } }
+    index++;
+  }
+  return screen.map(line => line.join("").trimEnd()).join("\n").replace(/\n+$/g, "");
+};
+const extractModalViewport = value => {
+  const text = stripAnsi(value);
+  const matches = [...text.matchAll(/Subagent Policy/gi)];
+  const start = matches.at(-1)?.index ?? -1;
+  if (start < 0) return renderTerminalScreen(value);
+  const before = text.lastIndexOf("\n", Math.max(0, start - 1000));
+  const after = text.indexOf("\n C:\\", start);
+  return text.slice(before < 0 ? start : before + 1, after < 0 ? start + 6000 : after).trimEnd();
+};
 const encodeChunk = data => Buffer.from(data, "utf8").toString("base64");
 const printableInput = data => data.replace(/\x1b/g, "<Esc>").replace(/\r/g, "<Enter>").replace(/\x15/g, "<Ctrl+U>");
 const elapsedSeconds = () => Number(((Date.now() - startedAt) / 1000).toFixed(6));
@@ -159,6 +199,7 @@ const submitCommand = (label, delayMs = 250) => setTimeout(() => {
   writeInput("/subagent-policy\r", `${label}: type and submit command`);
 }, delayMs).unref?.();
 const currentPlain = () => stripAnsi(raw);
+const currentViewport = () => extractModalViewport(raw);
 const recentPlain = () => currentPlain().slice(-8000);
 const stagePlain = () => stripAnsi(raw.slice(stageRawLength));
 const promptVisible = value => /\/ commands|tab next tab|\? help|@ files · # issues|Tip:\s*\/usage/i.test(value);
@@ -170,7 +211,7 @@ const recordStep = (name, key, started, completed, assertions) => {
     startedAt: new Date(started).toISOString(),
     completedAt: new Date(completed).toISOString(),
     latencyMs: completed - started,
-    viewportText: currentPlain().slice(-8000),
+    viewportText: extractModalViewport(raw.slice(stageRawLength)) || currentViewport(),
     assertions
   });
 };
@@ -260,6 +301,7 @@ const finish = (exitCode, message) => {
       usedRequestedArtifact: afterburn.toLowerCase() === resolve("artifacts\\afterburn.exe").toLowerCase(),
       privateTransformedPackageInstalled: entry.manifest?.visibility === "private" && entry.manifest?.id === "subagent-policy-uat",
       nativeModalRendered: operatorSteps.some(step => modalPattern.test(step.viewportText)),
+      selectionMoved: operatorSteps.some(step => step.name === "preview Balanced selection" && /Balanced/i.test(step.viewportText)),
       balancedApplied: operatorSteps.some(step => /Active:\s*balanced/i.test(step.viewportText)),
       burstApplied: operatorSteps.some(step => /Active:\s*burst/i.test(step.viewportText)),
       durableBurstOnReopen: operatorSteps.some(step => step.name === "reopen and verify current-session state" && /Active:\s*burst/i.test(step.viewportText)),
@@ -354,11 +396,26 @@ child.onData(data => {
   if (stage === "opening" && modalPattern.test(text) && /Active:\s*none/i.test(text)) {
     modalSeenAt = Date.now();
     recordStep("open native modal", "/subagent-policy", commandSentAt, modalSeenAt, ["native modal title rendered", "Balanced and Burst policies visible", "initial active policy is none"]);
-    beginStage("balanced", "3", "apply Balanced");
+    beginStage("focus-picker", "\t", "focus native policy selector");
+    return;
+  }
+  if (stage === "focus-picker" && Date.now() - stageSentAt > 300) {
+    recordStep("focus policy selector", "Tab", stageSentAt, Date.now(), ["Tab assigned focus to the only native policy control"]);
+    beginStage("select-conservative", "2", "select Conservative");
+    return;
+  }
+  if (stage === "select-conservative" && /Active:\s*conservative/i.test(stagePlain())) {
+    recordStep("preview Conservative selection", "Down", stageSentAt, Date.now(), ["arrow navigation moved native policy selector", "active policy remained none"]);
+    beginStage("select-balanced", "3", "select Balanced");
+    return;
+  }
+  if (stage === "select-balanced" && /Active:\s*balanced/i.test(stagePlain())) {
+    recordStep("preview Balanced selection", "Down", stageSentAt, Date.now(), ["selection detail updated to Balanced", "policy not yet applied"]);
+    beginStage("balanced", "\r", "apply selected Balanced policy");
     return;
   }
   if (stage === "balanced" && /Active:\s*balanced/i.test(stagePlain())) {
-    recordStep("apply Balanced", "3", stageSentAt, Date.now(), ["Balanced action applied", "active policy changed to balanced"]);
+    recordStep("apply Balanced", "Enter", stageSentAt, Date.now(), ["Enter activated selected policy", "active policy changed to balanced"]);
     beginStage("burst", "4", "apply Burst");
     return;
   }

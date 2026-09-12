@@ -3,7 +3,7 @@ import test from "node:test";
 import { menuActions, modalFrame } from "../extensions/SubagentPolicy/menu.mjs";
 
 test("native menu exposes documented actions", () => {
-    assert.deepEqual(menuActions.map(action => action.key), ["1", "2", "3", "4", "r", "x", "q"]);
+    assert.deepEqual(menuActions.map(action => action.key).filter(Boolean), ["1", "2", "3", "4", "r", "x", "q"]);
 });
 
 test("modal frame exposes active policy and limits", () => {

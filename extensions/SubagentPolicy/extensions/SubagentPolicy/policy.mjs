@@ -64,7 +64,12 @@ function validateAgent(name, value) {
     const allowed = new Set(["model", "modelPolicy", "effortLevel", "contextTier", "autoInvoke"]);
     for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`agents.${name}.${key} is not supported`);
     const result = {};
-    if (value.model !== undefined) result.model = nonEmpty(value.model, `agents.${name}.model`);
+    if (value.model !== undefined) {
+        result.model = nonEmpty(value.model, `agents.${name}.model`);
+        if (!/^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/i.test(result.model)) {
+            throw new Error(`agents.${name}.model must use Copilot's canonical provider/model identity`);
+        }
+    }
     if (value.modelPolicy !== undefined) {
         if (!modelPolicies.has(value.modelPolicy)) throw new Error(`agents.${name}.modelPolicy is invalid`);
         result.modelPolicy = value.modelPolicy;
