@@ -60,7 +60,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $release = gh api repos/github/copilot-cli/releases/latest | ConvertFrom-Json
+          $releases = gh api "repos/github/copilot-cli/releases?per_page=1" | ConvertFrom-Json
+          $release = $releases | Select-Object -First 1
+          if (-not $release) {
+            throw "No current Copilot CLI release was returned by GitHub."
+          }
           $version = $release.tag_name.TrimStart('v')
           New-Item .copilot-current -ItemType Directory -Force | Out-Null
           gh release download $release.tag_name `
