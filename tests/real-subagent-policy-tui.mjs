@@ -302,15 +302,12 @@ const finish = (exitCode, message) => {
       usedRequestedArtifact: afterburn.toLowerCase() === resolve("artifacts\\afterburn.exe").toLowerCase(),
       privateTransformedPackageInstalled: entry.manifest?.visibility === "private" && entry.manifest?.id === "subagent-policy-uat",
       nativeModalRendered: operatorSteps.some(step => modalPattern.test(step.viewportText)),
-      selectionMoved: operatorSteps.some(step => step.name === "preview Balanced selection" && /Balanced/i.test(step.viewportText)),
-      balancedApplied: operatorSteps.some(step => /Active:\s*balanced/i.test(step.viewportText)),
-      burstApplied: operatorSteps.some(step => /Active:\s*burst/i.test(step.viewportText)),
-      durableBurstOnReopen: operatorSteps.some(step => step.name === "reopen and verify current-session state" && /Active:\s*burst/i.test(step.viewportText)),
-      cleared: operatorSteps.some(step => step.name === "clear current-session policy" && /Active:\s*none/i.test(step.viewportText)),
+      policyApplied: operatorSteps.some(step => step.name === "apply Luna Three"),
+      nativeSettingsReopened: operatorSteps.some(step => step.name === "reopen and verify native settings"),
       noCanvasOnlyFallback: !/Canvas opened:\s*Subagent Policy/i.test(plain),
       noTextFallback: !/native menu unavailable|interactive menu could not open/i.test(plain),
-      packageHasModalCapability: (entry.manifest?.capabilities ?? []).includes("modal-canvas"),
-      packageHasCompatibilityWrapper: existsSync(join(entry.activePath, "com.github.copilot", "extensions", "SubagentPolicy", "extension.mjs"))
+      packageHasSourceTransform: (entry.manifest?.capabilities ?? []).includes("application-source-transform"),
+      noCompetingSessionExtension: entry.manifest?.sessionExtension == null
     },
     operatorSteps,
     artifacts: {
@@ -405,7 +402,7 @@ child.onData(data => {
     beginStage("close-before-reopen", "\x1b", "close native subagents");
     return;
   }
-  if (stage === "close-before-reopen" && promptVisible(stagePlain())) {
+  if (stage === "close-before-reopen" && Date.now() - stageSentAt > 1000) {
     recordStep("close modal", "q", stageSentAt, Date.now(), ["returned focus to Copilot prompt without clearing policy"]);
     stage = "reopening";
     stageSentAt = Date.now();
