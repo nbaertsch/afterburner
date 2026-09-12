@@ -196,7 +196,7 @@ const scheduleWrite = (data, delayMs = 250, label = "input") => setTimeout(() =>
 const submitCommand = (label, delayMs = 250) => setTimeout(() => {
   writeInput("\x1b", `${label}: ensure prompt focus`);
   writeInput("\x15", `${label}: clear prompt`);
-  writeInput("/subagent-policy\r", `${label}: type and submit command`);
+  writeInput("/subagents\r", `${label}: type and submit command`);
 }, delayMs).unref?.();
 const currentPlain = () => stripAnsi(raw);
 const currentViewport = () => extractModalViewport(raw);
@@ -336,7 +336,7 @@ const finish = (exitCode, message) => {
     JSON.stringify({ version: 2, width: terminalColumns, height: terminalRows, timestamp: Math.floor(startedAt / 1000), env: { TERM: "xterm-256color", SHELL: "afterburn.exe" }, title: "Subagent Policy real TUI UAT" }),
     ...ioEvents.map(event => JSON.stringify([event.t, event.type === "input" ? "i" : "o", Buffer.from(event.dataBase64, "base64").toString("utf8")]))
   ].join("\n") + "\n", "utf8");
-  writeJson(result.artifacts.operatorJson, { goal: "Operate /subagent-policy in real Copilot and verify session-scoped policy state.", steps: operatorSteps });
+  writeJson(result.artifacts.operatorJson, { goal: "Operate native /subagents in real Copilot and verify session-scoped policy state.", steps: operatorSteps });
   writeFileSync(result.artifacts.operatorMarkdown, [
     "# Subagent Policy TUI UAT",
     "",
@@ -374,19 +374,19 @@ child.onData(data => {
     return;
   }
 
-  const runtimeReady = /activated Afterburner extension 'subagent-policy-uat'/i.test(text) && /runtime-extension-host/i.test(text);
+  const runtimeReady = /activated Afterburner extension 'subagent-policy-uat'/i.test(text);
   if (stage === "starting" && runtimeReady && promptVisible(recent)) {
     stage = "opening";
     commandSentAt = Date.now();
     stageRawLength = raw.length;
-    submitCommand("open /subagent-policy", 20_000);
+    submitCommand("open /subagents", 20_000);
     return;
   }
-  if (stage === "opening" && /Unknown command:\s*\/subagent-policy/i.test(recent)) {
-    if (Date.now() - commandSentAt > 35_000) return finish(1, "Copilot never registered /subagent-policy after runtime startup");
+  if (stage === "opening" && /Unknown command:\s*\/subagents/i.test(recent)) {
+    if (Date.now() - commandSentAt > 35_000) return finish(1, "Copilot native /subagents command was unavailable");
     if (Date.now() - commandSubmitRetryAt > 5000) {
       commandSubmitRetryAt = Date.now();
-      submitCommand("retry /subagent-policy");
+      submitCommand("retry /subagents");
     }
     return;
   }
@@ -395,7 +395,7 @@ child.onData(data => {
 
   if (stage === "opening" && modalPattern.test(text) && /Active:\s*none/i.test(text)) {
     modalSeenAt = Date.now();
-    recordStep("open native modal", "/subagent-policy", commandSentAt, modalSeenAt, ["native modal title rendered", "Balanced and Burst policies visible", "initial active policy is none"]);
+    recordStep("open native subagents UI", "/subagents", commandSentAt, modalSeenAt, ["native subagent UI rendered", "policy presets visible"]);
     beginStage("focus-picker", "\t", "focus native policy selector");
     return;
   }
@@ -429,11 +429,11 @@ child.onData(data => {
     stage = "reopening";
     stageSentAt = Date.now();
     stageRawLength = raw.length;
-    submitCommand("reopen /subagent-policy", 750);
+    submitCommand("reopen /subagents", 750);
     return;
   }
   if (stage === "reopening" && modalPattern.test(stagePlain()) && /Active:\s*burst/i.test(stagePlain())) {
-    recordStep("reopen and verify current-session state", "/subagent-policy", stageSentAt, Date.now(), ["native modal reopened", "Burst remained active in the same live session"]);
+    recordStep("reopen and verify current-session state", "/subagents", stageSentAt, Date.now(), ["native subagents UI reopened", "policy remained active in the same live session"]);
     beginStage("clearing", "x", "clear session override");
     return;
   }

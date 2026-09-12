@@ -178,14 +178,15 @@ Afterburner's supported observability layer. Captures bounded, privacy-preservin
 
 ---
 
-### 4. Subagent Policy (`subagent-policy`)
+### 4. Subagent Policy
 
-Applies live, session-scoped controls to Copilot subagents, including model routing, required or preferred model selection, concurrency, nesting depth, disabled agents, and optional agent-factory budgets.
+Adds policy presets and concurrency/depth constraints to Copilot's native subagent settings.
 
 - **Status:** Enabled by default upon `afterburn install`.
-- **Command:** Use `/subagent-policy` in an interactive session.
+- **Control plane:** Use `/subagents`; it is the only user-facing policy UI.
 - **Config:** Optional policy catalog at `~\.afterburner\config\subagent-policy.json`.
 - **Safety:** Policies never reduce or replace a model's configured context window.
+- **Compatibility:** The MOD is fail-closed and source-anchored to Copilot CLI `1.0.84-4`.
 - **Documentation:** [**Subagent Policy Guide**](extensions/SubagentPolicy/README.md)
 
 ---

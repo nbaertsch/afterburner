@@ -3,7 +3,7 @@
   "schemaVersion": 1,
   "id": "subagent-policy-local",
   "displayName": "Subagent Policy",
-  "description": "Applies configurable session-scoped model routing, concurrency, depth, and visibility policies to Copilot subagents.",
+  "description": "Adds policy presets and concurrency/depth controls to Copilot's native /subagents UI.",
   "visibility": "private",
   "requires": {
     "afterburner": ">=0.1.0 <1.0.0",
@@ -13,19 +13,5 @@
     "entrypoint": "runtime/extension.mjs",
     "execution": "in-process"
   },
-  "capabilities": ["session-command", "modal-canvas"],
-  "ui": {
-    "protocol": "afterburner.ui",
-    "revision": 1,
-    "surfaces": [
-      {
-        "id": "subagent-policy",
-        "kind": "modal",
-        "title": "Subagent Policy"
-      }
-    ]
-  },
-  "sessionExtension": {
-    "entrypoint": "com.github.copilot/extensions/SubagentPolicy/extension.mjs"
-  }
+  "capabilities": ["application-source-transform"]
 }

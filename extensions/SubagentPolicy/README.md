@@ -1,93 +1,45 @@
 # Subagent Policy
 
-Subagent Policy is a first-party Afterburner extension that applies configurable, session-scoped
-controls to GitHub Copilot CLI subagent dispatch.
+Subagent Policy extends Copilot's existing native `/subagents` screen. It does not register another
+slash command, modal, canvas, or IPC UI.
 
-## Goals
+## Control plane
 
-- Select a named policy for the current Copilot session.
-- Route each built-in subagent type to a configured model with a preferred or required policy.
-- Limit concurrent subagents and nesting depth.
-- Disable selected subagent types.
-- Control how much subagent activity is surfaced in the main session.
-- Keep the active policy session-local unless the user explicitly saves a default.
-- Make active and queued work visible without recording prompts, responses, code, or tool payloads.
+`/subagents` is the sole user-facing control plane. The native model catalog, agent list, keyboard
+interaction, and per-agent model controls remain intact. Afterburner adds policy presets that apply:
 
-## Non-goals
+- per-agent model routing;
+- maximum concurrent subagents;
+- maximum nesting depth; and
+- result-exposure metadata.
 
-- Alter model context windows.
-- Rewrite Copilot prompts or subagent results.
-- Silently cancel work when a limit is reached.
-- Replace Copilot's scheduler. Limits use Copilot's live subagent settings; per-model admission is
-  enforced separately by model-serving infrastructure when configured.
+Configuration is read from `~\.afterburner\config\subagent-policy.json`. If absent, the extension
+offers the built-in `luna-three` preset (Luna for `explore`, concurrency 3, depth 1).
 
-## User workflow
+## Compatibility and failure behavior
 
-Use Copilot's native `/subagents` screen as the canonical UI. Afterburner policies auto-apply and
-enforce validated session settings behind that native path. `/subagent-policy` is secondary:
-diagnostics, policy state, and compatibility fallback only. Afterburner does not patch Copilot's
-minified `/subagents` implementation.
+This is a version-anchored MOD for Copilot CLI `1.0.84-4`. Both native source anchors must occur
+exactly once. Startup fails closed if either anchor is absent or duplicated; the extension never
+guesses at a changed minified layout.
 
-| Key | Policy | Concurrency | Depth | Result exposure |
-|---|---|---:|---:|---|
-| `1` | Solo | 1 | 1 | Final only |
-| `2` | Conservative | 2 | 1 | Final only |
-| `3` | Balanced | 4 | 1 | Status and final |
-| `4` | Burst | 6 | 1 | Status and final |
-| `r` | Reload | - | - | Reload configuration |
-| `x` | Clear | - | - | Clear the session override |
-| `q` / Escape | Close | - | - | Close without changing policy |
-
-Applying a policy changes only the current live session. `defaultPolicy` selects the policy applied
-when the extension initializes in each new session. The extension never edits Copilot's global
-`/subagents` settings.
+The extension has only the `application-source-transform` capability. It has no session command,
+session extension, modal surface, or user-facing IPC channel.
 
 ## Configuration
 
-Path: `~\.afterburner\config\subagent-policy.json`
-
 ```json
 {
-  "version": 1,
-  "defaultPolicy": "balanced",
   "policies": {
-    "balanced": {
-      "displayName": "Balanced",
-      "description": "Four workers with shallow delegation.",
-      "maxConcurrency": 4,
+    "luna-three": {
+      "displayName": "Luna Three",
+      "description": "Route exploration through Luna with bounded parallelism",
+      "maxConcurrency": 3,
       "maxDepth": 1,
-      "resultExposure": "status-and-final",
-      "disabledSubagents": [],
-      "agentFactories": {
-        "maxConcurrentSubagents": 4,
-        "maxTotalSubagents": 12,
-        "timeoutSeconds": 1800,
-        "maxAiCredits": 24
-      },
+      "resultExposure": "summary",
       "agents": {
         "explore": {
-          "model": "doi/qwen38-blackfrost",
-          "modelPolicy": "required",
-          "effortLevel": "low",
-          "contextTier": "default"
-        },
-        "task": {
-          "model": "doi/qwen38-blackfrost",
-          "modelPolicy": "required",
-          "effortLevel": "low",
-          "contextTier": "default"
-        },
-        "general-purpose": {
-          "model": "doi/qwen38-blackfrost",
-          "modelPolicy": "required",
-          "effortLevel": "medium",
-          "contextTier": "default"
-        },
-        "research": {
-          "model": "doi/qwen38-flash-next-abliterated",
-          "modelPolicy": "required",
-          "effortLevel": "high",
-          "contextTier": "long_context"
+          "model": "colosseum-prod/gpt-5-6-luna",
+          "modelPolicy": "required"
         }
       }
     }
@@ -95,99 +47,5 @@ Path: `~\.afterburner\config\subagent-policy.json`
 }
 ```
 
-### Policy fields
-
-| Field | Type | Required | Contract |
-|---|---|---|---|
-| `displayName` | string | yes | Non-empty operator-facing name. |
-| `description` | string | yes | Non-empty explanation of intended use. |
-| `maxConcurrency` | integer | yes | `1..128`; excess work queues in Copilot. |
-| `maxDepth` | integer | yes | `1..128`; prevents uncontrolled nested delegation. |
-| `resultExposure` | enum | yes | `final-only`, `status-and-final`, or `detailed`. |
-| `disabledSubagents` | string array | no | Agent names Copilot may not dispatch. |
-| `agents` | object | no | Per-agent live settings keyed by Copilot agent type. |
-| `agentFactories` | object | no | Optional live factory limits: concurrent, total, timeout, and AI credits. |
-
-`agentFactories` is consumed only by policy-managed factory workflows. It does not change ordinary
-Copilot subagent dispatch and is not applied globally because the current Copilot SDK has no live
-global factory-settings mutation API.
-
-Each agent entry may define `model`, `modelPolicy` (`preferred` or `required`), `effortLevel`,
-`contextTier` (`inherit`, `default`, or `long_context`), and `autoInvoke`.
-
-`model` must be Copilot's canonical picker identity, including provider, for example
-`colosseum-prod/gpt-5-6-luna` rather than the display/capability alias `gpt-5.6-luna`. The modal
-reports configured and runtime-observed model identities separately; an applied policy is not proof
-that a subsequently spawned worker resolved to that model.
-
-Unknown fields, duplicate disabled-agent names, invalid ranges, invalid enums, and malformed agent
-entries are rejected. An invalid user configuration does not become a partial policy.
-
-## Built-in policies
-
-When no configuration exists, the extension provides:
-
-- **Solo:** disables built-in delegated workers and leaves only direct main-agent work.
-- **Conservative:** two concurrent workers, depth one, final results only.
-- **Balanced:** four concurrent workers, depth one, status and final results.
-- **Burst:** six concurrent workers, depth one, status and final results.
-
-Built-ins inherit the parent model unless the user configuration replaces them with explicit model
-routing. This avoids assuming a provider exists.
-
-## Runtime architecture
-
-1. The extension joins the current Copilot session and leaves native `/subagents` untouched.
-2. It loads and validates configuration atomically.
-3. Explicit model IDs are checked against `models.list()` or `models.getBuiltInCatalog()`.
-4. It registers `/subagent-policy` only as diagnostics/compatibility fallback.
-5. Applying a policy calls `session.tools.updateSubagentSettings` with:
-   - `maxConcurrency`
-   - `maxDepth`
-   - `disabledSubagents`
-   - per-agent model, model policy, effort, context, and auto-invocation settings
-5. Optional factory limits are exposed by Afterburner to policy-managed factory workflows. The
-   installed Copilot SDK does not expose a live global factory-settings mutation API.
-6. Clearing resets live subagent settings.
-7. A route-scoped IPC state file supplies the trusted native modal. It contains policy metadata and
-   status only.
-
-`resultExposure` controls extension observability:
-
-- `final-only`: no subagent progress is projected by this extension.
-- `status-and-final`: aggregate active/queued/completed state may be shown.
-- `detailed`: agent names, states, and timing may be shown.
-
-Copilot still receives the subagent's normal final result. The extension does not redact or mutate
-Copilot's internal parent-child result transport.
-
-## Failure behavior
-
-- Configuration errors are explicit in session logs and the modal.
-- Applying an invalid or unknown policy fails without changing the current policy.
-- SDK update failures leave the previous policy active and are reported.
-- An SDK response with `ok: false` or an error is treated as rejection, never as a successful apply.
-- Runtime diagnostics remain unverified until a real worker emits its resolved canonical model ID;
-  a mismatch is displayed explicitly.
-- Acceptance evidence uses `subagent.started`, `subagent.configured`, `subagent.completed`, and
-  `subagent.failed`. `configured.model` records the selected route,
-  `completed.configuredModelMatchesActual` proves it was honored, and overlapping lifecycle
-  intervals prove effective concurrency.
-- Closing the modal never clears or changes the policy.
-- Limits queue work; the extension does not turn capacity pressure into cancellation.
-
-## Testing
-
-Implementation is complete only when:
-
-1. Unit tests cover defaults, configuration validation, SDK projection, clearing, failed apply, and
-   session-local state.
-2. IPC tests cover route isolation, stale request recovery, and action acknowledgement.
-3. Existing Go and JavaScript suites pass.
-4. Release packaging includes the extension.
-5. Real ConPTY acceptance installs an isolated package, starts real Copilot, opens
-   `/subagent-policy`, applies multiple policies using actual keys, observes durable state changes,
-   closes and reopens the modal, and verifies a fresh session receives only `defaultPolicy`.
-6. Agentic acceptance launches real subagent work under the applied policy and verifies the
-   spawned worker's resolved canonical model through runtime session events. Merely accepting
-   `updateSubagentSettings` or observing a policy badge is insufficient.
+Model IDs are passed directly to Copilot's native subagent settings state. The native model picker
+continues to provide the authoritative model catalog and normal per-agent editing workflow.
