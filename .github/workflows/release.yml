@@ -57,6 +57,8 @@ jobs:
       - run: npm ci
       - name: Install current Copilot CLI
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $release = gh api repos/github/copilot-cli/releases/latest | ConvertFrom-Json
           $version = $release.tag_name.TrimStart('v')
