@@ -1,10 +1,10 @@
 {
   "$schema": "../../schemas/extension-v1.schema.json",
   "schemaVersion": 1,
-  "id": "subagent-policy-local",
+  "id": "subagent-policy",
   "displayName": "Subagent Policy",
   "description": "Adds policy presets and concurrency/depth controls to Copilot's native /subagents UI.",
-  "visibility": "private",
+  "visibility": "builtin",
   "requires": {
     "afterburner": ">=0.1.0 <1.0.0",
     "copilotCli": [">=1.0.84-4"]
@@ -13,5 +13,8 @@
     "entrypoint": "runtime/extension.mjs",
     "execution": "in-process"
   },
-  "capabilities": ["application-source-transform"]
+  "capabilities": ["application-source-transform"],
+  "sessionExtension": {
+    "entrypoint": "com.github.copilot/extensions/AfterburnerBuiltins/extension.mjs"
+  }
 }

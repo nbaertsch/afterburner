@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "afterburner-builtins",
+  "description": "Aggregated session component for installed Afterburner built-in extensions.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Afterburner"
+  },
+  "extensions": {
+    "com.github.copilot": {}
+  }
+}

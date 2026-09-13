@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadPolicyConfig, sdkSettings } from "../extensions/SubagentPolicy/policy.mjs";
+import {
+    catalogModelIDs,
+    loadPolicyConfig,
+    sdkSettings,
+    validatePolicyModelAvailability
+} from "../extensions/SubagentPolicy/policy.mjs";
 
 test("loads documented built-in policies", () => {
     const config = loadPolicyConfig();
@@ -49,7 +54,8 @@ test("validates and projects per-agent settings", () => {
         },
         disabledSubagents: ["research"],
         maxConcurrency: 4,
-        maxDepth: 1
+        maxDepth: 1,
+        resultExposure: "status-and-final"
     });
     assert.deepEqual(config.policies.workers.agentFactories, {
         maxConcurrentSubagents: 4,
@@ -83,7 +89,7 @@ test("rejects duplicate disabled agents and unknown fields", () => {
     assert.throws(() => loadPolicyConfig({ policies: { custom: { ...base, mystery: true } } }), /not supported/);
 });
 
-test("requires canonical provider/model identities", () => {
+test("accepts native and provider-qualified model identities", () => {
     const policy = {
         displayName: "Custom",
         description: "Custom",
@@ -92,10 +98,45 @@ test("requires canonical provider/model identities", () => {
         resultExposure: "final-only",
         agents: { explore: { model: "gpt-5.6-luna", modelPolicy: "required" } }
     };
-    assert.throws(() => loadPolicyConfig({ policies: { custom: policy } }), /canonical provider\/model/);
-    const valid = loadPolicyConfig({ policies: { custom: {
+    const native = loadPolicyConfig({ policies: { custom: policy } });
+    assert.equal(native.policies.custom.agents.explore.model, "gpt-5.6-luna");
+    const providerQualified = loadPolicyConfig({ policies: { custom: {
         ...policy,
-        agents: { explore: { model: "colosseum-prod/gpt-5-6-luna", modelPolicy: "required" } }
+        agents: { explore: { model: "doi/qwen38-turbo-fable", modelPolicy: "required" } }
     } } });
-    assert.equal(valid.policies.custom.agents.explore.model, "colosseum-prod/gpt-5-6-luna");
+    assert.equal(providerQualified.policies.custom.agents.explore.model, "doi/qwen38-turbo-fable");
+    assert.throws(() => loadPolicyConfig({ policies: { custom: {
+        ...policy,
+        agents: { explore: { model: "bad model", modelPolicy: "required" } }
+    } } }), /Copilot model identity/);
+});
+
+test("derives authoritative catalog IDs and fails closed for unavailable models", () => {
+    const models = [
+        { id: "gpt-5.6-sol" },
+        { id: "doi/qwen38-turbo-fable", selectionId: "doi/qwen38-turbo-fable" },
+        { provider: "provider", providerModelId: "model" }
+    ];
+    assert.deepEqual([...catalogModelIDs(models)].sort(), [
+        "doi/qwen38-turbo-fable",
+        "gpt-5.6-sol",
+        "provider/model"
+    ]);
+    const available = {
+        agents: {
+            explore: { model: "gpt-5.6-sol" },
+            task: { model: "doi/qwen38-turbo-fable" }
+        }
+    };
+    assert.deepEqual(validatePolicyModelAvailability(available, models), [
+        "gpt-5.6-sol",
+        "doi/qwen38-turbo-fable"
+    ]);
+    assert.throws(
+        () => validatePolicyModelAvailability({
+            agents: { explore: { model: "colosseum-prod/gpt-5-6-luna" } }
+        }, models),
+        /unavailable Copilot model ID.*colosseum-prod\/gpt-5-6-luna/
+    );
+    assert.throws(() => validatePolicyModelAvailability(available, null), /catalog is unavailable/);
 });

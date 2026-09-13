@@ -205,6 +205,7 @@ jobs:
             artifacts/black-box.zip
             artifacts/byo-models.zip
             artifacts/openai-server.zip
+            artifacts/subagent-policy.zip
             artifacts/checksums.txt
             artifacts/release-manifest.json
           if-no-files-found: error
@@ -298,6 +299,7 @@ jobs:
             artifacts/black-box.zip `
             artifacts/byo-models.zip `
             artifacts/openai-server.zip `
+            artifacts/subagent-policy.zip `
             artifacts/checksums.txt `
             artifacts/release-manifest.json `
             artifacts/release-manifest.sig `

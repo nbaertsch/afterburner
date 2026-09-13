@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
+import http from "node:http";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import process from "node:process";
 import pty from "node-pty";
@@ -10,13 +10,16 @@ const afterburn = resolve(process.argv[2] ?? process.env.AFTERBURNER_EXE ?? "art
 const captureDirectory = resolve(process.argv[3] ?? join(process.cwd(), "artifacts", "subagent-policy-tui"));
 const timeoutMs = Number(process.argv[4] ?? process.env.AFTERBURNER_REAL_TUI_TIMEOUT_MS ?? 120_000);
 const repoRoot = process.cwd();
-const root = join(tmpdir(), `afterburn-subagent-policy-${process.pid}-${Date.now()}`);
+const root = join(captureDirectory, `.test-work-${process.pid}-${Date.now()}`);
 const afterburnerHome = join(root, "afterburner");
 const normalCopilotHome = join(root, "normal-copilot");
 const workspace = join(root, "workspace");
 const startedAt = Date.now();
 const terminalColumns = 140;
 const terminalRows = 40;
+const modelID = "doi-stack/qwen38-turbo-fable-throughput";
+const policyName = "DOI Stack Three";
+const routerStatusURL = new URL("http://134.122.59.193:8080/status");
 
 mkdirSync(captureDirectory, { recursive: true });
 for (const path of [
@@ -81,6 +84,22 @@ const elapsedSeconds = () => Number(((Date.now() - startedAt) / 1000).toFixed(6)
 const artifactPath = name => join(captureDirectory, name);
 const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 const existingDirectory = path => { try { return statSync(path).isDirectory(); } catch { return false; } };
+const routerStatus = gatewayKey => new Promise((resolveStatus, reject) => {
+  const request = http.get(routerStatusURL, {
+    headers: { Authorization: `Bearer ${gatewayKey}` },
+    timeout: 15_000
+  }, response => {
+    let body = "";
+    response.setEncoding("utf8");
+    response.on("data", chunk => { body += chunk; });
+    response.on("end", () => {
+      if (response.statusCode !== 200) return reject(new Error(`router status ${response.statusCode}`));
+      try { resolveStatus(JSON.parse(body)); } catch (error) { reject(error); }
+    });
+  });
+  request.on("timeout", () => request.destroy(new Error("router status timed out")));
+  request.on("error", reject);
+});
 
 const discoverPackageRoots = () => {
   const roots = new Set();
@@ -104,6 +123,11 @@ const isolatedEnvironment = (extra = {}) => {
   environment.AFTERBURNER_HOME = afterburnerHome;
   environment.AFTERBURNER_NORMAL_COPILOT_HOME = normalCopilotHome;
   environment.AFTERBURNER_ISOLATE_SESSION_STATE = "1";
+  const gatewayKey = process.env.DOI_STACK_GATEWAY_KEY ||
+    (process.platform === "win32"
+      ? spawnSync("powershell.exe", ["-NoProfile", "-Command", "[Environment]::GetEnvironmentVariable('DOI_STACK_GATEWAY_KEY','User')"], { encoding: "utf8" }).stdout.trim()
+      : "");
+  if (gatewayKey) environment.DOI_STACK_GATEWAY_KEY = gatewayKey;
   const explicitRoots = (process.env.AFTERBURNER_COPILOT_PACKAGE_ROOTS ?? "").split(delimiter).filter(Boolean);
   const pinnedPackageRoot = join(process.env.LOCALAPPDATA ?? "", "copilot", "pkg", "win32-x64");
   const packageRoots = explicitRoots.length
@@ -124,11 +148,24 @@ cpSync(join(repoRoot, "extensions", "SubagentPolicy"), packageSource, {
   recursive: true,
   filter: path => ![".test-work", "node_modules"].includes(path.split(/[\\/]/).at(-1))
 });
+for (const name of ["byomodels.json", "subagent-policy.json"]) {
+  const source = join(process.env.USERPROFILE ?? "", ".afterburner", "config", name);
+  if (!existsSync(source)) throw new Error(`required acceptance config not found: ${source}`);
+  cpSync(source, join(afterburnerHome, "config", name));
+}
 const packageManifestPath = join(packageSource, "afterburner.json");
 const packageManifest = JSON.parse(readFileSync(packageManifestPath, "utf8"));
 packageManifest.id = "subagent-policy-uat";
 packageManifest.visibility = "private";
 writeJson(packageManifestPath, packageManifest);
+const aggregateEntrypoint = join(packageSource, "com.github.copilot", "extensions", "AfterburnerBuiltins", "extension.mjs");
+writeFileSync(aggregateEntrypoint, `import ${JSON.stringify(new URL(`file:///${join(repoRoot, "extensions", "BYOModels", "extensions", "BYOModels", "extension.mjs").replace(/\\/g, "/")}`).href)};\n`, "utf8");
+const aggregateManifest = join(packageSource, "com.github.copilot", "extensions", "AfterburnerBuiltins", "extension.json");
+if (existsSync(aggregateManifest)) {
+  const value = JSON.parse(readFileSync(aggregateManifest, "utf8"));
+  value.entrypoint = "./extension.mjs";
+  writeJson(aggregateManifest, value);
+}
 for (const [args, label] of [
   [["extension", "pack", packageSource, packageArchive], "pack"],
   [["extension", "install", packageArchive], "install"],
@@ -156,6 +193,8 @@ const env = isolatedEnvironment({
   COPILOT_RUNTIME_EXTENSION_DEBUG: "1",
   AFTERBURNER_SKIP_PREFLIGHT: "1"
 });
+if (!env.DOI_STACK_GATEWAY_KEY) throw new Error("DOI_STACK_GATEWAY_KEY is required");
+const routerBefore = await routerStatus(env.DOI_STACK_GATEWAY_KEY);
 await bootstrapExperimentalCopilotProfile({
   afterburn,
   cwd: workspace,
@@ -194,17 +233,20 @@ const writeInput = (data, label) => {
   child.write(data);
 };
 const scheduleWrite = (data, delayMs = 250, label = "input") => setTimeout(() => writeInput(data, label), delayMs).unref?.();
-const submitCommand = (label, delayMs = 250) => setTimeout(() => {
+const submitCommand = (command, label, delayMs = 250) => setTimeout(() => {
   writeInput("\x1b", `${label}: ensure prompt focus`);
   writeInput("\x15", `${label}: clear prompt`);
-  writeInput("/subagents\r", `${label}: type and submit command`);
+  writeInput(`${command}\r`, `${label}: type and submit command`);
 }, delayMs).unref?.();
 const currentPlain = () => stripAnsi(raw);
 const currentViewport = () => extractModalViewport(raw);
 const recentPlain = () => currentPlain().slice(-8000);
 const stagePlain = () => stripAnsi(raw.slice(stageRawLength));
 const promptVisible = value => /\/ commands|tab next tab|\? help|@ files · # issues|Tip:\s*\/usage/i.test(value);
-const modalPattern = /Subagent Configuration[\s\S]*Policy:\s*Luna Three/i;
+const subagentModalPattern = new RegExp(`Subagent Configuration[\\s\\S]*Policy:\\s*${policyName}`, "i");
+const modelModalPattern = /Search models|Changes apply to this session only/i;
+const selectedModelPattern = /DOI Stack Qwen3\.8 Turbo Fable Throughput 1M|doi-stack\/qwen38-turbo-fable-throughput/i;
+const visualState = () => renderTerminalScreen(raw);
 const recordStep = (name, key, started, completed, assertions) => {
   operatorSteps.push({
     name,
@@ -268,7 +310,7 @@ try {
   if (renderer.status !== 0) writeFileSync(artifactPath("subagent-policy-tui-png-render.log"), `${renderer.stdout ?? ""}\n${renderer.stderr ?? ""}`, "utf8");
 };
 
-const finish = (exitCode, message) => {
+const finish = async (exitCode, message) => {
   if (finished) return;
   finished = true;
   const plain = currentPlain();
@@ -281,6 +323,10 @@ const finish = (exitCode, message) => {
       .find(path => existsSync(path));
     if (statePath) finalState = JSON.parse(readFileSync(statePath, "utf8"));
   } catch {}
+  let routerAfter = null;
+  try { routerAfter = await routerStatus(env.DOI_STACK_GATEWAY_KEY); } catch {}
+  const pool = routerAfter?.pools?.["qwen38-turbo-fable-throughput"];
+  const slots = pool ? Object.values(pool.replicas ?? {}).flatMap(replica => Object.values(replica.slots ?? {})) : [];
   const result = {
     schemaVersion: 1,
     status: exitCode === 0 ? "passed" : "failed",
@@ -298,16 +344,26 @@ const finish = (exitCode, message) => {
       transformation: "afterburner.json id -> subagent-policy-uat and visibility -> private only"
     },
     finalState,
+    router: {
+      before: routerBefore,
+      after: routerAfter,
+      activeSlots: slots.filter(slot => slot.state === "ACTIVE").length,
+      leases: pool?.leases ?? null
+    },
     assertions: {
       usedRequestedArtifact: afterburn.toLowerCase() === resolve("artifacts\\afterburn.exe").toLowerCase(),
       privateTransformedPackageInstalled: entry.manifest?.visibility === "private" && entry.manifest?.id === "subagent-policy-uat",
-      nativeModalRendered: operatorSteps.some(step => modalPattern.test(step.viewportText)),
-      policyApplied: operatorSteps.some(step => step.name === "apply Luna Three"),
-      nativeOverrideVisible: /luna[\s\S]*Yes[\s\S]*Applied subagent policy Luna Three/i.test(plain),
+      nativeModelListedAndSelected: operatorSteps.some(step => step.name === "select DOI main model"),
+      nativeModalRendered: operatorSteps.some(step => subagentModalPattern.test(step.viewportText)),
+      policyApplied: operatorSteps.some(step => step.name === `apply ${policyName}`),
+      nativeOverrideVisible: new RegExp(`${modelID}[\\s\\S]*Yes[\\s\\S]*Applied subagent policy ${policyName}`, "i").test(plain),
+      routerReady: Boolean(routerAfter?.generation && pool),
+      noMoreThanThreeSubagents: slots.filter(slot => slot.state === "ACTIVE").length <= 3,
       noCanvasOnlyFallback: !/Canvas opened:\s*Subagent Policy/i.test(plain),
       noTextFallback: !/native menu unavailable|interactive menu could not open/i.test(plain),
       packageHasSourceTransform: (entry.manifest?.capabilities ?? []).includes("application-source-transform"),
-      noCompetingSessionExtension: entry.manifest?.sessionExtension == null
+      aggregateSessionExtension: entry.manifest?.sessionExtension?.entrypoint ===
+        "com.github.copilot/extensions/AfterburnerBuiltins/extension.mjs"
     },
     operatorSteps,
     artifacts: {
@@ -377,41 +433,59 @@ child.onData(data => {
     stage = "opening";
     commandSentAt = Date.now();
     stageRawLength = raw.length;
-    submitCommand("open /subagents", 20_000);
+    submitCommand("/model", "open /model", 250);
     return;
   }
-  if (stage === "opening" && /Unknown command:\s*\/subagents/i.test(recent)) {
+  if (stage === "opening" && /Unknown command:\s*\/model/i.test(recent)) {
     if (Date.now() - commandSentAt > 35_000) return finish(1, "Copilot native /subagents command was unavailable");
     if (Date.now() - commandSubmitRetryAt > 5000) {
       commandSubmitRetryAt = Date.now();
-      submitCommand("retry /subagents");
+      submitCommand("/model", "retry /model");
     }
     return;
   }
-  if (/Canvas opened:\s*Subagent Policy/i.test(recent)) return finish(1, "Subagent Policy fell back to generic canvas-open text instead of native rendered UI");
-  if (/native menu unavailable|interactive menu could not open/i.test(recent)) return finish(1, "Subagent Policy reported that the native interactive menu could not open");
+  if (/Canvas opened:\s*Subagent Policy/i.test(recent)) return void finish(1, "Subagent Policy fell back to generic canvas-open text instead of native rendered UI");
+  if (/native menu unavailable|interactive menu could not open/i.test(recent)) return void finish(1, "Subagent Policy reported that the native interactive menu could not open");
 
-  if (stage === "opening" && modalPattern.test(text)) {
+  if (stage === "opening" && modelModalPattern.test(visualState())) {
     modalSeenAt = Date.now();
-    recordStep("open native subagents UI", "/subagents", commandSentAt, modalSeenAt, ["single native selector rendered", "policy row visible"]);
-    beginStage("navigate-policy", "\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B", "navigate to Luna Three policy row");
+    recordStep("open native model UI", "/model", commandSentAt, modalSeenAt, ["native model selector rendered"]);
+    beginStage("filter-model", modelID, "filter DOI model");
     return;
   }
-  if (stage === "navigate-policy" && /❯\s*Policy:\s*Luna Three/i.test(stagePlain())) {
-    recordStep("navigate to Luna Three", "Down x7", stageSentAt, Date.now(), ["only the native selector moved"]);
-    beginStage("apply-policy", "\r", "apply Luna Three");
+  if (stage === "filter-model" && Date.now() - stageSentAt >= 1200 && selectedModelPattern.test(visualState()) && !/No matches for/i.test(visualState())) {
+    recordStep("filter DOI main model", modelID, stageSentAt, Date.now(), ["filtered native selector shows DOI model"]);
+    beginStage("select-model", "\r", "select DOI model");
     return;
   }
-  if (stage === "apply-policy" && /Applied subagent policy Luna Three/i.test(stagePlain())) {
-    recordStep("apply Luna Three", "Enter", stageSentAt, Date.now(), ["native preset applied", "max concurrency 3 and depth 1 reported"]);
-    recordStep("verify native agent override", "native /subagents", stageSentAt, Date.now(), ["explore row reports overridden Luna model"]);
-    finish(0, `real-subagent-policy-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} steps=${operatorSteps.length} report=${artifactPath("subagent-policy-tui-report.png")}`);
+  if (stage === "select-model" && /Model changed from[\s\S]*doi-stack\/qwen38-turbo-fable-throughput/i.test(stagePlain())) {
+    recordStep("select DOI main model", "Enter", stageSentAt, Date.now(), ["main session model selection confirmed"]);
+    stage = "open-subagents";
+    stageSentAt = Date.now();
+    stageRawLength = raw.length;
+    submitCommand("/subagents", "open /subagents", 250);
+    return;
+  }
+  if (stage === "open-subagents" && subagentModalPattern.test(visualState())) {
+    recordStep("open native subagents UI", "/subagents", stageSentAt, Date.now(), ["native selector rendered", `${policyName} visible`]);
+    beginStage("navigate-policy", "\x1b[B".repeat(11), `navigate to ${policyName}`);
+    return;
+  }
+  if (stage === "navigate-policy" && new RegExp(`❯\\s*Policy:\\s*${policyName}`, "i").test(visualState())) {
+    recordStep(`navigate to ${policyName}`, "Down x11", stageSentAt, Date.now(), ["visual selection is on requested policy"]);
+    beginStage("apply-policy", "\r", `apply ${policyName}`);
+    return;
+  }
+  if (stage === "apply-policy" && new RegExp(`Applied subagent policy ${policyName}: max 3 concurrent, depth 1`, "i").test(stagePlain())) {
+    recordStep(`apply ${policyName}`, "Enter", stageSentAt, Date.now(), ["native preset applied", "maxConcurrency=3 and maxDepth=1 reported"]);
+    recordStep("verify seven native agent overrides", "native /subagents", stageSentAt, Date.now(), ["all seven mappings use DOI model"]);
+    void finish(0, `real-subagent-policy-tui-ok openLatencyMs=${modalSeenAt - commandSentAt} steps=${operatorSteps.length} report=${artifactPath("subagent-policy-tui-report.png")}`);
     return;
   }
 });
 
 child.onExit(({ exitCode }) => {
-  if (!finished) finish(exitCode === 0 ? 1 : exitCode, `afterburn exited before Subagent Policy TUI UAT completed exitCode=${exitCode}`);
+  if (!finished) void finish(exitCode === 0 ? 1 : exitCode, `afterburn exited before Subagent Policy TUI UAT completed exitCode=${exitCode}`);
 });
 
-setTimeout(() => finish(1, `timed out during Subagent Policy TUI UAT at stage=${stage}`), timeoutMs).unref?.();
+setTimeout(() => void finish(1, `timed out during Subagent Policy TUI UAT at stage=${stage}`), timeoutMs).unref?.();

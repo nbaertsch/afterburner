@@ -185,7 +185,8 @@ Adds policy presets and concurrency/depth constraints to Copilot's native subage
 - **Status:** Enabled by default upon `afterburn install`.
 - **Control plane:** Use `/subagents`; it is the only user-facing policy UI.
 - **Config:** Optional policy catalog at `~\.afterburner\config\subagent-policy.json`.
-- **Safety:** Policies never reduce or replace a model's configured context window.
+- **Safety:** Explicit models must exist in the live native/BYOModels catalog; unavailable models are
+  rejected before settings change and never silently fall back.
 - **Compatibility:** The MOD is fail-closed and source-anchored to Copilot CLI `1.0.84-4`.
 - **Documentation:** [**Subagent Policy Guide**](extensions/SubagentPolicy/README.md)
 

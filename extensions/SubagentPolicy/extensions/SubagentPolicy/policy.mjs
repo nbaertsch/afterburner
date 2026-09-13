@@ -66,8 +66,8 @@ function validateAgent(name, value) {
     const result = {};
     if (value.model !== undefined) {
         result.model = nonEmpty(value.model, `agents.${name}.model`);
-        if (!/^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/i.test(result.model)) {
-            throw new Error(`agents.${name}.model must use Copilot's canonical provider/model identity`);
+        if (!/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?$/i.test(result.model)) {
+            throw new Error(`agents.${name}.model must use a Copilot model identity`);
         }
     }
     if (value.modelPolicy !== undefined) {
@@ -142,6 +142,37 @@ export function sdkSettings(policy) {
         agents: structuredClone(policy.agents),
         disabledSubagents: [...policy.disabledSubagents],
         maxConcurrency: policy.maxConcurrency,
-        maxDepth: policy.maxDepth
+        maxDepth: policy.maxDepth,
+        resultExposure: policy.resultExposure
     };
+}
+
+export function catalogModelIDs(models) {
+    if (!Array.isArray(models)) throw new Error("Copilot model catalog is unavailable");
+    const ids = new Set();
+    for (const model of models) {
+        if (typeof model?.id === "string" && model.id) ids.add(model.id);
+        if (typeof model?.selectionId === "string" && model.selectionId) ids.add(model.selectionId);
+        const provider = model?.provider ?? model?.providerId;
+        const id = model?.providerModelId ?? model?.modelId;
+        if (typeof provider === "string" && provider && typeof id === "string" && id) {
+            ids.add(`${provider}/${id}`);
+        }
+    }
+    return ids;
+}
+
+export function validatePolicyModelAvailability(policy, models) {
+    const available = catalogModelIDs(models);
+    const configured = [...new Set(
+        Object.values(policy?.agents ?? {})
+            .map(agent => agent?.model)
+            .filter(model => typeof model === "string" &&
+                !["default", "inherit", "complementary"].includes(model))
+    )];
+    const missing = configured.filter(model => !available.has(model));
+    if (missing.length > 0) {
+        throw new Error(`unavailable Copilot model ID(s): ${missing.join(", ")}`);
+    }
+    return configured;
 }

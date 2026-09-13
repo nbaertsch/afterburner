@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	openAIServerPlugin       = "afterburner-openai-server"
-	legacyOpenAIServerPlugin = "afterburner-copilot-openai"
+	openAIServerPlugin        = "afterburner-openai-server"
+	legacyOpenAIServerPlugin  = "afterburner-copilot-openai"
+	afterburnerBuiltinsPlugin = "afterburner-builtins"
+	byoModelsPlugin           = "afterburner-byomodels"
 )
 
 func Reconcile(layout home.Layout, value registry.Registry) error {
@@ -77,6 +79,10 @@ func Reconcile(layout home.Layout, value registry.Registry) error {
 		if pluginManifest.Name == "" || pluginManifest.Version == "" {
 			return fmt.Errorf("session manifest for %q is missing name or version", id)
 		}
+		if pluginManifest.Name == byoModelsPlugin && hasEnabledSessionPlugin(value, afterburnerBuiltinsPlugin) {
+			desiredNames[pluginManifest.Name] = true
+			continue
+		}
 		desiredNames[pluginManifest.Name] = true
 		installedAt := time.Now().UTC().Format(time.RFC3339Nano)
 		if previous := existingByNameAndPath[pluginManifest.Name+"\x00"+entry.ActivePath]; previous != nil {
@@ -127,6 +133,25 @@ func Reconcile(layout home.Layout, value registry.Registry) error {
 	}
 	migrateOpenAIServerPluginState(config, desiredNames)
 	return saveConfig(configPath, prefix, config)
+}
+
+func hasEnabledSessionPlugin(value registry.Registry, pluginName string) bool {
+	for _, entry := range value.Extensions {
+		if !entry.Enabled || !entry.Verified || entry.Manifest.SessionExtension == nil {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(entry.ActivePath, "plugin.json"))
+		if err != nil {
+			continue
+		}
+		var manifest struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(data, &manifest) == nil && manifest.Name == pluginName {
+			return true
+		}
+	}
+	return false
 }
 
 func migrateOpenAIServerPluginState(config map[string]any, desiredNames map[string]bool) {

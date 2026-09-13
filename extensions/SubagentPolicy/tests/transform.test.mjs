@@ -11,7 +11,8 @@ const appPath = process.env.COPILOT_1084_APP_JS ??
     "C:\\Users\\nimbl\\AppData\\Local\\copilot\\pkg\\win32-x64\\1.0.84-4\\app.js";
 const config = { policies: { "luna-three": {
     displayName: "Luna Three", description: "Luna routing", maxConcurrency: 3, maxDepth: 1,
-    resultExposure: "summary", agents: { explore: { model: "luna" } }
+    resultExposure: "status-and-final", disabledSubagents: [],
+    agents: { explore: { model: "gpt-5.6-luna", modelPolicy: "required" } }
 } } };
 
 test("patches exact Copilot 1.0.84-4 native /subagents anchors", () => {
@@ -19,7 +20,10 @@ test("patches exact Copilot 1.0.84-4 native /subagents anchors", () => {
     assert.match(transformed, /Policy: \$\{U\.label\}/);
     assert.match(transformed, /afterburn-policy/);
     assert.match(transformed, /"maxConcurrency":3/);
-    assert.match(transformed, /"explore":\{"model":"luna"\}/);
+    assert.match(transformed, /"explore":\{"model":"gpt-5\.6-luna","modelPolicy":"required"\}/);
+    assert.match(transformed, /unavailable Copilot model ID/);
+    assert.match(transformed, /updateSubagentSettings\(\{subagents:J\.subagents\}\)/);
+    assert.doesNotMatch(transformed, /updateSubagentSettings\(\{settings:J\.subagents\}\)/);
     assert.match(transformed, /Configure default and per-agent subagent models/);
 });
 
