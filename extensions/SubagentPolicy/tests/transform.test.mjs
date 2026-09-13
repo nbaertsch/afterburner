@@ -16,7 +16,8 @@ const config = { policies: { "luna-three": {
 
 test("patches exact Copilot 1.0.84-4 native /subagents anchors", () => {
     const transformed = installNativeSubagentPolicy(readFileSync(appPath, "utf8"), config);
-    assert.match(transformed, /Policy presets/);
+    assert.match(transformed, /Policy: \$\{U\.label\}/);
+    assert.match(transformed, /afterburn-policy/);
     assert.match(transformed, /"maxConcurrency":3/);
     assert.match(transformed, /"explore":\{"model":"luna"\}/);
     assert.match(transformed, /Configure default and per-agent subagent models/);

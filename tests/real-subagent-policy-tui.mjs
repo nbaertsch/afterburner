@@ -204,7 +204,7 @@ const currentViewport = () => extractModalViewport(raw);
 const recentPlain = () => currentPlain().slice(-8000);
 const stagePlain = () => stripAnsi(raw.slice(stageRawLength));
 const promptVisible = value => /\/ commands|tab next tab|\? help|@ files · # issues|Tip:\s*\/usage/i.test(value);
-const modalPattern = /Subagent Configuration[\s\S]*Policy presets[\s\S]*Luna Three/i;
+const modalPattern = /Subagent Configuration[\s\S]*Policy:\s*Luna Three/i;
 const recordStep = (name, key, started, completed, assertions) => {
   operatorSteps.push({
     name,
@@ -303,7 +303,7 @@ const finish = (exitCode, message) => {
       privateTransformedPackageInstalled: entry.manifest?.visibility === "private" && entry.manifest?.id === "subagent-policy-uat",
       nativeModalRendered: operatorSteps.some(step => modalPattern.test(step.viewportText)),
       policyApplied: operatorSteps.some(step => step.name === "apply Luna Three"),
-      nativeOverrideVisible: /Applied subagent policy Luna Three[\s\S]*luna/i.test(plain),
+      nativeOverrideVisible: /luna[\s\S]*Yes[\s\S]*Applied subagent policy Luna Three/i.test(plain),
       noCanvasOnlyFallback: !/Canvas opened:\s*Subagent Policy/i.test(plain),
       noTextFallback: !/native menu unavailable|interactive menu could not open/i.test(plain),
       packageHasSourceTransform: (entry.manifest?.capabilities ?? []).includes("application-source-transform"),
@@ -393,7 +393,12 @@ child.onData(data => {
 
   if (stage === "opening" && modalPattern.test(text)) {
     modalSeenAt = Date.now();
-    recordStep("open native subagents UI", "/subagents", commandSentAt, modalSeenAt, ["native subagent UI rendered", "policy presets visible"]);
+    recordStep("open native subagents UI", "/subagents", commandSentAt, modalSeenAt, ["single native selector rendered", "policy row visible"]);
+    beginStage("navigate-policy", "\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B", "navigate to Luna Three policy row");
+    return;
+  }
+  if (stage === "navigate-policy" && /❯\s*Policy:\s*Luna Three/i.test(stagePlain())) {
+    recordStep("navigate to Luna Three", "Down x7", stageSentAt, Date.now(), ["only the native selector moved"]);
     beginStage("apply-policy", "\r", "apply Luna Three");
     return;
   }
