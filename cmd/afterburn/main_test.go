@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -104,14 +103,7 @@ func TestNativeProxyStartsBeforeCopilot(t *testing.T) {
 		response.WriteHeader(http.StatusOK)
 	}))
 	defer upstream.Close()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	port := 0
 
 	root := t.TempDir()
 	afterburnerHome := filepath.Join(root, "afterburner")
@@ -119,9 +111,22 @@ func TestNativeProxyStartsBeforeCopilot(t *testing.T) {
 	if err := os.MkdirAll(activePath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	manifest := regpkg.Manifest{SchemaVersion: 1, ID: "byo-models", Name: "BYOModels", DisplayName: "BYOModels", Visibility: "builtin"}
+	manifest := regpkg.Manifest{
+		SchemaVersion:    1,
+		ID:               "byo-models",
+		Name:             "BYOModels",
+		DisplayName:      "BYOModels",
+		Visibility:       "builtin",
+		SessionExtension: &regpkg.SessionExtension{Entrypoint: "extension.mjs"},
+	}
 	manifestData, _ := json.Marshal(manifest)
 	if err := os.WriteFile(filepath.Join(activePath, "afterburner.json"), manifestData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(activePath, "plugin.json"), []byte(`{"name":"afterburner-byomodels","version":"0.1.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(activePath, "extension.mjs"), []byte("export default {};"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	manifestHash, treeHash, err := regpkg.VerifyActivePackage(regpkg.Entry{ActivePath: activePath})
@@ -179,7 +184,6 @@ func TestNativeProxyStartsBeforeCopilot(t *testing.T) {
 		"AFTERBURNER_ALLOW_UNPROFILED=1",
 		"AFTERBURNER_SKIP_PREFLIGHT=1",
 		"AFTERBURNER_BYOMODELS_CONFIG="+configPath,
-		"AFTERBURNER_TEST_PROXY_URL="+fmt.Sprintf("http://127.0.0.1:%d", port),
 		"AFTERBURNER_TEST_CAPTURE="+capturePath,
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {

@@ -147,8 +147,28 @@ func main() {
 			"AFTERBURNER_BYOMODELS_PROXIES":        os.Getenv("AFTERBURNER_BYOMODELS_PROXIES"),
 		},
 	}
-	if proxyURL := os.Getenv("AFTERBURNER_TEST_PROXY_URL"); proxyURL != "" {
-		response, err := http.Get(proxyURL + "/__afterburner/byomodels/health")
+	proxyURL := os.Getenv("AFTERBURNER_TEST_PROXY_URL")
+	proxyCapability := ""
+	if proxyURL == "" {
+		var endpoints []struct {
+			BaseURL    string `json:"baseUrl"`
+			Capability string `json:"capability"`
+		}
+		if json.Unmarshal([]byte(os.Getenv("AFTERBURNER_BYOMODELS_PROXIES")), &endpoints) == nil && len(endpoints) > 0 {
+			proxyURL = endpoints[0].BaseURL
+			proxyCapability = endpoints[0].Capability
+		}
+	}
+	if proxyURL != "" {
+		request, err := http.NewRequest(http.MethodGet, proxyURL+"/__afterburner/byomodels/health", nil)
+		if err == nil && proxyCapability != "" {
+			request.Header.Set("x-afterburner-proxy-capability", proxyCapability)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(41)
+		}
+		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(41)

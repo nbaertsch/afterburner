@@ -62,6 +62,34 @@ func TestRequiredEnvironmentVariablesRejectsMissingName(t *testing.T) {
 	}
 }
 
+func TestStartAcceptsEphemeralProxyPort(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	path := filepath.Join(t.TempDir(), "byomodels.json")
+	value := fmt.Sprintf(`{
+  "version": 1,
+  "providers": [{
+    "name": "ephemeral",
+    "baseUrl": %q,
+    "requestCompatibility": { "maxInputItemIdLength": 64, "proxyPort": 0 }
+  }]
+}`, upstream.URL)
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := Start(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if endpoints := manager.Endpoints(); len(endpoints) != 1 || endpoints[0].BaseURL == "" {
+		t.Fatalf("ephemeral proxy endpoint = %#v", endpoints)
+	}
+}
+
 func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 	var receivedID string
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -137,7 +165,7 @@ func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 
 func TestProxyReportsUpstreamTimeout(t *testing.T) {
 	previousTimeout := upstreamIdleTimeout
-	upstreamIdleTimeout = 30 * time.Millisecond
+	upstreamIdleTimeout = 200 * time.Millisecond
 	t.Cleanup(func() {
 		upstreamIdleTimeout = previousTimeout
 	})
@@ -175,7 +203,7 @@ func TestProxyReportsUpstreamTimeout(t *testing.T) {
 	if response.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, body = %s", response.StatusCode, body)
 	}
-	if !strings.Contains(string(body), "upstream made no progress for 30ms") {
+	if !strings.Contains(string(body), fmt.Sprintf("upstream made no progress for %s", upstreamIdleTimeout)) {
 		t.Fatalf("timeout was not visible: %s", body)
 	}
 }
@@ -194,7 +222,7 @@ func TestProxyResetsIdleTimeoutWhenUpstreamMakesProgress(t *testing.T) {
 		for range 5 {
 			_, _ = response.Write([]byte(": ping\n\n"))
 			flusher.Flush()
-			time.Sleep(15 * time.Millisecond)
+			time.Sleep(25 * time.Millisecond)
 		}
 		_, _ = response.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n"))
 	}))

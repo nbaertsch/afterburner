@@ -220,14 +220,14 @@ func Start(configPath string) (*Manager, error) {
 			return nil, err
 		}
 		compatibility := configured.RequestCompatibility
-		if (compatibility.MaxInputItemIDLength < 16 && !compatibility.ForceStreaming) ||
-			compatibility.ProxyPort == 0 || !canNativeOwn(configured) {
+		if compatibility.MaxInputItemIDLength < 16 && !compatibility.ForceStreaming &&
+			!compatibility.LegacyTools && !compatibility.BufferResponses || !canNativeOwn(configured) {
 			continue
 		}
-		if compatibility.ProxyPort < 1024 || compatibility.ProxyPort > 65535 {
+		if compatibility.ProxyPort < 0 || compatibility.ProxyPort > 65535 {
 			manager.Close()
 			return nil, fmt.Errorf(
-				"provider %q must define requestCompatibility.proxyPort between 1024 and 65535",
+				"provider %q must define requestCompatibility.proxyPort between 0 and 65535",
 				configured.Name,
 			)
 		}
