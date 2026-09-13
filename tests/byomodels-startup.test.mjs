@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { activateModelRegistration } from "../extensions/BYOModels/extensions/BYOModels/activation.mjs";
 import {
@@ -33,6 +34,20 @@ const runtime = [{
     supportedReasoningEfforts: ["low", "high"],
     defaultReasoningEffort: "high"
 }];
+
+test("standalone and aggregate BYOModels accept ephemeral proxy ports", async () => {
+    const standalone = await readFile(
+        new URL("../extensions/BYOModels/extensions/BYOModels/extension.mjs", import.meta.url),
+        "utf8"
+    );
+    const aggregate = await readFile(
+        new URL("../extensions/SubagentPolicy/com.github.copilot/extensions/BYOModels/extension.mjs", import.meta.url),
+        "utf8"
+    );
+    assert.equal(aggregate, standalone);
+    assert.match(standalone, /proxyPort < 0 \|\| proxyPort > 65535/);
+    assert.doesNotMatch(standalone, /proxyPort < 1024/);
+});
 
 test("validated capability cache registers immediately", () => {
     const cache = capabilityCache(configured, [{ ...registration, unexpected: "discarded" }], runtime);

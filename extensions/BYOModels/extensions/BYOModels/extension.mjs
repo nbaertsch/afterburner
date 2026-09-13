@@ -104,9 +104,9 @@ function validateConfig() {
         }
         const proxyPort = provider.requestCompatibility?.proxyPort;
         if (proxyPort !== undefined &&
-            (!Number.isInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535)) {
+            (!Number.isInteger(proxyPort) || proxyPort < 0 || proxyPort > 65535)) {
             throw new Error(
-                `Provider '${provider.name}' must define requestCompatibility.proxyPort between 1024 and 65535.`
+                `Provider '${provider.name}' must define requestCompatibility.proxyPort between 0 and 65535.`
             );
         }
         if (provider.headers !== undefined &&
