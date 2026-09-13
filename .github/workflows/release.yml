@@ -55,19 +55,15 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - name: Install current Copilot CLI
+      - name: Install supported Copilot CLI
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $releases = gh api "repos/github/copilot-cli/releases?per_page=1" | ConvertFrom-Json
-          $release = $releases | Select-Object -First 1
-          if (-not $release) {
-            throw "No current Copilot CLI release was returned by GitHub."
-          }
-          $version = $release.tag_name.TrimStart('v')
+          $version = "1.0.84-4"
+          $tag = "v$version"
           New-Item .copilot-current -ItemType Directory -Force | Out-Null
-          gh release download $release.tag_name `
+          gh release download $tag `
             --repo github/copilot-cli `
             --pattern "*win32-x64*" `
             --dir .copilot-current
