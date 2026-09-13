@@ -22,6 +22,7 @@ func TestDiscoverAndSelect(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+
 	found, err := Discover(DiscoveryOptions{AdditionalRoots: []string{root}, OnlyAdditionalRoots: true})
 	if err != nil {
 		t.Fatal(err)
@@ -32,6 +33,29 @@ func TestDiscoverAndSelect(t *testing.T) {
 	}
 	if selected.Version != "1.0.83-3" {
 		t.Fatalf("selected %s", selected.Version)
+	}
+}
+
+func TestDiscoverExplicitPackageRootsOverrideAmbientRoots(t *testing.T) {
+	explicitRoot := t.TempDir()
+	path := filepath.Join(explicitRoot, "1.0.84-4")
+	if err := os.MkdirAll(filepath.Join(path, "prebuilds", runtimePlatform()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "app.js"), []byte("1.0.84-4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "prebuilds", runtimePlatform(), "runtime.node"), []byte("runtime"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AFTERBURNER_COPILOT_PACKAGE_ROOTS", explicitRoot)
+
+	found, err := Discover(DiscoveryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].Version != "1.0.84-4" {
+		t.Fatalf("explicit roots did not isolate discovery: %+v", found)
 	}
 }
 

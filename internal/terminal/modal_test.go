@@ -472,6 +472,42 @@ func TestModalServerRoutesNativeDocumentControlEvents(t *testing.T) {
 	}
 }
 
+func TestModalServerSeparatesNativeSelectionFromActivation(t *testing.T) {
+	var output bytes.Buffer
+	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 100, Rows: 30})
+	server, err := NewModalServer(nil, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerLegacyModalForTest(t, server)
+	server.pollTimeout = 20 * time.Millisecond
+	document := json.RawMessage(`{
+		"schemaVersion":1,
+		"protocol":"afterburner.ui",
+		"revision":4,
+		"surfaceId":"black-box",
+		"root":{"id":"root","kind":"dialog","children":[
+			{"id":"policy","kind":"radioGroup","props":{"label":"Policy","value":"solo","options":[
+				{"value":"solo","label":"Solo"},{"value":"balanced","label":"Balanced"}
+			]},"actionBindings":{"change":"preview-policy","activate":"apply-selected-policy"}}
+		]}
+	}`)
+	response := callModalServer(t, server, map[string]any{"type": "open", "id": "black-box", "title": "Policy", "document": document})
+	if !response.OK {
+		t.Fatalf("open response = %#v", response)
+	}
+	_, _ = server.HandleInput([]byte{'\t', '\x1b', '[', 'B'})
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "change" || response.Event.Value != "balanced" {
+		t.Fatalf("selection event = %#v", response.Event)
+	}
+	_, _ = server.HandleInput([]byte{'\r'})
+	response = callModalServer(t, server, map[string]any{"type": "poll", "id": "black-box"})
+	if response.Event == nil || response.Event.Type != "activate" || response.Event.Value != "balanced" || response.Event.ActionName != "apply-selected-policy" {
+		t.Fatalf("activation event = %#v", response.Event)
+	}
+}
+
 func TestModalServerPreservesInputNewerThanAcknowledgedEvent(t *testing.T) {
 	var output bytes.Buffer
 	renderer := NewTerminalModalRendererWithSize(&output, Size{Cols: 100, Rows: 30})

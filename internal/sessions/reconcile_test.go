@@ -208,3 +208,50 @@ func TestReconcileDoesNotRewriteUnchangedConfig(t *testing.T) {
 		t.Fatal("unchanged session configuration was rewritten")
 	}
 }
+
+func TestReconcileComposesBYOModelsIntoBuiltinsSessionPlugin(t *testing.T) {
+	root := t.TempDir()
+	layout := home.Layout{Root: root, CopilotHome: filepath.Join(root, "copilot-home"), Extensions: filepath.Join(root, "extensions")}
+	byoPath := filepath.Join(layout.Extensions, "byo-models", "v1")
+	policyPath := filepath.Join(layout.Extensions, "subagent-policy", "v1")
+	for path, manifest := range map[string]string{
+		byoPath:    `{"name":"afterburner-byomodels","version":"0.1.0"}`,
+		policyPath: `{"name":"afterburner-builtins","version":"0.1.0"}`,
+	} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "plugin.json"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	value := registry.Registry{SchemaVersion: 1, Extensions: map[string]registry.Entry{
+		"byo-models": {
+			Enabled: true, Verified: true, ActivePath: byoPath,
+			Manifest: registry.Manifest{ID: "byo-models", SessionExtension: &registry.SessionExtension{Entrypoint: "extension.mjs"}},
+		},
+		"subagent-policy": {
+			Enabled: true, Verified: true, ActivePath: policyPath,
+			Manifest: registry.Manifest{ID: "subagent-policy", SessionExtension: &registry.SessionExtension{Entrypoint: "extension.mjs"}},
+		},
+	}}
+	if err := Reconcile(layout, value); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(layout.CopilotHome, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	plugins := got["installedPlugins"].([]any)
+	if len(plugins) != 1 || plugins[0].(map[string]any)["name"] != afterburnerBuiltinsPlugin {
+		t.Fatalf("expected one aggregated session plugin, got %#v", plugins)
+	}
+	enabled := got["enabledPlugins"].(map[string]any)
+	if enabled[afterburnerBuiltinsPlugin] != true {
+		t.Fatalf("aggregated session plugin was not enabled: %#v", enabled)
+	}
+}

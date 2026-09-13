@@ -5,5 +5,6 @@ func Builtins() map[string]struct{} {
 		"byo-models":    {},
 		"black-box":     {},
 		"openai-server": {},
+		"subagent-policy": {},
 	}
 }

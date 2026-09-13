@@ -141,7 +141,7 @@ afterburn --disable-extension steward-burn
 
 ## Built-In Extensions (First-Party Product Pillars)
 
-Afterburner ships with three primary first-party extensions versioned in lockstep with the core release:
+Afterburner ships with four primary first-party extensions versioned in lockstep with the core release:
 
 ### 1. OpenAI Server (`openai-server`)
 
@@ -175,6 +175,20 @@ Afterburner's supported observability layer. Captures bounded, privacy-preservin
 - **Commands:** Use `/black-box`, `/black-box-modal`, `/black-box-tail`, `/black-box-export`, and `/black-box-doctor` inside Copilot.
 - **Data storage:** Stored locally in `~\.afterburner\extension-data\black-box`.
 - **Documentation:** [**Black Box Deep Dive**](extensions/BlackBox/README.md)
+
+---
+
+### 4. Subagent Policy
+
+Adds policy presets and concurrency/depth constraints to Copilot's native subagent settings.
+
+- **Status:** Enabled by default upon `afterburn install`.
+- **Control plane:** Use `/subagents`; it is the only user-facing policy UI.
+- **Config:** Optional policy catalog at `~\.afterburner\config\subagent-policy.json`.
+- **Safety:** Explicit models must exist in the live native/BYOModels catalog; unavailable models are
+  rejected before settings change and never silently fall back.
+- **Compatibility:** The MOD is fail-closed and source-anchored to Copilot CLI `1.0.84-4`.
+- **Documentation:** [**Subagent Policy Guide**](extensions/SubagentPolicy/README.md)
 
 ---
 
@@ -281,6 +295,7 @@ All Afterburner configuration and state is organized under `~/.afterburner`:
 | **BYOModels Config** | `~/.afterburner\config\byomodels.json` | Custom model providers, endpoints, and credentials |
 | **OpenAI Server Config** | `~/.afterburner\config\openai-server.json` | Localhost bridge port, startup, and auth settings |
 | **Black Box Config** | `~/.afterburner\config\black-box.json` | Observability storage retention and ring limits |
+| **Subagent Policy Config** | `~/.afterburner\config\subagent-policy.json` | Session defaults, routing, concurrency, depth, and agent-factory budgets |
 | **Black Box Data** | `~/.afterburner\extension-data\black-box` | Sanitized session timelines and diagnostic records |
 | **Copilot Home** | `~/.afterburner\copilot-home` | Isolated loader state (session state linked via junction) |
 
@@ -373,5 +388,6 @@ npm run test:release-local
 - [BYOModels Guide](extensions/BYOModels/README.md)
 - [Black Box Observability Guide](extensions/BlackBox/README.md)
 - [OpenAI Server Bridge Guide](extensions/OpenAIServer/README.md)
+- [Subagent Policy Guide](extensions/SubagentPolicy/README.md)
 - [Extension Authoring SDK](sdk/README.md)
 - [UI Document Schema](schemas/ui-document-v1.schema.json)
