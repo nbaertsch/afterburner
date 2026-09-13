@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { installNativeSubagentPolicy } from "../runtime/extension.mjs";
 
 const appPath = process.env.COPILOT_1084_APP_JS ??
-    "C:\\Users\\nimbl\\AppData\\Local\\copilot\\pkg\\win32-x64\\1.0.84-4\\app.js";
+    join(process.env.LOCALAPPDATA, "copilot", "pkg", "win32-x64", "1.0.84-4", "app.js");
 const config = { policies: { "luna-three": {
     displayName: "Luna Three", description: "Luna routing", maxConcurrency: 3, maxDepth: 1,
     resultExposure: "status-and-final", disabledSubagents: [],
