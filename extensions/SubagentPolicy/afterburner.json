@@ -15,6 +15,6 @@
   },
   "capabilities": ["application-source-transform"],
   "sessionExtension": {
-    "entrypoint": "com.github.copilot/extensions/AfterburnerBuiltins/extension.mjs"
+    "entrypoint": "com.github.copilot/extensions/BYOModels/extension.mjs"
   }
 }

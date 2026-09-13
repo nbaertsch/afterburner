@@ -656,7 +656,7 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 		byoModelsConfig = explicit
 	}
 	var proxyManager *byomodels.Manager
-	if entry, ok := effectiveRegistry.Extensions["byo-models"]; ok && entry.Enabled {
+	if hasEnabledBYOModelsSessionExtension(effectiveRegistry) {
 		env, err = hydrateBYOModelsEnvironment(byoModelsConfig, env)
 		if err != nil {
 			return 1, err
@@ -736,6 +736,26 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	}
 	telemetry.Record(layout.Root, "launch.completed", attributes)
 	return exitCode, launchErr
+}
+
+func hasEnabledBYOModelsSessionExtension(value registry.Registry) bool {
+	for _, entry := range value.Extensions {
+		if !entry.Enabled || entry.Manifest.SessionExtension == nil {
+			continue
+		}
+		manifestData, err := os.ReadFile(filepath.Join(entry.ActivePath, "plugin.json"))
+		if err != nil {
+			continue
+		}
+		var manifest struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(manifestData, &manifest) == nil &&
+			(manifest.Name == "afterburner-byomodels" || manifest.Name == "afterburner-builtins") {
+			return true
+		}
+	}
+	return false
 }
 
 func builtinRepairIDs(value registry.Registry) []string {

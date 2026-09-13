@@ -16,6 +16,8 @@ test("installed SubagentPolicy built-in aggregates BYOModels session registratio
     assert.equal(manifest.visibility, "builtin");
     assert.equal(plugin.name, "afterburner-builtins");
     assert.ok(existsSync(entrypoint));
-    assert.match(source, /BYOModels[\\/]extensions[\\/]BYOModels[\\/]extension\.mjs/);
+    assert.match(manifest.sessionExtension.entrypoint, /BYOModels[\\/]extension\.mjs/);
+    assert.match(source, /activateModelRegistration/);
+    assert.ok(existsSync(join(packageRoot, "com.github.copilot", "extensions", "BYOModels", "extension.mjs")));
     assert.ok(manifest.capabilities.includes("application-source-transform"));
 });
