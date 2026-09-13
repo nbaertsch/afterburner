@@ -49,4 +49,9 @@ func TestReleaseWorkflowKeepsSigningKeyOutOfTagSelectedJobs(t *testing.T) {
 		!strings.Contains(build, "compatibility = $compatibility") {
 		t.Fatal("release manifest must remain readable by legacy updaters while carrying the additive compatibility tuple")
 	}
+	for _, builtin := range []string{"black-box", "byo-models", "openai-server", "subagent-policy"} {
+		if !strings.Contains(build, `"`+builtin+`" = "artifacts/`+builtin+`.zip"`) {
+			t.Fatalf("release manifest is missing built-in package %q", builtin)
+		}
+	}
 }
