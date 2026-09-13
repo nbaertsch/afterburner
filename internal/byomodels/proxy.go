@@ -81,9 +81,10 @@ type requestCompatibility struct {
 }
 
 type auth struct {
-	Type     string `json:"type"`
-	Resource string `json:"resource"`
-	Value    string `json:"value"`
+	Type                string `json:"type"`
+	Resource            string `json:"resource"`
+	Value               string `json:"value"`
+	EnvironmentVariable string `json:"environmentVariable"`
 }
 
 type identity struct {
@@ -152,6 +153,45 @@ type progressReadCloser struct {
 
 type Manager struct {
 	services []*service
+}
+
+func RequiredEnvironmentVariables(configPath string) ([]string, error) {
+	data, err := os.ReadFile(configPath)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read BYOModels configuration: %w", err)
+	}
+	var value config
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil, fmt.Errorf("parse BYOModels configuration: %w", err)
+	}
+	if value.Version != 1 {
+		return nil, fmt.Errorf("unsupported BYOModels configuration version: %d", value.Version)
+	}
+
+	seen := map[string]bool{}
+	var names []string
+	for _, provider := range value.Providers {
+		if provider.Auth.Type != "api-key-env" && provider.Auth.Type != "bearer-token-env" {
+			continue
+		}
+		name := strings.TrimSpace(provider.Auth.EnvironmentVariable)
+		if name == "" {
+			return nil, fmt.Errorf(
+				"provider %q requires auth.environmentVariable for %s authentication",
+				provider.Name,
+				provider.Auth.Type,
+			)
+		}
+		if !seen[strings.ToUpper(name)] {
+			seen[strings.ToUpper(name)] = true
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func Start(configPath string) (*Manager, error) {

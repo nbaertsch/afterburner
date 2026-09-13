@@ -20,6 +20,7 @@ import (
 	"github.com/nbaertsch/afterburner/internal/home"
 	"github.com/nbaertsch/afterburner/internal/installer"
 	"github.com/nbaertsch/afterburner/internal/launch"
+	"github.com/nbaertsch/afterburner/internal/platform"
 	"github.com/nbaertsch/afterburner/internal/preflight"
 	"github.com/nbaertsch/afterburner/internal/registry"
 	"github.com/nbaertsch/afterburner/internal/runtimepkg"
@@ -656,6 +657,10 @@ func runCopilot(ctx context.Context, args []string, forcedPassthrough bool, opts
 	}
 	var proxyManager *byomodels.Manager
 	if entry, ok := effectiveRegistry.Extensions["byo-models"]; ok && entry.Enabled {
+		env, err = hydrateBYOModelsEnvironment(byoModelsConfig, env)
+		if err != nil {
+			return 1, err
+		}
 		proxyManager, err = byomodels.Start(byoModelsConfig)
 		if err != nil {
 			return 1, err
@@ -890,6 +895,36 @@ func setEnv(env []string, key, value string) []string {
 		}
 	}
 	return append(result, key+"="+value)
+}
+
+func hydrateBYOModelsEnvironment(configPath string, env []string) ([]string, error) {
+	names, err := byomodels.RequiredEnvironmentVariables(configPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		if value, ok := lookupEnv(env, name); ok && value != "" {
+			continue
+		}
+		value, found, err := platform.LookupUserEnvironmentVariable(name)
+		if err != nil {
+			return nil, fmt.Errorf("read user environment variable %q for BYOModels: %w", name, err)
+		}
+		if found && value != "" {
+			env = setEnv(env, name, value)
+		}
+	}
+	return env, nil
+}
+
+func lookupEnv(env []string, key string) (string, bool) {
+	prefix := strings.ToUpper(key) + "="
+	for _, item := range env {
+		if strings.HasPrefix(strings.ToUpper(item), prefix) {
+			return item[len(key)+1:], true
+		}
+	}
+	return "", false
 }
 
 func clone(values []string) []string {

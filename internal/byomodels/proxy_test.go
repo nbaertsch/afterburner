@@ -18,6 +18,50 @@ import (
 	"time"
 )
 
+func TestRequiredEnvironmentVariables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "byomodels.json")
+	err := os.WriteFile(path, []byte(`{
+		"version": 1,
+		"providers": [
+			{"name":"bearer","auth":{"type":"bearer-token-env","environmentVariable":"BEARER_TOKEN"}},
+			{"name":"key","auth":{"type":"api-key-env","environmentVariable":"API_KEY"}},
+			{"name":"duplicate","auth":{"type":"bearer-token-env","environmentVariable":"api_key"}},
+			{"name":"static","auth":{"type":"bearer-token","value":"secret"}}
+		],
+		"models": []
+	}`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	names, err := RequiredEnvironmentVariables(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(names, ","), "API_KEY,BEARER_TOKEN"; got != want {
+		t.Fatalf("environment variables = %q, want %q", got, want)
+	}
+}
+
+func TestRequiredEnvironmentVariablesRejectsMissingName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "byomodels.json")
+	err := os.WriteFile(path, []byte(`{
+		"version": 1,
+		"providers": [
+			{"name":"broken","auth":{"type":"bearer-token-env"}}
+		],
+		"models": []
+	}`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = RequiredEnvironmentVariables(path)
+	if err == nil || !strings.Contains(err.Error(), `provider "broken" requires auth.environmentVariable`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestProxyStartsBeforeProviderRegistration(t *testing.T) {
 	var receivedID string
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
