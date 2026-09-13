@@ -210,7 +210,7 @@ func TestProxyReportsUpstreamTimeout(t *testing.T) {
 
 func TestProxyResetsIdleTimeoutWhenUpstreamMakesProgress(t *testing.T) {
 	previousTimeout := upstreamIdleTimeout
-	upstreamIdleTimeout = 30 * time.Millisecond
+	upstreamIdleTimeout = 200 * time.Millisecond
 	t.Cleanup(func() {
 		upstreamIdleTimeout = previousTimeout
 	})
@@ -219,7 +219,7 @@ func TestProxyResetsIdleTimeoutWhenUpstreamMakesProgress(t *testing.T) {
 		response.Header().Set("content-type", "text/event-stream")
 		response.WriteHeader(http.StatusOK)
 		flusher := response.(http.Flusher)
-		for range 5 {
+		for range 10 {
 			_, _ = response.Write([]byte(": ping\n\n"))
 			flusher.Flush()
 			time.Sleep(25 * time.Millisecond)
